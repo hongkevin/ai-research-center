@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "arc"
+version = "0.1.0"
+description = "AI Research Center — 코스닥 미커버 종목 실적 리뷰 노트 자동 생성 시스템 (세미오토)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+dependencies = [
+    "httpx",
+    "pydantic>=2",
+    "duckdb",
+    "pyarrow",
+    "jinja2",
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "respx",
+    "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/arc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
