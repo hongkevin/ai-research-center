@@ -1,0 +1,80 @@
+{#-
+  실적 리뷰 노트 템플릿 (ARCHITECTURE.md §6 — 8개 섹션).
+  - 본문 텍스트(summary, points[].body 등)는 S4 산출물로, Number Registry
+    치환이 끝난 상태로 주입된다. 이 템플릿은 조립만 담당한다.
+  - 단일 목표주가·투자의견 섹션은 존재하지 않는다 (§3 불변식 1).
+-#}
+{#- 1. 헤더 — 기본정보 -#}
+# {{ company.name }} ({{ company.symbol }}) — {{ report.period_label }} 실적 리뷰
+
+| 항목 | 내용 |
+|---|---|
+| 시장 | {{ company.market }} |
+| 산업 | {{ company.industry }} |
+| 시가총액 | {{ header.market_cap }} |
+| 주가 ({{ header.price_date }}) | {{ header.close_price }} |
+| 작성일 | {{ report.published_at }} |
+
+## 2. 요약
+
+{{ summary }}
+
+## 3. 투자포인트
+{% for point in investment_points %}
+### {{ loop.index }}. {{ point.title }}
+
+{{ point.body }}
+{% endfor %}
+## 4. 실적 분석
+
+{#- 발표 실적 vs 전기(QoQ)·전년(YoY) 비교 테이블 -#}
+| 항목 | {{ earnings.period_label }} | 전기 대비(QoQ) | 전년 대비(YoY) |
+|---|---|---|---|
+{% for row in earnings.table -%}
+| {{ row.label }} | {{ row.current }} | {{ row.qoq }} | {{ row.yoy }} |
+{% endfor %}
+{{ earnings.narrative }}
+
+## 5. 실적 추정
+
+**추정 가정** (모든 가정은 명시하고, 계산은 결정적 코드로 수행):
+{% for assumption in estimates.assumptions %}
+- {{ assumption }}
+{% endfor %}
+| 항목 | {{ estimates.period_label }} 추정 | 직전 보고서 추정 | 변화 |
+|---|---|---|---|
+{% for row in estimates.table -%}
+| {{ row.label }} | {{ row.current }} | {{ row.previous }} | {{ row.delta }} |
+{% endfor %}
+{#- 전 보고서 대비 추정 변화 추적 — 핵심 차별화 (§6-5) -#}
+{{ estimates.revision_narrative }}
+
+## 6. 밸류에이션
+
+{#- 시나리오 3개 + 감도표 + 산식 전면 공개. 단일 목표주가 없음 (§3, D4) -#}
+**산출 산식**: {{ valuation.formula }}
+
+| 시나리오 | 가정 | 적정가치 범위 |
+|---|---|---|
+| 보수 | {{ valuation.bear.assumption }} | {{ valuation.bear.range }} |
+| 기준 | {{ valuation.base.assumption }} | {{ valuation.base.range }} |
+| 낙관 | {{ valuation.bull.assumption }} | {{ valuation.bull.range }} |
+
+**감도표**:
+
+{{ valuation.sensitivity_table }}
+
+{{ valuation.narrative }}
+
+## 7. 리스크 요인
+{% for risk in risks %}
+- {{ risk }}
+{% endfor %}
+## 8. 디스클레이머
+
+{#- 3중 디스클레이머 — G0 게이트가 존재를 강제한다 (§3 불변식 3) -#}
+1. 본 자료는 자본시장법상 조사분석자료가 아닙니다.
+2. 본 자료는 특정 금융투자상품의 매매를 권유하는 투자권유가 아니며, 투자 판단의 최종 책임은 투자자 본인에게 있습니다.
+3. 본 자료는 AI(인공지능)를 활용하여 생성되었으며, 사람의 검토를 거쳐 발간되었습니다. (AI 기본법 제31조에 따른 표시)
+
+*데이터 출처: {{ report.data_sources }} | 조회 시각: {{ report.retrieved_at }}*

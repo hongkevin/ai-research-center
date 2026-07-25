@@ -23,3 +23,16 @@ secrets.json
 logs/
 tmp/
 .cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+/data/
+.coverage
+.claude/settings.local.json
