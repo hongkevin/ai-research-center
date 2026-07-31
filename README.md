@@ -4,8 +4,12 @@
 
 ## 설계 문서
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 확정 결정 로그, 규제 가드레일, S1~S6 파이프라인, 데이터 레이어, 로드맵
+**[docs/README.md](docs/README.md) — 문서 지도부터 보십시오.**
+
+- [docs/decisions.md](docs/decisions.md) — **현재 유효한 결정의 단일 원천** (D1~D13)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 설계: 공통 엔진 + 표면 2개, S1~S6 파이프라인, Number Registry, G0 게이트
 - [docs/design-brief-v1.md](docs/design-brief-v1.md) — 6개 영역 리서치 종합 브리프 (근거·출처)
+- [docs/research/](docs/research/) — 벤치마크 15건 역설계, 채점 루브릭 분석, 밸류에이션 경계, 인터뷰 설계
 
 ## 셋업
 
