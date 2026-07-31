@@ -6,8 +6,8 @@ import pytest
 
 from arc.store.snapshot import SnapshotStore
 
-T0 = dt.datetime(2026, 7, 1, 9, 0, tzinfo=dt.timezone.utc)
-T1 = dt.datetime(2026, 7, 15, 9, 0, tzinfo=dt.timezone.utc)
+T0 = dt.datetime(2026, 7, 1, 9, 0, tzinfo=dt.UTC)
+T1 = dt.datetime(2026, 7, 15, 9, 0, tzinfo=dt.UTC)
 
 
 @pytest.fixture

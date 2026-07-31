@@ -3,18 +3,82 @@
 수치 환각 대응은 사후 탐지가 아니라 **경로 차단**:
   - 보고서에 등장 가능한 모든 수치는 S1~S3의 결정적 코드가 계산해
     레지스트리에 등록한다 (값 + 단위 + provenance).
-  - LLM은 본문에서 숫자 리터럴 대신 플레이스홀더(`{{rev_2026e}}`)만 쓴다.
+  - LLM은 본문에서 숫자 리터럴 대신 플레이스홀더(`{{num:rev_2026e}}`)만 쓴다.
   - 렌더링 시 레지스트리 값으로 치환하고, 레지스트리에 없는 숫자가
     본문에 나타나면 G0에서 발간 차단한다.
 
-클래스 시그니처까지 확정, 구현은 TODO(5~6주차).
+플레이스홀더 문법
+-----------------
+`{{num:<key>}}` — 설계 문서의 `{{rev_2026e}}`에 `num:` 네임스페이스를 붙였다.
+
+이유: 보고서 템플릿(`templates/*.j2`)이 Jinja2 `{{ }}`를 쓴다. 치환은 Jinja2
+렌더링 **전에** 끝나므로 충돌하지 않지만, 네임스페이스가 있으면 코드베이스에서
+`{{num:`으로 grep해 수치 플레이스홀더만 골라낼 수 있고 사람이 읽을 때도
+템플릿 변수와 헷갈리지 않는다.
+
+키 규약: `{metric}_{period}` — 예 `rev_2025a`(실적), `rev_2026e`(추정),
+`op_margin_2025a`, `rev_yoy_2025a`.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+import re
+from collections.abc import Iterable
+
+from pydantic import BaseModel, Field
 
 from arc.data.base import Provenance
+
+# {{num:key}} — 공백 허용, 키는 영숫자·언더스코어·점
+PLACEHOLDER_RE = re.compile(r"\{\{\s*num:([A-Za-z0-9_.]+)\s*\}\}")
+
+# 치환 전 리터럴 스캔에서 플레이스홀더를 가리는 마스크 (자릿수가 없어야 한다)
+_MASK = "NUMTOKEN"
+
+# ── 화이트리스트: 숫자여도 허용되는 문맥 ──────────────────────────────
+# 좁게 유지한다. 애매하면 거부하고 플레이스홀더를 쓰게 하는 쪽이 안전하다.
+_WHITELIST: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"FY\s?\d{2,4}"), "회계연도"),
+    (re.compile(r"\d{4}\s?년도?"), "연도"),
+    (re.compile(r"\d{4}\s?회계연도"), "회계연도"),
+    (re.compile(r"\d{1,2}\s?Q\s?\d{0,2}"), "분기"),
+    (re.compile(r"[1-4]\s?분기"), "분기"),
+    (re.compile(r"제\s?\d+\s?(조|항|호|목|장|절)"), "법령·조항"),
+    (re.compile(r"^\s*\d+\s*[.)]\s", re.MULTILINE), "목차 번호"),
+    (re.compile(r"[1-9]\s?(개|가지|곳|명|건|차례|번째)"), "소수 개수"),
+    # ── 문서 구조에서 오는 숫자 (LLM이 쓴 주장이 아니다) ──
+    # 마크다운 제목 번호: "## 2. 요약", "### 1. 외형 성장"
+    (re.compile(r"^#{1,6}\s*\d+\s*[.)]?\s", re.MULTILINE), "제목 번호"),
+    # 국내 종목코드: "(000000)". 회계상 음수는 6자리면 콤마가 붙으므로(123,456) 구분된다
+    (re.compile(r"\(\d{6}\)"), "종목코드"),
+    # 추정·실적 표기: "2026E", "2025A" (E=estimate, A=actual)
+    (re.compile(r"\d{4}\s?[EAea](?![0-9])"), "추정·실적 연도 표기"),
+]
+
+# ── 재무 크기를 나타내는 숫자 = 반드시 잡아야 함 (high) ───────────────
+_HIGH: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\d+\.\d+"), "소수"),
+    (re.compile(r"\d+\s?(%|％|pp|%p|bp)"), "비율·퍼센트포인트"),
+    # `배`에 \b를 붙이면 안 된다 — 한글은 유니코드 단어문자라 "25배를"에서
+    # `배`와 `를` 사이에 경계가 없어 매치가 실패한다. \b는 x/X에만 필요하다.
+    (re.compile(r"\d+\s?배"), "배수"),
+    (re.compile(r"\d+\s?[xX]\b"), "배수"),
+    (re.compile(r"[$₩€¥]\s?\d"), "통화"),
+    (re.compile(r"\d+\s?(원|달러|USD|KRW|TWD|EUR)"), "통화"),
+    (re.compile(r"\d+\s?(억|조|만|천억|백만|십억)"), "금액 단위"),
+    (re.compile(r"\d{1,3}(,\d{3})+"), "천단위 구분"),
+    (re.compile(r"\d+\s?(B|M|K|bn|mn|tn)\b"), "금액 약어"),
+]
+
+
+class UnregisteredNumber(BaseModel):
+    """레지스트리에 없는 숫자 리터럴 1건 (G0 입력)."""
+
+    text: str  # 검출된 문자열 (예: "3.2%")
+    kind: str  # 분류 (예: "비율·퍼센트포인트")
+    severity: str  # "high" | "medium"
+    line: int
+    excerpt: str  # 주변 문맥
 
 
 class NumberEntry(BaseModel):
@@ -26,6 +90,19 @@ class NumberEntry(BaseModel):
     display: str | None = None  # 렌더링 문자열 (예: "1,234억원"). 없으면 기본 포맷
     provenance: Provenance
 
+    # 감사·검토 화면용 (§4.2 — 클릭 추적 가능해야 한다)
+    label: str | None = None  # 사람이 읽을 이름 (예: "매출액 (2026E)")
+    formula: str | None = None  # 계산식. 원시 수치는 None
+    inputs: list[str] = Field(default_factory=list)  # 계산 입력이 된 다른 key들
+
+    def rendered(self) -> str:
+        """치환에 쓰일 문자열."""
+        if self.display is not None:
+            return self.display
+        if isinstance(self.value, float):
+            return f"{self.value:,.1f}{self.unit}"
+        return f"{self.value:,}{self.unit}"
+
 
 class NumberRegistry:
     """보고서 1건에 등장 가능한 모든 수치의 단일 원천(single source of truth)."""
@@ -33,21 +110,144 @@ class NumberRegistry:
     def __init__(self) -> None:
         self._entries: dict[str, NumberEntry] = {}
 
+    # ── 등록·조회 ────────────────────────────────────────────────
     def register(self, entry: NumberEntry) -> None:
         """수치 등록. 같은 key 재등록은 오류 — 값이 두 원천에서 나오면 안 된다."""
-        raise NotImplementedError("TODO(5~6주차)")
+        if entry.key in self._entries:
+            existing = self._entries[entry.key]
+            raise ValueError(
+                f"key 중복 등록: {entry.key!r} "
+                f"(기존 {existing.value}{existing.unit} / 신규 {entry.value}{entry.unit}). "
+                "한 수치는 하나의 원천만 가져야 한다."
+            )
+        self._entries[entry.key] = entry
+
+    def register_all(self, entries: Iterable[NumberEntry]) -> None:
+        for e in entries:
+            self.register(e)
 
     def get(self, key: str) -> NumberEntry:
         """key로 항목 조회. 없으면 KeyError."""
-        raise NotImplementedError("TODO(5~6주차)")
+        return self._entries[key]
+
+    def keys(self) -> list[str]:
+        return list(self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._entries
+
+    def catalog(self) -> list[dict[str, str | None]]:
+        """LLM 프롬프트에 넣을 카탈로그. **값은 포함하지 않는다.**
+
+        값을 주면 LLM이 그 값을 복사해 리터럴로 쓸 수 있다. 키·라벨·단위만
+        주면 플레이스홀더 외에는 쓸 방법이 없다.
+        """
+        return [
+            {"key": e.key, "label": e.label or e.key, "unit": e.unit}
+            for e in self._entries.values()
+        ]
+
+    # ── 텍스트 처리 ──────────────────────────────────────────────
+    @staticmethod
+    def extract_keys(text: str) -> list[str]:
+        """본문에 등장한 플레이스홀더 키를 등장 순으로 (중복 포함)."""
+        return [m.group(1) for m in PLACEHOLDER_RE.finditer(text)]
+
+    def unknown_keys(self, text: str) -> list[str]:
+        """레지스트리에 없는 key를 참조하는 플레이스홀더."""
+        return [k for k in self.extract_keys(text) if k not in self._entries]
 
     def render_text(self, text: str) -> str:
-        """본문의 `{{key}}` 플레이스홀더를 레지스트리 값으로 치환."""
-        raise NotImplementedError("TODO(5~6주차)")
+        """본문의 `{{num:key}}` 플레이스홀더를 레지스트리 값으로 치환.
 
-    def find_unregistered_numbers(self, text: str) -> list[str]:
+        미등록 key는 치환하지 않고 그대로 둔다 — G0가 잡는다.
+        """
+        def sub(m: re.Match[str]) -> str:
+            key = m.group(1)
+            entry = self._entries.get(key)
+            return entry.rendered() if entry else m.group(0)
+
+        return PLACEHOLDER_RE.sub(sub, text)
+
+    def bindings(self, text: str) -> list[dict[str, object]]:
+        """치환 감사 기록. 어떤 플레이스홀더가 무슨 값으로 바뀌었는지."""
+        out: list[dict[str, object]] = []
+        for key in self.extract_keys(text):
+            e = self._entries.get(key)
+            if e is None:
+                continue
+            out.append(
+                {
+                    "key": key,
+                    "resolved": e.rendered(),
+                    "label": e.label,
+                    "formula": e.formula,
+                    "inputs": e.inputs,
+                    "provenance": e.provenance.model_dump(mode="json"),
+                }
+            )
+        return out
+
+    def find_unregistered_numbers(self, text: str) -> list[UnregisteredNumber]:
         """본문에서 레지스트리에 없는 숫자 리터럴을 탐지 (G0 게이트 입력).
 
         발견 목록이 비어 있지 않으면 G0가 발간을 차단한다.
+        플레이스홀더 내부의 숫자는 마스킹해 오탐하지 않는다.
         """
-        raise NotImplementedError("TODO(5~6주차)")
+        masked = PLACEHOLDER_RE.sub(_MASK, text)
+
+        allowed: list[tuple[int, int]] = []
+        for rx, _ in _WHITELIST:
+            allowed.extend((m.start(), m.end()) for m in rx.finditer(masked))
+
+        def is_allowed(s: int, e: int) -> bool:
+            return any(a <= s and e <= b for a, b in allowed)
+
+        found: list[UnregisteredNumber] = []
+        claimed: list[tuple[int, int]] = []
+
+        def line_of(pos: int) -> int:
+            return masked.count("\n", 0, pos) + 1
+
+        def excerpt(s: int, e: int, pad: int = 28) -> str:
+            a, b = max(0, s - pad), min(len(masked), e + pad)
+            return masked[a:b].replace("\n", " ").replace(_MASK, "⟨수치⟩").strip()
+
+        for rx, kind in _HIGH:
+            for m in rx.finditer(masked):
+                if is_allowed(m.start(), m.end()):
+                    continue
+                if any(s <= m.start() < e for s, e in claimed):
+                    continue
+                claimed.append((m.start(), m.end()))
+                found.append(
+                    UnregisteredNumber(
+                        text=m.group(0).strip(),
+                        kind=kind,
+                        severity="high",
+                        line=line_of(m.start()),
+                        excerpt=excerpt(m.start(), m.end()),
+                    )
+                )
+
+        for m in re.finditer(r"\d+", masked):
+            if is_allowed(m.start(), m.end()):
+                continue
+            if any(s <= m.start() < e for s, e in claimed):
+                continue
+            claimed.append((m.start(), m.end()))
+            found.append(
+                UnregisteredNumber(
+                    text=m.group(0),
+                    kind="맨 정수",
+                    severity="medium",
+                    line=line_of(m.start()),
+                    excerpt=excerpt(m.start(), m.end()),
+                )
+            )
+
+        found.sort(key=lambda f: (f.line, f.text))
+        return found

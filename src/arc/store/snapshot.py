@@ -47,9 +47,9 @@ class SnapshotStore:
         """
         if not records:
             raise ValueError("빈 스냅샷은 저장하지 않는다")
-        snapshot_at = snapshot_at or dt.datetime.now(dt.timezone.utc)
+        snapshot_at = snapshot_at or dt.datetime.now(dt.UTC)
         if snapshot_at.tzinfo is None:
-            snapshot_at = snapshot_at.replace(tzinfo=dt.timezone.utc)
+            snapshot_at = snapshot_at.replace(tzinfo=dt.UTC)
 
         table = pa.Table.from_pylist(records)
         ts_array = pa.array([snapshot_at] * len(records), type=pa.timestamp("us", tz="UTC"))
@@ -71,7 +71,7 @@ class SnapshotStore:
         out = []
         for p in sorted(dataset_dir.glob(f"{_SNAPSHOT_PREFIX}*.parquet")):
             raw = p.stem.removeprefix(_SNAPSHOT_PREFIX)
-            out.append(dt.datetime.strptime(raw, _TS_FORMAT).replace(tzinfo=dt.timezone.utc))
+            out.append(dt.datetime.strptime(raw, _TS_FORMAT).replace(tzinfo=dt.UTC))
         return out
 
     def read_as_of(self, dataset: str, as_of: dt.datetime | None = None) -> list[dict]:
@@ -80,7 +80,7 @@ class SnapshotStore:
         as_of 미지정 시 최신 스냅샷. 해당 시점 이전 스냅샷이 없으면 빈 목록.
         """
         if as_of is not None and as_of.tzinfo is None:
-            as_of = as_of.replace(tzinfo=dt.timezone.utc)
+            as_of = as_of.replace(tzinfo=dt.UTC)
         candidates = [
             ts
             for ts in self.list_snapshots(dataset)

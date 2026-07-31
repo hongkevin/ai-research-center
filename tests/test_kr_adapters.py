@@ -5,7 +5,7 @@ import datetime as dt
 from arc.data.kr.krx_price import KrxPriceProvider
 from arc.data.kr.naver_news import NaverNewsProvider, _clean
 
-NOW = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.UTC)
 
 
 def test_parse_price_items_single_dict():

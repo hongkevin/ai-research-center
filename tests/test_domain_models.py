@@ -17,7 +17,7 @@ from arc.data.base import (
     Provenance,
 )
 
-NOW = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.UTC)
 PROV = Provenance(source="test", retrieved_at=NOW, source_url="https://example.com")
 
 

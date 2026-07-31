@@ -75,11 +75,18 @@ class Company(BaseModel):
 
 
 class FinancialLineItem(BaseModel):
-    """재무제표 개별 계정 항목."""
+    """재무제표 개별 계정 항목.
+
+    전기/전전기 금액은 **당기 공시에 실린 비교표시 값**이다. 직전 연도의
+    자체 공시를 따로 받아 쓰는 것보다 이쪽이 맞다 — 재작성(restatement)이
+    반영된 같은 기준의 숫자라 YoY 비교가 성립한다.
+    """
 
     account_id: str | None = None  # 표준계정ID (XBRL 태그 등)
     account_name: str  # 계정명 (예: "매출액")
     amount: int | None = None  # 당기 금액
+    prior_amount: int | None = None  # 전기 금액 (당기 공시의 비교표시)
+    prior2_amount: int | None = None  # 전전기 금액
     currency: str = "KRW"
     statement_type: str | None = None  # BS/IS/CIS/CF/SCE
 
