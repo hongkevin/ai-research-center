@@ -63,7 +63,7 @@ class KrxPriceProvider(DataProvider):
             payload = resp.json()
             body = self._check_body(payload)
             points.extend(
-                self.parse_price_items(body, retrieved_at=dt.datetime.now(dt.timezone.utc))
+                self.parse_price_items(body, retrieved_at=dt.datetime.now(dt.UTC))
             )
             total_count = int(body.get("totalCount", 0))
             if page_no * num_rows >= total_count:

@@ -17,7 +17,7 @@ from arc.data.kr.dart import (
     _parse_amount,
 )
 
-NOW = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone.utc)
+NOW = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.UTC)
 
 
 def make_corp_code_zip() -> bytes:

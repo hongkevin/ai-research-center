@@ -131,7 +131,7 @@ class DartProvider(DataProvider):
         return payload
 
     def _now(self) -> dt.datetime:
-        return dt.datetime.now(dt.timezone.utc)
+        return dt.datetime.now(dt.UTC)
 
     # ------------------------------------------------------- corpCode.xml
 
@@ -244,6 +244,8 @@ class DartProvider(DataProvider):
                 account_id=row.get("account_id") or None,
                 account_name=row.get("account_nm", ""),
                 amount=_parse_amount(row.get("thstrm_amount")),
+                prior_amount=_parse_amount(row.get("frmtrm_amount")),
+                prior2_amount=_parse_amount(row.get("bfefrmtrm_amount")),
                 currency=row.get("currency") or "KRW",
                 statement_type=row.get("sj_div"),
             )

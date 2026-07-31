@@ -63,7 +63,7 @@ class NaverNewsProvider(DataProvider):
             },
         )
         resp.raise_for_status()
-        return self.parse_news(resp.json(), retrieved_at=dt.datetime.now(dt.timezone.utc))[:limit]
+        return self.parse_news(resp.json(), retrieved_at=dt.datetime.now(dt.UTC))[:limit]
 
     @staticmethod
     def parse_news(payload: dict, retrieved_at: dt.datetime) -> list[NewsItem]:
