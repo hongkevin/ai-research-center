@@ -149,6 +149,19 @@ rating 어휘를 부정문으로도 막고 있는데([D22](../decisions.md#d22))
 
 앞의 둘을 먼저 만든다(프로토타입). 뒤의 둘은 앞 둘의 평가 후.
 
+### 3.2-1 뷰의 차이는 부호가 아니다 (초판 수정)
+
+첫 구현은 렌즈마다 부호를 하나 두고 접었다. **틀렸다.** 같은 결론이라도 태도가
+갈리는 지점은 셋이다:
+
+1. **무엇을 보는가** — 렌즈마다 다른 데이터
+2. **무엇을 먼저 보는가** — 질문 사슬(`chain`)이 순서를 고정한다
+3. **다음에 무엇을 볼 것인가** — 두 렌즈가 똑같이 긍정이어도 다음 분기에 볼
+   숫자가 다르면 그게 태도의 차이다
+
+그래서 렌즈는 **주된 발견 + 단서 + 다음에 볼 것 + 답하지 못한 질문**으로 남는다.
+자세한 것은 [decisions.md D35 보강](../decisions.md#d35-2).
+
 ### 3.3 왜 이게 나은가
 
 * 사칭 위험 0
@@ -174,6 +187,22 @@ rating 어휘를 부정문으로도 막고 있는데([D22](../decisions.md#d22))
 [D33 보강](../decisions.md#d33-2)으로 부문 자산을 붙였기 때문에 지금 말할 수 있다.
 
 ---
+
+### 3.6 Dexter — 같은 저자의 후속작이 페르소나를 버렸다
+
+[`virattt/dexter`](https://github.com/virattt/dexter)는 `ai-hedge-fund`와 **같은
+저자**의 후속 프로젝트인데, **페르소나가 없다.** 기능형 에이전트 + 작업 분해
+(task planning) + 자기검증(self-validation)으로 갔다.
+
+페르소나 프로젝트를 바이럴시킨 본인이 다음 것을 그렇게 짓지 않았다는 사실이,
+페르소나를 기각한 판단의 방증이 된다.
+
+다만 Dexter는 README에 *"결과가 틀리거나 불완전하거나 낡았을 수 있다"*고 명시하고
+교육·오락용이라 선을 긋는다. **우리는 그 문장을 쓸 수 없다** — 그게 차이의 전부다.
+
+가져올 것은 **작업 분해 자체를 산출물로 보여주는 것**이고, 렌즈의 `chain` +
+`unanswered`가 그 자리다. 우리 쪽이 더 강한데, 계획이 고정이라 **어느 질문에
+답했고 어느 질문에 못 답했는지가 검증 가능**하기 때문이다.
 
 ## 4. 버핏 주주서한은 그래도 읽는다
 
@@ -204,6 +233,6 @@ rating 어휘를 부정문으로도 막고 있는데([D22](../decisions.md#d22))
 
 - [edgen.tech](https://edgen.tech) · [Edgen Litepaper](https://gitbook.edgen.tech/)
 - [Tracxn — Edgen Tech](https://tracxn.com/d/companies/edgen-tech/__JlIGJyTf-fdjgZRvygXrg8LrprCiI6N1_NKUHscd7As)
-- [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund)
+- [virattt/ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) · [virattt/dexter](https://github.com/virattt/dexter)
 - [The Token Dispatch — Edgen 리뷰](https://www.thetokendispatch.com/p/edgen-actually-knows-crypto)
 - [스미토모, Edgen Group 인수 (2013)](https://www.sumitomocorp.com/en/jp/news/release/2013/group/20131121) — **다른 회사**

@@ -429,18 +429,29 @@ def _lens_section(lenses: LensSet | None) -> dict[str, object]:
     # 렌즈가 전부 침묵해도 **섹션은 낸다.** 통째로 사라지면 검토자는 "이 회사엔
     # 볼 관점이 없구나"로 읽는다. 무엇을 못 봤는지 적는 편이 정직하다
     # (`_business_section`과 같은 원칙).
-    return {
-        "views": [
+    #
+    # 주된 발견·단서·다음에 볼 것을 **나눠서** 넘긴다. 평평한 목록으로 내면
+    # 부차적 관찰이 렌즈의 결론처럼 읽힌다 (LG전자에서 실제로 그랬다).
+    views = []
+    for v in lenses.views:
+        head = v.headline
+        caveats = v.caveats
+        rest = [r for r in v.ordered if r is not head and r not in caveats]
+        views.append(
             {
                 "label": v.label,
                 "question": v.question,
-                "readings": [r.claim for r in v.readings],
+                "headline": head.claim if head else "",
+                "caveats": [r.claim for r in caveats],
+                "readings": [r.claim for r in rest],
+                "watch": v.watch,
+                # 통째로 침묵한 렌즈는 사유 한 줄이면 된다 — 답하지 못한 단계를
+                # 또 나열하면 같은 말이 두 번 실린다.
+                "unanswered": list(v.unanswered) if v.usable else [],
                 "note": v.silent_reason,
             }
-            for v in lenses.views
-        ],
-        "tensions": [t.text for t in lenses.tensions],
-    }
+        )
+    return {"views": views, "tensions": [t.text for t in lenses.tensions]}
 
 
 def _segment_names(sp: SegmentProfitSet | None, seg: SegmentBreakdown | None) -> list[str]:

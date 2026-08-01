@@ -188,12 +188,30 @@
 {% for view in lenses.views %}
 **{{ view.label }} — {{ view.question }}?**
 
-{% if view.readings %}
+{% if view.headline %}
+{{ view.headline }}
+{% for caveat in view.caveats %}
+
+**다만** — {{ caveat }}
+{% endfor %}
+{% for reading in view.readings %}
+
+- {{ reading }}
+{% endfor %}
+{% elif view.readings %}
 {% for reading in view.readings %}
 - {{ reading }}
 {% endfor %}
 {% else %}
 - {{ view.note }}
+{% endif %}
+{% if view.unanswered %}
+
+*이 관점이 답하지 못한 것*: {{ view.unanswered | join(' · ') }} — 공시에 근거가 없습니다.
+{% endif %}
+{% if view.watch %}
+
+*다음에 볼 것*: {{ view.watch }}
 {% endif %}
 
 {% endfor %}
