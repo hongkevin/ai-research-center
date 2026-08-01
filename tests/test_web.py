@@ -162,11 +162,15 @@ class TestViewModel:
                 "C", (), {"name": "(주)파마리서치", "market": type("M", (), {"value": "KOSDAQ"})()}
             )()
             statement = type("S", (), {"consolidation": type("K", (), {"value": "CFS"})()})()
-            metrics = type("M", (), {"values": {"revenue": 1}, "missing_labels": ["매출원가"]})()
+            metrics = type(
+                "M", (), {"values": {}, "missing_labels": ["매출원가"], "fiscal_year": 2025}
+            )()
             registry = _registry()
             assembled = "## 2. 요약\n\n매출은 {{num:revenue_2025a}}이다.\n"
             estimates = None
             revisions: list = []
+            segments = None
+            business = None
             narration = None
 
         r = _R()
@@ -296,3 +300,54 @@ class TestSymbolResolution:
     def test_unknown_name_raises(self, monkeypatch):
         with pytest.raises(ValueError, match="찾지 못"):
             self._resolve("없는회사", monkeypatch)
+
+
+class TestCharts:
+    """차트는 **수치의 두 번째 출처가 되면 안 된다.**
+
+    SVG `<text>`는 G0 스캔 대상이 아니라, 값 라벨을 넣으면 게이트 밖에서
+    숫자가 생긴다. 형태만 그리고 정확한 값은 표에 둔다.
+    """
+
+    def _slices(self):
+        from arc.render.charts import Slice
+
+        return [Slice("의료기기", 58.6), Slice("화장품", 24.6), Slice("의약품", 15.4)]
+
+    def test_bar_has_no_value_labels(self):
+        from arc.render.charts import segment_bar
+
+        svg = segment_bar(self._slices())
+        assert "58.6" not in svg
+        assert "의료기기" in svg  # 이름은 괜찮다 — 수치가 아니다
+
+    def test_single_slice_not_drawn(self):
+        """100% 막대는 정보가 없다."""
+        from arc.render.charts import Slice, segment_bar
+
+        assert segment_bar([Slice("반도체", 100.0)]) == ""
+
+    def test_empty_input_not_drawn(self):
+        from arc.render.charts import segment_bar, trend_bars
+
+        assert segment_bar([]) == ""
+        assert trend_bars([], []) == ""
+
+    def test_trend_scales_to_peak(self):
+        from arc.render.charts import trend_bars
+
+        svg = trend_bars(["2023", "2024", "2025"], [("매출액", [1.0, 2.0, 4.0])])
+        assert "<svg" in svg
+        assert svg.count("<rect") == 3
+
+    def test_all_zero_series_not_drawn(self):
+        from arc.render.charts import trend_bars
+
+        assert trend_bars(["2024", "2025"], [("매출액", [0.0, 0.0])]) == ""
+
+    def test_labels_escaped(self):
+        from arc.render.charts import Slice, segment_bar
+
+        svg = segment_bar([Slice("<script>", 60.0), Slice("정상", 40.0)])
+        assert "<script>" not in svg
+        assert "&lt;script&gt;" in svg
