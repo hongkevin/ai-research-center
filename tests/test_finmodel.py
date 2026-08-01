@@ -19,12 +19,15 @@ from arc.data.base import (
 )
 from arc.finmodel.metrics import (
     build_entries,
+    build_margin_bridge,
+    build_observations,
     extract_metrics,
     fmt_krw,
     fmt_pct,
     margin,
     yoy,
 )
+from arc.llm.number_registry import NumberRegistry
 
 PROV = Provenance(source="opendart", retrieved_at=dt.datetime(2026, 8, 1, tzinfo=dt.UTC))
 
@@ -209,3 +212,120 @@ class TestBuildEntries:
         r = NumberRegistry()
         r.register_all(build_entries(extract_metrics(s), PROV))  # 중복이면 ValueError
         assert len(r) > 8
+
+
+# ── 마진 브리지 ──────────────────────────────────────────────────────
+def _bridge_stmt(rev, cos, sga, oi, rev_p, cos_p, sga_p, oi_p):
+    return stmt(
+        [
+            li("매출액", rev, rev_p),
+            li("매출원가", cos, cos_p),
+            li("판매비와관리비", sga, sga_p),
+            li("영업이익", oi, oi_p),
+        ]
+    )
+
+
+class TestMarginBridge:
+    def test_identity_closes_exactly(self):
+        """영업이익 = 매출 - 원가 - 판관비인 회사는 잔차가 0이어야 한다.
+
+        이건 근사가 아니라 항등식이다. 잔차가 생기면 산식이 틀린 것이다.
+        """
+        b = build_margin_bridge(
+            extract_metrics(_bridge_stmt(1000, 600, 200, 200, 900, 570, 190, 140))
+        )
+        assert b is not None
+        assert b.reconciled
+        assert abs(b.residual) < 1e-9
+        # 20.0% - 15.56% = +4.44pp
+        assert b.margin_change == pytest.approx(4.444, abs=0.01)
+        assert b.cost_contribution + b.sga_contribution == pytest.approx(b.margin_change)
+
+    def test_cost_ratio_fall_contributes_positively(self):
+        """비용 비율이 내려가면 마진에 **플러스**로 기여한다 (부호 반전)."""
+        b = build_margin_bridge(
+            extract_metrics(_bridge_stmt(1000, 600, 200, 200, 1000, 650, 200, 150))
+        )
+        assert b is not None
+        assert b.cost_contribution > 0  # 원가율 65% → 60%
+        assert b.sga_contribution == pytest.approx(0.0)
+        assert b.dominant == "원가율"
+
+    def test_dominant_picks_larger_absolute_contribution(self):
+        b = build_margin_bridge(
+            extract_metrics(_bridge_stmt(1000, 600, 150, 250, 1000, 610, 200, 190))
+        )
+        assert b is not None
+        assert b.dominant == "판관비율"  # 판관비 -5.0pp vs 원가 -1.0pp
+
+    def test_unreconciled_flagged_not_hidden(self):
+        """영업이익이 매출-원가-판관비와 다르면 통과시키지 않고 표시한다."""
+        b = build_margin_bridge(
+            extract_metrics(_bridge_stmt(1000, 600, 200, 100, 1000, 600, 200, 200))
+        )
+        assert b is not None
+        assert not b.reconciled
+        assert abs(b.residual) > 0.15
+
+    @pytest.mark.parametrize("drop", ["매출액", "매출원가", "판매비와관리비", "영업이익"])
+    def test_missing_input_returns_none_never_estimates(self, drop):
+        items = [
+            li("매출액", 1000, 900),
+            li("매출원가", 600, 570),
+            li("판매비와관리비", 200, 190),
+            li("영업이익", 200, 140),
+        ]
+        items = [i for i in items if i.account_name != drop]
+        assert build_margin_bridge(extract_metrics(stmt(items))) is None
+
+    def test_missing_prior_returns_none(self):
+        """전기가 없으면 변화를 계산할 수 없다. 0으로 두지 않는다."""
+        s = _bridge_stmt(1000, 600, 200, 200, None, None, None, None)
+        assert build_margin_bridge(extract_metrics(s)) is None
+
+    def test_residual_is_internal_not_in_catalog(self):
+        """검산값은 감사용이다. 카탈로그에 두면 LLM이 본문에 QA 문장을 쓴다."""
+        ms = extract_metrics(_bridge_stmt(1000, 600, 200, 200, 900, 570, 190, 140))
+        reg = NumberRegistry()
+        reg.register_all(build_entries(ms, PROV))
+        assert "bridge_residual_2025a" in reg  # 치환·감사에는 남아 있고
+        keys = {r["key"] for r in reg.catalog()}
+        assert "bridge_residual_2025a" not in keys  # 카탈로그에는 없다
+        assert "bridge_cost_contrib_2025a" in keys
+
+
+# ── 관찰(논지) ───────────────────────────────────────────────────────
+class TestObservations:
+    def test_no_numeric_magnitudes_leak_into_thesis(self):
+        """관찰문은 프롬프트에 그대로 들어간다. 크기가 있으면 LLM이 베낀다."""
+        ms = extract_metrics(_bridge_stmt(1000, 600, 200, 200, 900, 570, 190, 140))
+        text = " ".join(build_observations(ms, build_margin_bridge(ms)))
+        reg = NumberRegistry()
+        assert not reg.find_unregistered_numbers(text)
+
+    def test_operating_leverage_detected(self):
+        ms = extract_metrics(_bridge_stmt(1000, 600, 200, 200, 900, 570, 190, 140))
+        obs = " ".join(build_observations(ms, build_margin_bridge(ms)))
+        assert "운영 레버리지" in obs
+
+    def test_cost_growth_outpacing_revenue_detected(self):
+        ms = extract_metrics(_bridge_stmt(1000, 700, 200, 100, 900, 600, 190, 110))
+        obs = " ".join(build_observations(ms, build_margin_bridge(ms)))
+        assert "비용이 외형보다 빨리" in obs
+
+    def test_unreconciled_bridge_does_not_assert_dominance(self):
+        """검산이 안 맞으면 '어느 쪽이 주도했다'고 말하면 안 된다."""
+        ms = extract_metrics(_bridge_stmt(1000, 600, 200, 100, 1000, 600, 200, 200))
+        obs = " ".join(build_observations(ms, build_margin_bridge(ms)))
+        assert "단정하지 않는다" in obs
+        assert "기여가 더 큰 쪽은" not in obs
+
+    def test_missing_metrics_told_not_to_mention(self):
+        ms = extract_metrics(stmt([li("매출액", 1000, 900), li("영업이익", 200, 140)]))
+        obs = " ".join(build_observations(ms, None))
+        assert "확인되지 않은 계정" in obs
+
+    def test_no_bridge_still_produces_observations(self):
+        ms = extract_metrics(stmt([li("매출액", 1000, 900), li("영업이익", 200, 140)]))
+        assert build_observations(ms, None)

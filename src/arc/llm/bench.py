@@ -118,9 +118,10 @@ def run_trial(
     fiscal_year: int,
     basis: str,
     registry: NumberRegistry,
+    thesis: str | None = None,
 ) -> TrialResult:
     """1회 생성 → 파싱 → 제약 검사. **재시도 없이** 1차 능력을 잰다."""
-    user = build_user_prompt(company_name, fiscal_year, basis, registry)
+    user = build_user_prompt(company_name, fiscal_year, basis, registry, thesis)
     gate = G0Gate(registry)
 
     try:
@@ -160,6 +161,7 @@ def benchmark(
     fiscal_year: int,
     basis: str,
     registry: NumberRegistry,
+    thesis: str | None = None,
     runs: int = 3,
     save_dir: Path | None = None,
 ) -> list[ModelScore]:
@@ -175,6 +177,7 @@ def benchmark(
                 fiscal_year=fiscal_year,
                 basis=basis,
                 registry=registry,
+                thesis=thesis,
             )
             sc.trials.append(t)
             if save_dir and t.text:
