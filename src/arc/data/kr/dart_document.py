@@ -30,6 +30,9 @@ from dataclasses import dataclass
 _TABLE_RE = re.compile(r"<TABLE\b.*?</TABLE>", re.DOTALL | re.IGNORECASE)
 _ROW_RE = re.compile(r"<TR\b[^>]*>(.*?)</TR>", re.DOTALL | re.IGNORECASE)
 _CELL_RE = re.compile(r"<T[DHU]\b([^>]*)>(.*?)</T[DHU]>", re.DOTALL | re.IGNORECASE)
+# 주석의 표는 본문과 달리 셀을 `<TE>`(table entry)로 쓴다. TD가 하나도 없는
+# 행에서만 쓴다 — TD 안에 TE가 중첩된 표에서 둘 다 매칭하면 셀이 쪼개진다.
+_ENTRY_RE = re.compile(r"<TE\b([^>]*)>(.*?)</TE>", re.DOTALL | re.IGNORECASE)
 _SPAN_RE = re.compile(r'(ROWSPAN|COLSPAN)\s*=\s*"?(\d+)"?', re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 _TITLE_RE = re.compile(r"<TITLE\b[^>]*>(.*?)</TITLE>", re.DOTALL | re.IGNORECASE)
@@ -82,8 +85,9 @@ def expand_table(table_xml: str) -> list[list[str]]:
                 item[0] -= 1
         pending = [i for i in pending if i[0] > 0]
 
+        cells = _CELL_RE.findall(row_xml) or _ENTRY_RE.findall(row_xml)
         col = 0
-        for attrs, inner in _CELL_RE.findall(row_xml):
+        for attrs, inner in cells:
             while col in carried:
                 row.append(carried.pop(col))
                 col += 1
