@@ -209,7 +209,11 @@ def compose_sections(
             ),
         },
         "valuation": _valuation_section(y, p, valuation),
-        "risks": _risk_lines(valuation, info),
+        "risks": _risk_lines(valuation, info)
+        or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."],
+        # 결정론 v0에는 관전 포인트가 없다 — 이건 해석이라 LLM이 채운다.
+        "watchpoints": [],
+        "method_notes": _method_notes(ms, valuation, info),
     }
 
 
@@ -271,14 +275,22 @@ def _valuation_section(y: int, p, valuation: ValuationSet | None) -> dict[str, o
 def _risk_items(
     valuation: ValuationSet | None, info: PeriodicReportInfo | None
 ) -> list[tuple[str, str]]:
-    """(주제 키워드, 문장) 목록.
+    """(주제 키워드, 문장) 목록 — **회사의 리스크만.**
 
-    **KAM(핵심감사사항)을 먼저 둔다.** 감사인이 지목한 위험 영역이라 우리가
-    만든 일반론보다 근거가 강하다. 다만 적정의견 하에서도 KAM은 항상
-    지정되므로 부실 신호로 단정하지 않는다.
+    감사 관련 항목의 취급이 갈린다:
 
-    주제 키워드는 LLM 서술과의 중복 제거에 쓴다 — 같은 논지를 프롬프트로
-    주고 결정론 문장도 붙이면 리스크 섹션에 같은 말이 두 번 실린다(실측).
+    * 비적정 의견·강조사항 → 본문에 쓴다. 재무제표 신뢰성 자체에 관한
+      사항이라 실제로 material하고, 증권사 리포트도 이건 다룬다.
+    * 적정의견 하의 **KAM은 본문에 인용하지 않는다.** 실제 RA 리포트는
+      핵심감사사항을 인용하지 않는다 — "감사인이 ~을 지목했다"가 들어가는
+      순간 회계법인 산출물처럼 읽힌다. KAM은 애널리스트에게 주는 단서이므로
+      `build_valuation_observations`가 논지로만 넘기고, LLM이 사업 언어로
+      옮겨 쓴다("수익인식 기간귀속" → "매출 인식 시점").
+
+    우리 자료의 한계(역산 주가·커버리지)는 `_method_notes`로 분리한다.
+    리스크 섹션에 방법론이 섞이면 감사보고서처럼 읽힌다.
+
+    주제 키워드는 LLM 서술과의 중복 제거에 쓴다.
     """
     items: list[tuple[str, str]] = []
     audit = info.audit if info else None
@@ -293,57 +305,48 @@ def _risk_items(
                     ),
                 )
             )
-        for item in audit.kam_items:
-            items.append(
-                (
-                    item,
-                    (
-                        f"감사인이 핵심감사사항으로 지목: {item}. "
-                        "감사인이 중요하다고 판단해 별도 절차를 수행한 영역이다."
-                    ),
-                )
-            )
         if audit.emphasis:
             items.append(("강조사항", f"감사보고서 강조사항: {audit.emphasis}."))
 
-    if valuation is not None:
-        if valuation.eps_cross_check_ok is False:
-            items.append(
+    if valuation is not None and valuation.eps_cross_check_ok is False:
+        items.append(
+            (
+                "주당이익",
                 (
-                    "주당이익",
-                    (
-                        "재무제표 주당이익과 배당 공시 주당순이익이 서로 맞지 않아 "
-                        "주당 지표의 신뢰도가 낮다."
-                    ),
-                )
+                    "재무제표 주당이익과 배당 공시 주당순이익이 서로 맞지 않아 "
+                    "주당 지표의 신뢰도가 낮다."
+                ),
             )
-        if valuation.shares_issued and not valuation.shares_reconciled:
-            items.append(
-                (
-                    "주식수",
-                    (
-                        "공시된 발행·자기주식·유통 주식수가 서로 맞지 않아 "
-                        "주식수 기반 지표를 확정하지 못했다."
-                    ),
-                )
-            )
-        if valuation.has_price_anchor and valuation.is_implied:
-            items.append(
-                (
-                    "역산",
-                    (
-                        "주가는 배당 공시에서 역산한 값이라 특정일 종가가 아니다. "
-                        "배수 지표는 참고치로만 읽어야 한다."
-                    ),
-                )
-            )
-
-    # 이 둘은 범위 고지라 LLM이 뭘 쓰든 항상 남긴다 (키워드를 비워 중복 제거 대상에서 뺀다)
-    items.append(
-        ("", "공시 기반 지표만 사용했으므로 공시 밖 요인(수요·경쟁·정책)은 반영되지 않았다.")
-    )
-    items.append(("", "추정 레이어가 미구현 상태라 이 노트는 실적 확인 목적에 한정된다."))
+        )
     return items
+
+
+def _method_notes(
+    ms: MetricSet, valuation: ValuationSet | None, info: PeriodicReportInfo | None
+) -> list[str]:
+    """'작성 기준' 섹션 — **우리 자료의 한계.** 회사 리스크와 섞지 않는다."""
+    notes = ["공시 기반 지표만 사용했다. 공시 밖 요인(수요·경쟁·정책)은 반영되지 않았다."]
+    if ms.missing:
+        notes.append(
+            f"이번 공시에서 확인하지 못한 계정: {', '.join(ms.missing_labels)}. "
+            "찾지 못한 값은 추정하지 않고 비워 두었다."
+        )
+    if valuation is not None:
+        if valuation.has_price_anchor and valuation.is_implied:
+            notes.append(
+                "주가는 공시된 주당배당금과 배당수익률에서 역산한 값이며 특정일 종가가 아니다. "
+                "시가총액·PER·PBR은 참고치다."
+            )
+        if valuation.has_preferred and valuation.market_cap is not None:
+            notes.append("우선주가 있어 보통주 주가로 계산한 시가총액은 실제와 다를 수 있다.")
+        if valuation.shares_issued and not valuation.shares_reconciled:
+            notes.append(
+                "공시된 발행·자기주식·유통 주식수가 서로 맞지 않아 주식수 기반 지표를 확정하지 못했다."
+            )
+    notes.append("추정 레이어가 미구현 상태라 이 노트는 실적 확인 목적에 한정된다.")
+    if info is not None and info.unavailable:
+        notes.append(f"조회하지 못한 공시 항목: {', '.join(info.unavailable)}.")
+    return notes
 
 
 def _risk_lines(valuation: ValuationSet | None, info: PeriodicReportInfo | None) -> list[str]:
@@ -363,7 +366,8 @@ def merge_risks(
     """
     joined = " ".join(llm_risks)
     keep = [text for key, text in _risk_items(valuation, info) if not key or key not in joined]
-    return [*llm_risks, *keep]
+    merged = [*llm_risks, *keep]
+    return merged or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."]
 
 
 # ── 조립 ─────────────────────────────────────────────────────────────
@@ -519,6 +523,7 @@ def build_report(
                 n["earnings_narrative"] + " " + sections["earnings"]["narrative"]
             )
             sections["risks"] = merge_risks(list(n["risks"]), valuation, info)
+            sections["watchpoints"] = list(n.get("watchpoints") or [])
     assembled = assemble(
         company,
         ms,
