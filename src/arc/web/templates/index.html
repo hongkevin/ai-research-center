@@ -60,7 +60,18 @@
   button.btn--publish { background: transparent; color: var(--text); border: 1px solid var(--line); margin-top: 8px; }
   button.btn--publish:hover { border-color: var(--ok); color: var(--ok); filter: none; }
   form.busy button { opacity: .55; pointer-events: none; }
-  form.busy .spin::after { content: " — 생성 중…"; color: var(--accent); }
+
+  /* ── 진행 표시 ── */
+  #prog { display: none; margin-top: 14px; }
+  #prog.on { display: block; }
+  #prog .step {
+    display: flex; align-items: baseline; gap: 8px; font-size: 12.5px;
+    padding: 3px 0; color: var(--muted);
+  }
+  #prog .step.now { color: var(--accent); font-weight: 600; }
+  #prog .step.done { color: var(--ok); }
+  #prog .mark { width: 14px; flex: none; text-align: center; }
+  #prog .el { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
   .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
 
   /* ── 회사 검색 ── */
@@ -199,6 +210,8 @@
       <button type="submit" name="action" value="generate">노트 생성</button>
       <button type="submit" name="action" value="publish" class="btn--publish">검토 완료 · 발간</button>
       <div class="hint"><b>생성</b>은 미리보기라 이력에 남지 않습니다. <b>발간</b>해야 추정이 저장되고 다음 발간의 변화 추적 기준이 됩니다.</div>
+
+      <div id="prog"><div id="steps"></div><div class="el" id="elapsed"></div></div>
     </form>
 
     {% if vm and not vm.error %}
