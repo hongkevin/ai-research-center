@@ -57,6 +57,15 @@ _CORP_CLS_MARKET: dict[str, Market] = {
 }
 
 
+def viewer_url(rcept_no: str | None) -> str | None:
+    """접수번호 → **사람이 열어 확인할** DART 뷰어 주소.
+
+    API 엔드포인트는 키가 필요해 검토자가 클릭해도 아무것도 안 나온다.
+    검증용 링크는 언제나 이 주소다.
+    """
+    return f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}" if rcept_no else None
+
+
 class DartError(Exception):
     """OpenDART API 오류 (status != '000')."""
 
@@ -313,10 +322,10 @@ class DartProvider(DataProvider):
             provenance=Provenance(
                 source=SOURCE,
                 retrieved_at=retrieved_at,
+                dataset="재무제표 (주요계정)",
+                source_url=f"{BASE_URL}/fnlttSinglAcnt.json",
+                verify_url=viewer_url(rcept_no),
                 source_ref=rcept_no,
-                source_url=(
-                    f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}" if rcept_no else None
-                ),
             ),
         )
 
@@ -354,10 +363,10 @@ class DartProvider(DataProvider):
             provenance=Provenance(
                 source=SOURCE,
                 retrieved_at=retrieved_at,
+                dataset="재무제표 (전체계정)",
+                source_url=f"{BASE_URL}/fnlttSinglAcntAll.json",
+                verify_url=viewer_url(rcept_no),
                 source_ref=rcept_no,
-                source_url=(
-                    f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}" if rcept_no else None
-                ),
             ),
         )
 
@@ -404,8 +413,10 @@ class DartProvider(DataProvider):
                     provenance=Provenance(
                         source=SOURCE,
                         retrieved_at=retrieved_at,
+                        dataset="공시목록",
+                        source_url=f"{BASE_URL}/list.json",
+                        verify_url=viewer_url(rcept_no),
                         source_ref=rcept_no,
-                        source_url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
                     ),
                 )
             )

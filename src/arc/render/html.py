@@ -34,9 +34,12 @@ def _attrs(entry) -> str:
         ("data-unit", entry.unit),
         ("data-formula", entry.formula or ""),
         ("data-inputs", ", ".join(entry.inputs)),
-        ("data-source", prov.source if prov else ""),
+        ("data-source", (prov.describe if prov else "")),
         ("data-doc", (prov.source_ref or "") if prov else ""),
-        ("data-url", (prov.source_url or "") if prov else ""),
+        # 사람이 여는 링크와 우리가 호출한 곳을 나눈다 — API 엔드포인트를
+        # 링크로 걸면 검토자가 눌러도 아무것도 안 나온다.
+        ("data-url", (prov.verify_url or "") if prov else ""),
+        ("data-api", (prov.source_url or "") if prov else ""),
         ("data-retrieved", prov.retrieved_at.isoformat(timespec="seconds") if prov else ""),
     ]
     # 파이프는 반드시 엔티티로 바꾼다. YoY 산식이 절댓값을 `|revenue_2024a|`로
@@ -99,9 +102,10 @@ def binding_rows(result) -> list[dict]:
                 "value": entry.rendered(),
                 "formula": entry.formula,
                 "inputs": entry.inputs,
-                "source": prov.source if prov else "",
+                "source": prov.describe if prov else "",
                 "document": (prov.source_ref or "") if prov else "",
-                "url": (prov.source_url or "") if prov else "",
+                "url": (prov.verify_url or "") if prov else "",
+                "api": (prov.source_url or "") if prov else "",
                 "internal": entry.internal,
             }
         )

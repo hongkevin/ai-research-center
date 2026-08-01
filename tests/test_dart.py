@@ -118,7 +118,8 @@ def test_parse_disclosures():
     }
     out = DartProvider.parse_disclosures(payload, symbol="078890", retrieved_at=NOW)
     assert out[0].filed_at == dt.date(2026, 7, 1)
-    assert "rcpNo=20260701000001" in out[0].provenance.source_url
+    assert "rcpNo=20260701000001" in (out[0].provenance.verify_url or "")
+    assert "list.json" in (out[0].provenance.source_url or "")
 
 
 @pytest.mark.parametrize(
@@ -239,10 +240,15 @@ class TestMajorAccountsFallback:
         stmt = self._parse()
         assert all(i.account_id is None for i in stmt.items)
 
-    def test_provenance_points_at_filing(self):
+    def test_provenance_separates_what_we_called_from_what_a_human_opens(self):
+        """`source_url`은 우리가 호출한 API(재현용), `verify_url`은 사람이 열
+        DART 뷰어(검증용)다. 하나로 뭉치면 둘 중 하나는 쓸모없어진다 — API
+        엔드포인트는 키가 없으면 열리지 않는다."""
         stmt = self._parse()
         assert stmt.rcept_no == "20260319001417"
-        assert "20260319001417" in (stmt.provenance.source_url or "")
+        assert stmt.provenance.dataset == "재무제표 (주요계정)"
+        assert "fnlttSinglAcnt.json" in (stmt.provenance.source_url or "")
+        assert "20260319001417" in (stmt.provenance.verify_url or "")
 
     def test_missing_fs_div_field_keeps_all_rows(self):
         payload = {"status": "000", "list": [{**_major_row("CFS", "IS", "매출액", "100")}]}

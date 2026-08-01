@@ -25,7 +25,7 @@
 새 기능을 넣을 때 이 넷을 먼저 확인하십시오. 개발 중 게이트가 **여섯 번** 잡았고
 전부 진짜 결함이었습니다.
 
-### 1. 숫자는 레지스트리를 거친다
+### 1. 숫자는 레지스트리를 거치고, **출처는 항목마다 다르다**
 
 LLM은 `{{num:key}}` 플레이스홀더만 쓴다. 값은 프롬프트에 넣지 않는다
 (`llm/number_registry.py`, `verify/g0.py`).
@@ -35,6 +35,12 @@ LLM은 `{{num:key}}` 플레이스홀더만 쓴다. 값은 프롬프트에 넣지
 
 공시 원문을 프롬프트에 넣을 때는 `mask_numbers()`로 가립니다 — 탐지와 **같은
 화이트리스트**를 쓰므로 규칙이 갈라지지 않습니다.
+
+**출처를 하나로 뭉치지 마십시오** (D36). 배당성향은 `alotMatter`, 지분은
+`hyslrSttus`, 부문 매출은 원문 표에서 옵니다. 한때 47건이 전부 "재무제표"로
+표시됐고, RA가 "이 배당성향 어디서?"라고 물으면 틀린 답을 하는 상태였습니다.
+`Provenance.source_url`(우리가 호출한 곳)과 `verify_url`(사람이 열 링크)은
+**다릅니다** — API 엔드포인트는 키가 없으면 안 열립니다.
 
 ### 2. 검산이 닫히지 않으면 쓰지 않는다
 
@@ -93,8 +99,8 @@ rating 어휘를 **부정문으로도** 쓰지 않습니다 — G0가 "제시하
 | 배포 | https://ai-research-center-production.up.railway.app |
 | 인증 | HTTP Basic · 아이디 `arc` · 비밀번호는 Railway `ARC_PASSWORD` |
 | 저장소 | github.com/hongkevin/ai-research-center (**PUBLIC**) |
-| 커밋 | 36 · main == origin/main |
-| 테스트 | 526 통과 · ruff 클린 |
+| 커밋 | 37 · main == origin/main |
+| 테스트 | 530 통과 · ruff 클린 |
 | CI | 린트 · 테스트 · Docker 빌드+헬스체크 · **키 패턴 검사** |
 | 성능 | 결정론 3.0초 / LLM 30~35초 (배포 기준) |
 | 비용 | 건당 ~$0.005 |

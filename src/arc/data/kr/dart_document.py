@@ -27,6 +27,10 @@ import re
 import zipfile
 from dataclasses import dataclass
 
+from arc.data.base import Provenance
+
+_DOCUMENT_API = "https://opendart.fss.or.kr/api/document.xml"
+
 _TABLE_RE = re.compile(r"<TABLE\b.*?</TABLE>", re.DOTALL | re.IGNORECASE)
 _ROW_RE = re.compile(r"<TR\b[^>]*>(.*?)</TR>", re.DOTALL | re.IGNORECASE)
 _CELL_RE = re.compile(r"<T[DHU]\b([^>]*)>(.*?)</T[DHU]>", re.DOTALL | re.IGNORECASE)
@@ -145,6 +149,47 @@ class Section:
 
     def tables(self) -> list[list[list[str]]]:
         return [expand_table(m.group(0)) for m in _TABLE_RE.finditer(self.body)]
+
+
+_SECTION_NUMBER_RE = re.compile(r"^\s*(?:[IVXivx]+\s*[.)]\s*)?\d+(?:\.\d+)*\s*[.)]?\s*")
+
+
+def _strip_section_number(title: str) -> str:
+    """제목 앞 번호를 뗀다 — 「2. 주요 제품 및 서비스」 → 「주요 제품 및 서비스」.
+
+    **게이트에 구멍을 내지 않기 위해서다.** 이 라벨은 「수치 출처」 표를 통해
+    본문에 들어가는데, 표 셀 한가운데의 `2.`는 G0에 맨 정수로 잡힌다. 목차
+    번호를 통과시키는 규칙을 넓히면 그 구멍으로 다른 숫자가 샌다.
+
+    잃는 것은 작다 — 검토자는 DART 뷰어 좌측 트리에서 **이름으로** 찾는다.
+    """
+    return _SECTION_NUMBER_RE.sub("", title).strip() or title.strip()
+
+
+def section_provenance(
+    base: Provenance, section_title: str | None, rcept_no: str | None = None
+) -> Provenance:
+    """원문 섹션에서 뽑은 값의 출처.
+
+    **어느 표에서 왔는지가 링크보다 중요하다.** DART 뷰어는 접수번호로만 열리고
+    300쪽짜리 사업보고서의 첫 장이 나온다. 검토자가 그 안에서 표를 찾으려면
+    섹션 제목이 있어야 한다 — 「4. 매출 및 수주상황」이라고 적어 주면 뷰어
+    좌측 트리에서 바로 간다.
+
+    딥링크(`dcmNo`/`eleId`)는 별도 호출과 파싱이 필요하고 깨지기 쉬워 쓰지 않는다.
+    """
+    ref = rcept_no or base.source_ref
+    label = "사업보고서 원문"
+    if section_title:
+        label = f"{label} · {_strip_section_number(section_title)}"
+    return Provenance(
+        source=base.source,
+        retrieved_at=base.retrieved_at,
+        dataset=label,
+        source_url=f"{_DOCUMENT_API}?rcept_no={ref}" if ref else None,
+        verify_url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={ref}" if ref else None,
+        source_ref=ref,
+    )
 
 
 def find_sections(text: str, *keywords: str, span: int = 40_000) -> list[Section]:

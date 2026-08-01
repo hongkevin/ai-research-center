@@ -30,7 +30,12 @@ from arc.data.base import (
     PeriodType,
 )
 from arc.data.kr.dart import DartProvider
-from arc.data.kr.dart_document import fetch_document, find_section, find_sections
+from arc.data.kr.dart_document import (
+    fetch_document,
+    find_section,
+    find_sections,
+    section_provenance,
+)
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
 from arc.finmodel.business import (
     BusinessProfile,
@@ -777,37 +782,88 @@ def assemble(
     *,
     published_at: dt.date,
     valuation: ValuationSet | None = None,
+    registry: NumberRegistry | None = None,
 ) -> str:
-    """Jinja2 조립. 플레이스홀더는 변수 '값'이라 그대로 살아남는다."""
+    """Jinja2 조립. 플레이스홀더는 변수 '값'이라 그대로 살아남는다.
+
+    **두 번 렌더한다.** 「수치 출처」 표는 *본문에 실제로 등장한* 키만 실어야
+    하는데, 그 표 자체가 본문의 일부라 순환이 생긴다. 1차로 표 없이 렌더해
+    등장 키를 뽑고, 2차에서 표를 채운다. 템플릿 렌더는 비용이 없다.
+    """
     tpl = _env().get_template(TEMPLATE_NAME)
     y = ms.fiscal_year
     has_price = valuation is not None and valuation.has_price_anchor
     price_label = "역산 주가" if (valuation and valuation.is_implied) else "주가"
-    return tpl.render(
-        company={
-            "name": company.name,
-            "symbol": company.symbol,
-            "market": company.market.value,
-            # DART가 주는 industry는 KSIC 코드(예: "26")다. 코드만 보여주면
-            # 독자에게 의미가 없고, 게이트에는 근거 없는 맨 정수로 잡힌다.
-            # 코드→업종명 매핑을 붙이기 전까지는 표시하지 않는다.
-            "industry": "—",
-        },
-        report={
-            "period_label": f"{ms.fiscal_year}년 연간",
-            "published_at": published_at.isoformat(),
-            "data_sources": "OpenDART (전자공시시스템)",
-            "retrieved_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
-        },
-        header={
-            # 헤더도 플레이스홀더로 둔다 — 리터럴을 넣으면 게이트 밖에서
-            # 숫자가 새고, 감사 추적(bindings)에도 잡히지 않는다.
-            "market_cap": _ph(f"market_cap_{y}a") if has_price else "—",
-            "price_date": price_label if has_price else "—",
-            "close_price": _ph(f"price_{y}a") if has_price else "—",
-        },
-        **sections,
-    )
+
+    def render(sources: list[dict[str, str]]) -> str:
+        return tpl.render(
+            sources=sources,
+            company={
+                "name": company.name,
+                "symbol": company.symbol,
+                "market": company.market.value,
+                # DART가 주는 industry는 KSIC 코드(예: "26")다. 코드만 보여주면
+                # 독자에게 의미가 없고, 게이트에는 근거 없는 맨 정수로 잡힌다.
+                # 코드→업종명 매핑을 붙이기 전까지는 표시하지 않는다.
+                "industry": "—",
+            },
+            report={
+                "period_label": f"{ms.fiscal_year}년 연간",
+                "published_at": published_at.isoformat(),
+                "data_sources": "OpenDART (전자공시시스템)",
+                "retrieved_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+            },
+            header={
+                # 헤더도 플레이스홀더로 둔다 — 리터럴을 넣으면 게이트 밖에서
+                # 숫자가 새고, 감사 추적(bindings)에도 잡히지 않는다.
+                "market_cap": _ph(f"market_cap_{y}a") if has_price else "—",
+                "price_date": price_label if has_price else "—",
+                "close_price": _ph(f"price_{y}a") if has_price else "—",
+            },
+            **sections,
+        )
+
+    body = render(sources=[])
+    if registry is None:
+        return body
+    return render(sources=_source_rows(body, registry))
+
+
+def _source_rows(body: str, registry: NumberRegistry) -> list[dict[str, str]]:
+    """본문에 등장한 수치의 출처표.
+
+    **RA는 출처에 민감하다.** 웹 화면에서는 숫자를 클릭해 확인할 수 있지만
+    (D26), 마크다운 파일로 받으면 그 정보가 통째로 사라진다. 발간물이 파일인
+    이상 파일 안에 검증 경로가 있어야 한다.
+
+    값은 **플레이스홀더로 넣는다** — 본문과 같은 레지스트리를 거치므로 표와
+    본문의 숫자가 갈라질 수 없고, G0도 그대로 통과한다.
+    """
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for key in NumberRegistry.extract_keys(body):
+        if key in seen:
+            continue
+        seen.add(key)
+        entry = registry._entries.get(key)
+        if entry is None or entry.internal:
+            continue
+        prov = entry.provenance
+        doc = (prov.source_ref or "") if prov else ""
+        link = (prov.verify_url or "") if prov else ""
+        rows.append(
+            {
+                "label": entry.label or key,
+                "value": _ph(key),
+                # 산식의 파이프(`|전기|`)를 그대로 두면 **마크다운 표의 셀
+                # 구분자로 해석돼** 그 뒤 열이 통째로 밀린다 (이전에 한 번 밟았다).
+                "formula": (entry.formula or "—").replace("|", "\\|"),
+                "source": prov.describe if prov else "—",
+                # 공시번호를 링크로 건다. 검토자가 클릭 한 번에 원문으로 간다.
+                "document": f"[{doc}]({link})" if doc and link else (doc or "—"),
+            }
+        )
+    return rows
 
 
 # ── 추정 이력 (point-in-time) ────────────────────────────────────────
@@ -947,6 +1003,7 @@ def build_report(
     # 사업보고서 **원문** — 한 번만 받아 여러 섹션에 쓴다 (5~8MB).
     # 실패해도 노트 생성을 막지 않는다.
     segments: SegmentBreakdown | None = None
+    segment_section: str | None = None
     segment_profit: SegmentProfitSet | None = None
     business: BusinessProfile | None = None
     if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
@@ -966,11 +1023,13 @@ def build_report(
             # 「2. 주요 제품 및 서비스」를 먼저 본다 — 「4. 매출 및 수주상황」보다
             # 표가 단순하고(내수/수출 중첩 없음) 3개년이 나란히 있다.
             for keyword in ("주요 제품", "매출"):
-                candidate = build_segments(find_section(text, keyword), ms, stmt.rcept_no)
+                found = find_section(text, keyword)
+                candidate = build_segments(found, ms, stmt.rcept_no)
                 if candidate.usable:
-                    segments = candidate
+                    segments, segment_section = candidate, (found.title if found else None)
                     break
                 segments = segments or candidate
+                segment_section = segment_section or (found.title if found else None)
 
             business = build_business_profile(
                 find_section(text, "사업의 개요"),
@@ -980,12 +1039,31 @@ def build_report(
                 total_assets=ms.get("total_assets"),
             )
 
+        # **원문에서 뽑은 값은 어느 섹션인지까지 남긴다.** 접수번호만 있으면
+        # 검토자가 300쪽 사업보고서 첫 장에서 표를 직접 찾아야 한다.
         if segments is not None and segments.usable:
-            registry.register_all(build_segment_entries(segments, stmt.provenance))
+            registry.register_all(
+                build_segment_entries(
+                    segments,
+                    section_provenance(stmt.provenance, segment_section, stmt.rcept_no),
+                )
+            )
         if segment_profit is not None and segment_profit.usable:
-            registry.register_all(build_segment_profit_entries(segment_profit, stmt.provenance))
+            registry.register_all(
+                build_segment_profit_entries(
+                    segment_profit,
+                    section_provenance(
+                        stmt.provenance, segment_profit.section_title, stmt.rcept_no
+                    ),
+                )
+            )
         if business is not None:
-            registry.register_all(build_business_entries(business, stmt.provenance))
+            registry.register_all(
+                build_business_entries(
+                    business,
+                    section_provenance(stmt.provenance, "사업의 개요", stmt.rcept_no),
+                )
+            )
 
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
     step("estimates", "추정·밸류에이션 산출")
@@ -993,7 +1071,12 @@ def build_report(
     previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
     revisions = compare_estimates(previous, estimates)
     if estimates.usable:
-        registry.register_all(build_estimate_entries(estimates, revisions, stmt.provenance))
+        # 추정치는 **공시가 아니라 우리 계산**이다. 원본 공시로 표시하면
+        # 검토자가 DART에서 찾으려다 없는 것을 찾게 된다.
+        est_prov = stmt.provenance.model_copy(
+            update={"dataset": f"추정 (기준선 · {estimates.method})", "source_url": None}
+        )
+        registry.register_all(build_estimate_entries(estimates, revisions, est_prov))
         if valuation is not None:
             registry.register_all(
                 build_forward_entries(
@@ -1013,7 +1096,16 @@ def build_report(
         info=info,
     )
     registry.register_all(
-        build_lens_entries(lenses, segment_profit, stmt.provenance, ms.fiscal_year)
+        build_lens_entries(
+            lenses,
+            segment_profit,
+            section_provenance(
+                stmt.provenance,
+                segment_profit.section_title if segment_profit else None,
+                stmt.rcept_no,
+            ),
+            ms.fiscal_year,
+        )
     )
 
     sections = compose_sections(
@@ -1094,6 +1186,7 @@ def build_report(
         sections,
         published_at=published_at or dt.datetime.now(dt.UTC).date(),
         valuation=valuation,
+        registry=registry,
     )
 
     step("gate", "G0 게이트 검증")

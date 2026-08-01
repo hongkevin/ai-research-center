@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 from arc.data.base import Provenance
-from arc.data.kr.dart import BASE_URL, SOURCE, DartProvider
+from arc.data.kr.dart import BASE_URL, SOURCE, DartProvider, viewer_url
 
 # 보고서 코드 — 사업보고서만 쓰지만 분기 확장 대비로 남긴다
 REPRT_ANNUAL = "11011"
@@ -181,7 +181,9 @@ def parse_share_counts(
         provenance=Provenance(
             source=SOURCE,
             retrieved_at=retrieved_at,
+            dataset="정기보고서 · 주식의 총수 현황",
             source_url=f"{BASE_URL}/stockTotqySttus.json",
+            verify_url=viewer_url(rcept_no),
             source_ref=rcept_no,
         ),
     )
@@ -274,7 +276,9 @@ def parse_dividend(
         provenance=Provenance(
             source=SOURCE,
             retrieved_at=retrieved_at,
+            dataset="정기보고서 · 배당에 관한 사항",
             source_url=f"{BASE_URL}/alotMatter.json",
+            verify_url=viewer_url(rcept_no),
             source_ref=rcept_no,
         ),
     )
@@ -391,7 +395,9 @@ def parse_audit_opinion(
         provenance=Provenance(
             source=SOURCE,
             retrieved_at=retrieved_at,
+            dataset="정기보고서 · 회계감사인의 명칭 및 감사의견",
             source_url=f"{BASE_URL}/accnutAdtorNmNdAdtOpinion.json",
+            verify_url=viewer_url(rcept_no),
             source_ref=rcept_no,
         ),
     )
@@ -518,7 +524,9 @@ def parse_workforce(
         provenance=Provenance(
             source=SOURCE,
             retrieved_at=retrieved_at,
+            dataset="정기보고서 · 직원 등 현황",
             source_url=f"{BASE_URL}/empSttus.json",
+            verify_url=viewer_url(rcept_no),
             source_ref=rcept_no,
         ),
     )
@@ -592,7 +600,9 @@ def parse_ownership(
         provenance=Provenance(
             source=SOURCE,
             retrieved_at=retrieved_at,
+            dataset="정기보고서 · 최대주주 및 특수관계인 주식소유 현황",
             source_url=f"{BASE_URL}/hyslrSttus.json",
+            verify_url=viewer_url(rcept_no),
             source_ref=rcept_no,
         ),
     )
@@ -665,7 +675,9 @@ def parse_affiliates(
         provenance=Provenance(
             source=SOURCE,
             retrieved_at=retrieved_at,
+            dataset="정기보고서 · 타법인 출자현황",
             source_url=f"{BASE_URL}/otrCprInvstmntSttus.json",
+            verify_url=viewer_url(rcept_no),
             source_ref=rcept_no,
         ),
     )

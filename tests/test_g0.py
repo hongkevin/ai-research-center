@@ -180,3 +180,21 @@ class TestDisclaimerNotSelfFlagging:
     def test_disclaimer_section_excluded_from_compliance_scan(self):
         r = gate().check(VALID_REPORT)
         assert not any(v.rule == "banned_opinion" for v in r.violations)
+
+
+# ── 출처 표기에서 오는 숫자 (D36) ────────────────────────────────────
+def test_url_digits_are_allowed_but_magnitudes_beside_them_are_not():
+    """「수치 출처」 표가 공시 원문을 링크로 걸면서 URL 안의 숫자가 필요해졌다.
+    URL은 주장이 아니라 주소다 — 다만 그 옆의 크기는 여전히 잡혀야 한다."""
+    reg = NumberRegistry()
+    link = "[20260319001417](https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260319001417)"
+    assert reg.find_unregistered_numbers(f"출처 {link} 참조") == []
+    hits = reg.find_unregistered_numbers(f"매출은 5,363억원이다. 출처 {link}")
+    assert any("5,363" in h.text for h in hits)
+
+
+def test_a_bare_fourteen_digit_run_is_a_filing_number_not_an_amount():
+    """금액이면 콤마가 붙는다. 14자리 연속 숫자는 DART 접수번호다."""
+    reg = NumberRegistry()
+    assert reg.find_unregistered_numbers("공시 20260319001417") == []
+    assert reg.find_unregistered_numbers("20,260,319,001,417원") != []

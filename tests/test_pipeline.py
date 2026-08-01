@@ -218,3 +218,75 @@ class TestInsufficientCoverage:
         assert not r.metrics.coverage_ok
         assert "revenue" in r.metrics.missing
         assert "찾지 못한 지표" in (r.rendered or r.assembled)
+
+
+# ── 수치 출처 (D36) ──────────────────────────────────────────────────
+def test_source_table_lists_only_numbers_that_appear_in_the_body():
+    """「수치 출처」 표는 본문에 실제로 등장한 키만 싣는다. 등록됐지만 안 쓰인
+    수치까지 실으면 독자가 리포트에 없는 값을 찾게 된다."""
+    import datetime as dt
+
+    from arc.data.base import Provenance
+    from arc.llm.number_registry import NumberEntry, NumberRegistry
+    from arc.pipeline.earnings_review import _source_rows
+
+    prov = Provenance(
+        source="opendart",
+        retrieved_at=dt.datetime(2026, 8, 1, tzinfo=dt.UTC),
+        dataset="재무제표 (전체계정)",
+        verify_url="https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260319001417",
+        source_ref="20260319001417",
+    )
+    reg = NumberRegistry()
+    reg.register_all(
+        [
+            NumberEntry(
+                key="a_2025a", value=1, unit="원", display="1원", provenance=prov, label="A"
+            ),
+            NumberEntry(
+                key="b_2025a", value=2, unit="원", display="2원", provenance=prov, label="B"
+            ),
+            NumberEntry(
+                key="c_2025a",
+                value=3,
+                unit="%",
+                display="3%",
+                provenance=prov,
+                label="C",
+                internal=True,
+            ),
+        ]
+    )
+    rows = _source_rows("본문 {{num:a_2025a}} 과 {{num:c_2025a}}", reg)
+    # b는 본문에 없고, c는 감사용(internal)이라 뺀다 (D17)
+    assert [r["label"] for r in rows] == ["A"]
+    assert rows[0]["value"] == "{{num:a_2025a}}"
+    assert "재무제표 (전체계정)" == rows[0]["source"]
+    assert "dsaf001" in rows[0]["document"]
+
+
+def test_source_table_escapes_pipes_in_formulas():
+    """산식의 `|전기|`를 그대로 두면 마크다운 표의 셀 구분자로 해석돼 뒤 열이
+    통째로 밀린다."""
+    import datetime as dt
+
+    from arc.data.base import Provenance
+    from arc.llm.number_registry import NumberEntry, NumberRegistry
+    from arc.pipeline.earnings_review import _source_rows
+
+    prov = Provenance(source="opendart", retrieved_at=dt.datetime(2026, 8, 1, tzinfo=dt.UTC))
+    reg = NumberRegistry()
+    reg.register_all(
+        [
+            NumberEntry(
+                key="x_2025a",
+                value=1,
+                unit="%",
+                display="1%",
+                provenance=prov,
+                label="X",
+                formula="(당기 - 전기) / |전기|",
+            )
+        ]
+    )
+    assert _source_rows("{{num:x_2025a}}", reg)[0]["formula"] == r"(당기 - 전기) / \|전기\|"

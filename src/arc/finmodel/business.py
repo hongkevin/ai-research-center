@@ -196,7 +196,15 @@ def build_business_entries(profile: BusinessProfile, prov: Provenance) -> list[N
     out: list[NumberEntry] = []
     own = profile.ownership
 
-    def add(key, value, unit, display, label, formula=None, internal=False):
+    # 지분은 최대주주 현황에서, 출자 비중은 타법인 출자현황에서 온다.
+    own_prov = own.provenance if own and own.provenance else prov
+    aff_prov = (
+        profile.affiliates.provenance
+        if profile.affiliates and profile.affiliates.provenance
+        else prov
+    )
+
+    def add(key, value, unit, display, label, formula=None, internal=False, source=None):
         if value is None or display is None:
             return
         out.append(
@@ -205,7 +213,7 @@ def build_business_entries(profile: BusinessProfile, prov: Provenance) -> list[N
                 value=value,
                 unit=unit,
                 display=display,
-                provenance=prov,
+                provenance=source or prov,
                 label=f"{label} ({y}A)",
                 formula=formula,
                 internal=internal,
@@ -219,6 +227,7 @@ def build_business_entries(profile: BusinessProfile, prov: Provenance) -> list[N
             "%",
             f"{own.principal_stake:.2f}%" if own.principal_stake is not None else None,
             "최대주주 지분율",
+            source=own_prov,
         )
         add(
             "owner_total_stake",
@@ -226,6 +235,7 @@ def build_business_entries(profile: BusinessProfile, prov: Provenance) -> list[N
             "%",
             f"{own.total_stake:.2f}%" if own.total_stake is not None else None,
             "최대주주 및 특수관계인 지분율",
+            source=own_prov,
         )
 
     # 자회사 지분율도 수치다. 표에 리터럴로 넣었다가 G0에 막혔다(실측).
@@ -238,6 +248,7 @@ def build_business_entries(profile: BusinessProfile, prov: Provenance) -> list[N
                 "%",
                 f"{e.stake:.1f}%" if e.stake is not None else None,
                 f"{e.name} 지분율",
+                source=aff_prov,
             )
 
     w = profile.affiliate_weight
@@ -248,5 +259,6 @@ def build_business_entries(profile: BusinessProfile, prov: Provenance) -> list[N
         f"{w:.1f}%" if w is not None else None,
         "타법인 출자 장부가 / 자산총계",
         formula="출자 장부가 합계 / 자산총계",
+        source=aff_prov,
     )
     return out
