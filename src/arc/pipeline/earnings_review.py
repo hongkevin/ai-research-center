@@ -49,6 +49,12 @@ from arc.finmodel.estimates import (
     from_rows,
     to_rows,
 )
+from arc.finmodel.lenses import (
+    LensSet,
+    build_lens_entries,
+    build_lens_observations,
+    build_lenses,
+)
 from arc.finmodel.metrics import (
     INCOME_STATEMENT_METRICS,
     MetricSet,
@@ -131,6 +137,7 @@ class ReportResult:
     revisions: list[Revision] = field(default_factory=list)
     segments: SegmentBreakdown | None = None
     segment_profit: SegmentProfitSet | None = None
+    lenses: LensSet | None = None
     business: BusinessProfile | None = None
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
 
@@ -155,6 +162,7 @@ def compose_sections(
     revisions: list[Revision] | None = None,
     segments: SegmentBreakdown | None = None,
     segment_profit: SegmentProfitSet | None = None,
+    lenses: LensSet | None = None,
     business: BusinessProfile | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
@@ -306,8 +314,10 @@ def compose_sections(
         "valuation": _valuation_section(y, p, valuation, estimates),
         "risks": _risk_lines(valuation, info)
         or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."],
-        # 결정론 v0에는 관전 포인트가 없다 — 이건 해석이라 LLM이 채운다.
-        "watchpoints": [],
+        "lenses": _lens_section(lenses),
+        # 관전 포인트는 **렌즈가 갈리는 지점**이다 (D35). LLM이 있으면 덮어쓰지만,
+        # 없어도 비어 있지 않다 — D22가 이 섹션을 만든 이유가 여기서 채워진다.
+        "watchpoints": [t.text for t in lenses.tensions] if lenses else [],
         # 산업 배경도 LLM 전용 레인이다 (미검증). 없으면 섹션이 통째로 빠진다.
         "industry_context": "",
         "method_notes": _method_notes(ms, valuation, info, estimates),
@@ -406,6 +416,31 @@ def _segment_rows(y: int, p, seg: SegmentBreakdown | None) -> list[dict[str, str
             }
         )
     return out
+
+
+def _lens_section(lenses: LensSet | None) -> dict[str, object]:
+    """관점별 해석. **근거가 없는 렌즈는 침묵하고 그 사실을 적는다.**
+
+    억지로 말하게 하면 이 제품이 피하려는 것 그 자체가 된다 — 섹션을 채우려고
+    확인되지 않은 판단을 쓰는 것.
+    """
+    if lenses is None:
+        return {"views": [], "tensions": []}
+    # 렌즈가 전부 침묵해도 **섹션은 낸다.** 통째로 사라지면 검토자는 "이 회사엔
+    # 볼 관점이 없구나"로 읽는다. 무엇을 못 봤는지 적는 편이 정직하다
+    # (`_business_section`과 같은 원칙).
+    return {
+        "views": [
+            {
+                "label": v.label,
+                "question": v.question,
+                "readings": [r.claim for r in v.readings],
+                "note": v.silent_reason,
+            }
+            for v in lenses.views
+        ],
+        "tensions": [t.text for t in lenses.tensions],
+    }
 
 
 def _segment_names(sp: SegmentProfitSet | None, seg: SegmentBreakdown | None) -> list[str]:
@@ -953,6 +988,18 @@ def build_report(
                 )
             )
 
+    # 렌즈 — 같은 숫자에 다른 질문을 던진다 (D35). 앞선 레이어가 모두 끝난 뒤에
+    # 돌아야 부문 자산·마진 브리지를 함께 볼 수 있다.
+    lenses = build_lenses(
+        ms,
+        valuation=valuation,
+        bridge=build_margin_bridge(ms),
+        segment_profit=segment_profit,
+    )
+    registry.register_all(
+        build_lens_entries(lenses, segment_profit, stmt.provenance, ms.fiscal_year)
+    )
+
     sections = compose_sections(
         ms,
         registry,
@@ -963,6 +1010,7 @@ def build_report(
         revisions=revisions,
         segments=segments,
         segment_profit=segment_profit,
+        lenses=lenses,
         business=business,
     )
 
@@ -984,6 +1032,7 @@ def build_report(
             obs += build_segment_profit_observations(segment_profit)
         elif segments is not None:
             obs += build_segment_observations(segments)
+        obs += build_lens_observations(lenses)
         narration = narrate(
             llm,
             company_name=company.name,
@@ -1001,7 +1050,11 @@ def build_report(
                 n["earnings_narrative"] + " " + sections["earnings"]["narrative"]
             )
             sections["risks"] = merge_risks(list(n["risks"]), valuation, info)
-            sections["watchpoints"] = list(n.get("watchpoints") or [])
+            # LLM이 관전 포인트를 못 내면 **렌즈가 찾은 충돌로 되돌린다** (D35).
+            # 비워 두면 D22가 이 섹션을 만든 이유가 사라진다.
+            sections["watchpoints"] = list(n.get("watchpoints") or []) or [
+                t.text for t in lenses.tensions
+            ]
             if n.get("business_narrative"):
                 sections["business_narrative"] = n["business_narrative"]
 
@@ -1046,6 +1099,7 @@ def build_report(
         narration=narration,
         segments=segments,
         segment_profit=segment_profit,
+        lenses=lenses,
         business=business,
         report_info=info,
         valuation=valuation,
