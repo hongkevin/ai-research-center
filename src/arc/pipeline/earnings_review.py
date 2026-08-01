@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -758,6 +759,7 @@ def build_report(
     store: object | None = None,
     assumptions: dict[str, float] | None = None,
     with_segments: bool = True,
+    on_progress: Callable[[str, str], None] | None = None,
 ) -> ReportResult:
     """S1 → S6b 관통.
 
@@ -765,12 +767,24 @@ def build_report(
     `llm`을 주면 S4 서술을 LLM이 쓰고, 실패하면 결정론 문장으로 폴백한다.
     `reports`가 없고 provider가 DART면 정기보고서 주요정보를 함께 받는다
     (주식수·배당·감사의견·인력 → 밸류에이션과 리스크 근거).
+
+    `on_progress(단계키, 문구)`는 진행 상황을 알린다. LLM까지 켜면 30~40초가
+    걸리는데 아무 반응이 없으면 사용자가 멈춘 줄 알고 다시 누른다. 콜백을
+    쓰는 쪽(웹)이 이걸 스트리밍한다.
     """
+
+    def step(key: str, message: str) -> None:
+        if on_progress is not None:
+            on_progress(key, message)
+
+    step("company", "회사 정보 조회")
     company = provider.get_company(symbol)
+    step("statement", "재무제표 수집")
     stmt = fetch_statement(
         symbol, fiscal_year, provider, period=period, consolidation=consolidation
     )
 
+    step("metrics", "지표 추출·계산")
     ms = extract_metrics(stmt)
     registry = NumberRegistry()
     registry.register_all(build_entries(ms, stmt.provenance))
@@ -783,6 +797,7 @@ def build_report(
     info_error: str | None = None
     valuation: ValuationSet | None = None
     if reports is not None:
+        step("reports", "정기보고서 주요정보 (주식수·배당·감사의견)")
         try:
             info = reports.fetch(symbol, fiscal_year)
         except Exception as exc:  # noqa: BLE001 — 어댑터별 예외 타입이 다르다
@@ -796,6 +811,7 @@ def build_report(
     segments: SegmentBreakdown | None = None
     business: BusinessProfile | None = None
     if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
+        step("document", "사업보고서 원문 (5~8MB)")
         text, doc_error = fetch_document(provider, stmt.rcept_no)
         if doc_error and info_error is None:
             info_error = doc_error
@@ -824,6 +840,7 @@ def build_report(
             registry.register_all(build_business_entries(business, stmt.provenance))
 
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
+    step("estimates", "추정·밸류에이션 산출")
     estimates = build_estimates(ms, assumptions)
     previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
     revisions = compare_estimates(previous, estimates)
@@ -852,6 +869,7 @@ def build_report(
     if llm is not None:
         from arc.llm.narrate import narrate, narrate_industry
 
+        step("llm", "LLM 서술 생성 (가장 오래 걸립니다)")
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
         obs = build_observations(ms, build_margin_bridge(ms))
         if valuation is not None and info is not None:
@@ -885,6 +903,7 @@ def build_report(
         # 산업 배경 — **별도 호출, 별도 규칙.** 수치 카탈로그를 주지 않고
         # 숫자를 아예 금지한다. 숫자가 섞이면 이 문단만 버리고 리포트는 낸다.
         if business is not None and business.usable:
+            step("industry", "산업 배경 생성 (미검증 레인)")
             industry_text, industry_problems = narrate_industry(
                 llm,
                 company_name=company.name,
@@ -903,6 +922,7 @@ def build_report(
         valuation=valuation,
     )
 
+    step("gate", "G0 게이트 검증")
     gate = G0Gate(registry).check(assembled)
     rendered = registry.render_text(assembled) if gate.passed else None
     bindings = registry.bindings(assembled) if gate.passed else []

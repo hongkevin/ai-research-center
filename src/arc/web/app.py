@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -26,7 +27,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 
 from arc.data.kr.dart import DartProvider
@@ -35,6 +41,7 @@ from arc.render.charts import Slice, legend, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
+from arc.web.jobs import JobStore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # uvicorn은 CLI를 거치지 않고 모듈을 직접 import한다 — 여기서도 키를 읽어야 한다
@@ -51,6 +58,7 @@ app = FastAPI(title="AI Research Center", docs_url="/api/docs")
 # 공개 주소에 올릴 때 서버의 LLM 키가 무방비가 되면 안 된다 (auth.py 참조)
 app.add_middleware(BasicAuthMiddleware)
 LLM_BUDGET = LLMBudget()
+JOBS = JobStore()
 
 
 @dataclass
@@ -186,6 +194,7 @@ def _generate(
     use_llm: bool,
     overrides: dict[str, float],
     publish: bool = False,
+    on_progress=None,
 ) -> ViewModel:
     """노트 생성. **생성과 발간은 다르다.**
 
@@ -215,6 +224,7 @@ def _generate(
         llm=client,
         store=store,
         assumptions=overrides or None,
+        on_progress=on_progress,
     )
     vm = _to_view(r)
     if budget_exhausted:
@@ -299,6 +309,85 @@ def generate(
         vm = ViewModel(symbol=symbol, year=year, error=f"{type(exc).__name__}: {exc}")
     return TEMPLATES.TemplateResponse(
         request, "index.html", {"vm": vm, "symbol": symbol, "year": year, "assume": assume}
+    )
+
+
+# ── 비동기 생성 (진행 표시) ──────────────────────────────────────────
+@app.post("/api/jobs")
+def api_start_job(payload: dict):
+    """생성을 백그라운드로 시작하고 job_id를 준다.
+
+    폼 POST를 그대로 두는 이유는 **JS가 없어도 동작해야** 하기 때문이다.
+    이 경로는 진행 표시를 위한 향상(progressive enhancement)이다.
+    """
+    symbol = str(payload.get("symbol", "")).strip()
+    year = int(payload.get("year", 2025))
+    use_llm = bool(payload.get("llm", False))
+    publish = bool(payload.get("publish", False))
+    try:
+        symbol = _resolve_symbol(symbol)
+        overrides = _parse_overrides(str(payload.get("assume", "")))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    def work(job):
+        return _generate(
+            symbol,
+            year,
+            use_llm=use_llm,
+            overrides=overrides,
+            publish=publish,
+            on_progress=job.emit,
+        )
+
+    return {"job_id": JOBS.start(work).id}
+
+
+@app.get("/api/jobs/{job_id}/events")
+async def api_job_events(job_id: str):
+    """진행 단계를 SSE로 흘려보낸다."""
+    import asyncio
+
+    job = JOBS.get(job_id)
+    if job is None:
+        return JSONResponse({"error": "없는 작업입니다."}, status_code=404)
+
+    async def stream():
+        sent = 0
+        while True:
+            for key, message in job.snapshot(sent):
+                sent += 1
+                yield f"event: step\ndata: {json.dumps({'key': key, 'message': message}, ensure_ascii=False)}\n\n"
+            if job.done:
+                payload = {"ok": not job.error, "error": job.error}
+                yield f"event: done\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                return
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        # 프록시가 버퍼링하면 진행 표시가 한꺼번에 도착한다
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/report/{job_id}", response_class=HTMLResponse)
+def report_page(request: Request, job_id: str):
+    """완료된 작업의 결과 페이지. 렌더는 폼 POST와 **같은 템플릿**을 쓴다."""
+    job = JOBS.get(job_id)
+    if job is None or not job.done:
+        return RedirectResponse("/", status_code=303)
+    vm = job.result if not job.error else ViewModel(symbol="", year=0, error=job.error)
+    return TEMPLATES.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "vm": vm,
+            "symbol": getattr(vm, "symbol", ""),
+            "year": getattr(vm, "year", 2025),
+            "assume": "",
+        },
     )
 
 
