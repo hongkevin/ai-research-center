@@ -79,6 +79,18 @@ def _final_sound(value: str) -> tuple[bool, bool] | None:
     return None
 
 
+def attach(word: str, with_final: str, without_final: str) -> str:
+    """`word` + 받침에 맞는 조사. 판단할 수 없으면 받침 있는 쪽을 쓴다.
+
+    **결정적 코드가 회사·부문 이름을 문장에 넣을 때 쓴다.** 치환 시점 교정
+    (`render_text`)은 플레이스홀더 뒤의 조사만 고치므로, 이름 뒤에 붙는 조사는
+    여기서 골라야 한다. 실측: 렌즈가 "화장품은 늘고 **기타은** 줄었다"를 냈다.
+    """
+    sound = _final_sound(word)
+    has_final = True if sound is None else sound[0]
+    return f"{word}{with_final if has_final else without_final}"
+
+
 def fix_after(value: str, following: str) -> str:
     """`value` 바로 뒤에 오는 조사를 교정해 돌려준다 (조사가 아니면 빈 문자열).
 

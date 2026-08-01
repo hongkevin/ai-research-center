@@ -314,7 +314,7 @@ def compose_sections(
         "valuation": _valuation_section(y, p, valuation, estimates),
         "risks": _risk_lines(valuation, info)
         or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."],
-        "lenses": _lens_section(lenses),
+        "lenses": _lens_section(lenses, p),
         # 관전 포인트는 **렌즈가 갈리는 지점**이다 (D35). LLM이 있으면 덮어쓰지만,
         # 없어도 비어 있지 않다 — D22가 이 섹션을 만든 이유가 여기서 채워진다.
         "watchpoints": [t.text for t in lenses.tensions] if lenses else [],
@@ -418,7 +418,7 @@ def _segment_rows(y: int, p, seg: SegmentBreakdown | None) -> list[dict[str, str
     return out
 
 
-def _lens_section(lenses: LensSet | None) -> dict[str, object]:
+def _lens_section(lenses: LensSet | None, p) -> dict[str, object]:
     """관점별 해석. **근거가 없는 렌즈는 침묵하고 그 사실을 적는다.**
 
     억지로 말하게 하면 이 제품이 피하려는 것 그 자체가 된다 — 섹션을 채우려고
@@ -437,13 +437,15 @@ def _lens_section(lenses: LensSet | None) -> dict[str, object]:
         head = v.headline
         caveats = v.caveats
         rest = [r for r in v.ordered if r is not head and r not in caveats]
+        # 본문은 `report` 템플릿의 슬롯을 플레이스홀더로 채운다 — 그래야 회사마다
+        # 다른 글이 된다. 프롬프트로 가는 `claim`은 크기 없는 그대로 둔다.
         views.append(
             {
                 "label": v.label,
                 "question": v.question,
-                "headline": head.claim if head else "",
-                "caveats": [r.claim for r in caveats],
-                "readings": [r.claim for r in rest],
+                "headline": head.report_text(p) if head else "",
+                "caveats": [r.report_text(p) for r in caveats],
+                "readings": [r.report_text(p) for r in rest],
                 "watch": v.watch,
                 # 통째로 침묵한 렌즈는 사유 한 줄이면 된다 — 답하지 못한 단계를
                 # 또 나열하면 같은 말이 두 번 실린다.
@@ -1006,6 +1008,9 @@ def build_report(
         valuation=valuation,
         bridge=build_margin_bridge(ms),
         segment_profit=segment_profit,
+        segments=segments,
+        business=business,
+        info=info,
     )
     registry.register_all(
         build_lens_entries(lenses, segment_profit, stmt.provenance, ms.fiscal_year)
