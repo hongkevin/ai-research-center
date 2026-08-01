@@ -167,7 +167,7 @@ def parse_share_counts(
             source=SOURCE,
             retrieved_at=retrieved_at,
             source_url=f"{BASE_URL}/stockTotqySttus.json",
-            document_id=rcept_no,
+            source_ref=rcept_no,
         ),
     )
 
@@ -260,7 +260,7 @@ def parse_dividend(
             source=SOURCE,
             retrieved_at=retrieved_at,
             source_url=f"{BASE_URL}/alotMatter.json",
-            document_id=rcept_no,
+            source_ref=rcept_no,
         ),
     )
 
@@ -377,7 +377,7 @@ def parse_audit_opinion(
             source=SOURCE,
             retrieved_at=retrieved_at,
             source_url=f"{BASE_URL}/accnutAdtorNmNdAdtOpinion.json",
-            document_id=rcept_no,
+            source_ref=rcept_no,
         ),
     )
 
@@ -504,7 +504,7 @@ def parse_workforce(
             source=SOURCE,
             retrieved_at=retrieved_at,
             source_url=f"{BASE_URL}/empSttus.json",
-            document_id=rcept_no,
+            source_ref=rcept_no,
         ),
     )
 

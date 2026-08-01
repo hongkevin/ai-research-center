@@ -528,18 +528,22 @@ def assemble(
 def _load_prior_estimates(
     store: object | None, symbol: str, fiscal_year: int, published_at: dt.date | None
 ) -> EstimateSet | None:
-    """직전 발간 시점의 추정을 읽는다.
+    """직전 **발간** 시점의 추정을 읽는다.
 
-    `as_of`를 **이번 발간일 직전**으로 잡는다. 오늘 저장한 값을 다시 읽어
-    "변화 없음"이 되는 걸 막기 위해서다.
+    경계는 발간일 **끝**(포함)이다. 같은 날 발간한 뒤 가정을 고쳐 다시
+    생성하면 그 발간분과 비교돼야 한다.
+
+    자기 자신과 비교할 위험은 없다 — 저장은 **명시적 발간에서만** 일어나고
+    (`save_estimates`), 그 시점에 `build_report`는 이미 끝나 있다. 생성할
+    때마다 저장했다면 가정을 만지작거린 흔적이 전부 "직전 추정"이 되어
+    이력이 무의미해진다.
 
     저장소가 없거나 이력이 없으면 None — 없는 걸 만들지 않는다.
     """
     if store is None:
         return None
-    as_of = dt.datetime.combine(
-        published_at or dt.datetime.now(dt.UTC).date(), dt.time.min, tzinfo=dt.UTC
-    ) - dt.timedelta(microseconds=1)
+    day = published_at or dt.datetime.now(dt.UTC).date()
+    as_of = dt.datetime.combine(day, dt.time.max, tzinfo=dt.UTC)
     try:
         rows = store.read_as_of(ESTIMATE_DATASET, as_of)
     except Exception:  # noqa: BLE001 — 이력이 없어도 발간은 막지 않는다
