@@ -351,3 +351,51 @@ class TestCharts:
         svg = segment_bar([Slice("<script>", 60.0), Slice("정상", 40.0)])
         assert "<script>" not in svg
         assert "&lt;script&gt;" in svg
+
+
+class TestStoreResilience:
+    """볼륨이 안 붙어도 **리포트 생성은 계속돼야 한다.**
+
+    추정 이력은 revision 추적을 위한 향상이지 생성의 전제가 아니다.
+    배포 직후 볼륨 설정이 틀렸다고 화면 전체가 죽으면 안 된다.
+    """
+
+    def test_unwritable_path_returns_none(self, monkeypatch, tmp_path):
+        import arc.web.app as web
+
+        blocked = tmp_path / "blocked" / "store"
+        monkeypatch.setattr(web, "STORE_DIR", blocked)
+        (tmp_path / "blocked").write_text("파일이라 하위 디렉터리를 못 만든다")
+        assert web._open_store() is None
+
+    def test_writable_path_opens(self, monkeypatch, tmp_path):
+        import arc.web.app as web
+
+        monkeypatch.setattr(web, "STORE_DIR", tmp_path / "store")
+        assert web._open_store() is not None
+
+    def test_health_reports_writable(self, monkeypatch, tmp_path):
+        """배포 직후 볼륨이 붙었는지 이걸로 확인한다."""
+        import arc.web.app as web
+
+        monkeypatch.setattr(web, "STORE_DIR", tmp_path / "store")
+        status = web._store_status()
+        assert status["writable"] is True
+        assert str(tmp_path) in str(status["path"])
+
+    def test_health_reports_reason_when_broken(self, monkeypatch, tmp_path):
+        import arc.web.app as web
+
+        (tmp_path / "blocked").write_text("x")
+        monkeypatch.setattr(web, "STORE_DIR", tmp_path / "blocked" / "store")
+        status = web._store_status()
+        assert status["writable"] is False
+        assert status["reason"]
+
+    def test_probe_file_cleaned_up(self, monkeypatch, tmp_path):
+        """확인용 파일이 남으면 스냅샷 목록에 섞인다."""
+        import arc.web.app as web
+
+        monkeypatch.setattr(web, "STORE_DIR", tmp_path / "store")
+        web._store_status()
+        assert not list((tmp_path / "store").glob(".write-probe"))
