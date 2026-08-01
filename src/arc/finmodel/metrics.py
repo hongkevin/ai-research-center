@@ -144,9 +144,11 @@ class MetricValue:
     label: str
     current: int | None
     prior: int | None
-    matched_by: str  # "account_id" | "account_name"
-    matched_on: str  # 실제로 매칭된 값 (감사용)
-    statement_type: str | None
+    # 전전기 — 성장률을 2개 관측해야 추세의 진폭을 잴 수 있다 (estimates 참조)
+    prior2: int | None = None
+    matched_by: str = ""  # "account_id" | "account_name"
+    matched_on: str = ""  # 실제로 매칭된 값 (감사용)
+    statement_type: str | None = None
 
 
 @dataclass
@@ -175,6 +177,10 @@ class MetricSet:
         v = self.values.get(key)
         return v.prior if v else None
 
+    def get_prior2(self, key: str) -> int | None:
+        v = self.values.get(key)
+        return v.prior2 if v else None
+
 
 def extract_metrics(stmt: FinancialStatement) -> MetricSet:
     """재무제표 → 표준 지표. 못 찾은 것은 `missing`에 남기고 채우지 않는다."""
@@ -191,6 +197,7 @@ def extract_metrics(stmt: FinancialStatement) -> MetricSet:
             label=_LABELS.get(key, key),
             current=item.amount,
             prior=item.prior_amount,
+            prior2=item.prior2_amount,
             matched_by=matched_by,
             matched_on=matched_on,
             statement_type=item.statement_type,

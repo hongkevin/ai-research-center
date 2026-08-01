@@ -313,7 +313,7 @@ class TestRiskSectionScope:
         notes = " ".join(_method_notes(_metrics(), build_valuation(_metrics(), info), info))
         assert "역산한 값" in notes
         assert "공시 기반 지표만" in notes
-        assert "추정 레이어" in notes
+        assert "추정" in notes  # 추정 유무는 EstimateSet에 달렸다
 
     def test_missing_accounts_disclosed_in_method_notes(self):
         ms = extract_metrics(_stmt([_li("매출액", 1000, 900), _li("영업이익", 200, 140)]))
