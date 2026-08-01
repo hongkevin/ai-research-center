@@ -162,20 +162,29 @@ def detect_unit_scale(text: str) -> int | None:
     return None
 
 
-def fetch_section(
-    dart, rcept_no: str, *keywords: str, timeout: float = 120.0
-) -> tuple[Section | None, str | None]:
-    """`document.xml`에서 섹션 하나를 가져온다. `(섹션, 오류)`.
+def fetch_document(dart, rcept_no: str) -> tuple[str, str | None]:
+    """사업보고서 원문 XML을 가져온다. `(본문, 오류)`.
 
-    본문이 5~8MB라 느리다(실측 3~8초). 발간 흐름에서는 감수할 만하지만
-    실패해도 노트 생성을 막지 않는다 — 부문 정보는 있으면 좋은 것이지
+    본문이 5~8MB라 느리다(실측 3~8초). **한 번만 받아 여러 섹션에 쓴다** —
+    섹션마다 다시 받으면 사업의 개요·주요 제품·매출 세 곳을 읽는 데 20초가
+    넘게 걸린다.
+
+    실패해도 노트 생성을 막지 않는다 — 원문 정보는 있으면 좋은 것이지
     없으면 못 쓰는 것이 아니다.
     """
     try:
         resp = dart._request("document.xml", {"rcept_no": rcept_no})
         text = extract_main_xml(resp.content)
     except Exception as exc:  # noqa: BLE001 — 어댑터별 예외 타입이 다르다
-        return None, f"{type(exc).__name__}: {exc}"
+        return "", f"{type(exc).__name__}: {exc}"
     if not text:
-        return None, "사업보고서 원문이 비어 있다."
+        return "", "사업보고서 원문이 비어 있다."
+    return text, None
+
+
+def fetch_section(dart, rcept_no: str, *keywords: str) -> tuple[Section | None, str | None]:
+    """섹션 하나만 필요할 때. 여러 개가 필요하면 `fetch_document`를 쓴다."""
+    text, error = fetch_document(dart, rcept_no)
+    if error:
+        return None, error
     return find_section(text, *keywords), None

@@ -48,7 +48,9 @@ _WHITELIST: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"[1-9]\s?(개|가지|곳|명|건|차례|번째)"), "소수 개수"),
     # ── 문서 구조에서 오는 숫자 (LLM이 쓴 주장이 아니다) ──
     # 마크다운 제목 번호: "## 2. 요약", "### 1. 외형 성장"
-    (re.compile(r"^#{1,6}\s*\d+\s*[.)]?\s", re.MULTILINE), "제목 번호"),
+    # 계층 번호("### 2.1 부문 구성")까지 포함해야 한다 — 안 그러면 `2.1`이
+    # `\d+\.\d+`(소수) 규칙에 걸려 발간이 차단된다.
+    (re.compile(r"^#{1,6}\s*\d+(?:\.\d+)*\s*[.)]?\s", re.MULTILINE), "제목 번호"),
     # 국내 종목코드: "(000000)". 회계상 음수는 6자리면 콤마가 붙으므로(123,456) 구분된다
     (re.compile(r"\(\d{6}\)"), "종목코드"),
     # 추정·실적 표기: "2026E", "2025A" (E=estimate, A=actual)
@@ -74,6 +76,49 @@ _HIGH: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\d{1,3}(,\d{3})+"), "천단위 구분"),
     (re.compile(r"\d+\s?(B|M|K|bn|mn|tn)\b"), "금액 약어"),
 ]
+
+
+def mask_numbers(text: str, placeholder: str = "⟨수치⟩") -> str:
+    """화이트리스트 밖의 숫자를 전부 가린다.
+
+    **공시 원문을 프롬프트에 넣을 때 쓴다.** 「사업의 개요」 같은 원문에는
+    우리가 등록하지 않은 숫자가 가득하고, LLM은 그걸 리터럴로 베낀다. G0가
+    잡아 발간은 막히지만, 재시도를 낭비하고 문장 품질도 떨어진다. 유혹을
+    애초에 없애는 편이 맞다.
+
+    탐지(`find_unregistered_numbers`)와 **같은 화이트리스트**를 쓴다 —
+    두 규칙이 갈라지면 "가렸는데 게이트에 걸리는" 상황이 생긴다.
+    연도·분기·법령 조항은 남는다. 그건 사실 관계이고 게이트도 허용한다.
+    """
+    allowed: list[tuple[int, int]] = []
+    for rx, _ in _WHITELIST:
+        allowed.extend((m.start(), m.end()) for m in rx.finditer(text))
+
+    def is_allowed(s: int, e: int) -> bool:
+        return any(a <= s and e <= b for a, b in allowed)
+
+    spans: list[tuple[int, int]] = []
+    for rx, _ in _HIGH:
+        for m in rx.finditer(text):
+            if not is_allowed(m.start(), m.end()):
+                spans.append((m.start(), m.end()))
+    for m in re.finditer(r"\d+", text):
+        if is_allowed(m.start(), m.end()):
+            continue
+        if any(s <= m.start() < e for s, e in spans):
+            continue
+        spans.append((m.start(), m.end()))
+
+    out: list[str] = []
+    pos = 0
+    for start, end in sorted(spans):
+        if start < pos:
+            continue
+        out.append(text[pos:start])
+        out.append(placeholder)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 class UnregisteredNumber(BaseModel):

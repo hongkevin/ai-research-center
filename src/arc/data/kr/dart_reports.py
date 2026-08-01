@@ -509,6 +509,153 @@ def parse_workforce(
     )
 
 
+# ── 지배구조 ─────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class Ownership:
+    """최대주주 및 특수관계인 현황.
+
+    소형주에서 특히 중요하다. 오너 지분율이 높으면 승계·배당 유인이 실적과
+    별개로 주가에 영향을 주고, 낮으면 경영권 안정성이 변수가 된다.
+
+    `total_stake`는 표의 `계` 행에서 읽는다 — 개별 행을 더하면 우선주가
+    섞이거나 중복 보유가 이중 계상된다.
+    """
+
+    fiscal_year: int
+    principal: str | None  # 최대주주 본인
+    principal_stake: float | None  # 본인 지분율 (%)
+    total_stake: float | None  # 최대주주 + 특수관계인 합계 (%)
+    holder_count: int  # 특수관계인 수 (본인 제외)
+    rcept_no: str | None = None
+    provenance: Provenance | None = None
+
+    @property
+    def is_owner_controlled(self) -> bool:
+        """오너 지배 구조인가. 30%는 상법상 주요 의사결정의 실질 기준선이다."""
+        return bool(self.total_stake and self.total_stake >= 30.0)
+
+
+_COMMON_STOCK = {"보통주", "의결권있는주식", "보통주식"}
+
+
+def parse_ownership(
+    rows: list[dict], fiscal_year: int, retrieved_at: dt.datetime
+) -> Ownership | None:
+    """`hyslrSttus` 응답 → Ownership. **보통주 기준으로만 읽는다.**
+
+    우선주 행이 섞여 있고(파마리서치 10.17%), 합계 행도 주식종류별로 따로
+    온다. 섞으면 지분율이 실제와 달라진다.
+    """
+    if not rows:
+        return None
+
+    def is_common(r: dict) -> bool:
+        kind = _norm(r.get("stock_knd"))
+        return not kind or kind in _COMMON_STOCK
+
+    common = [r for r in rows if is_common(r)] or rows
+    total = next((r for r in common if _norm(r.get("nm")) in {"계", "합계", "소계"}), None)
+    principal = next(
+        (r for r in common if "본인" in _norm(r.get("relate"))),
+        common[0] if common else None,
+    )
+    holders = [
+        r
+        for r in common
+        if _norm(r.get("nm")) not in {"계", "합계", "소계"} and "본인" not in _norm(r.get("relate"))
+    ]
+    rcept_no = _norm(rows[0].get("rcept_no")) or None
+    return Ownership(
+        fiscal_year=fiscal_year,
+        principal=_norm(principal.get("nm")) if principal else None,
+        principal_stake=parse_ratio(principal.get("trmend_posesn_stock_qota_rt"))
+        if principal
+        else None,
+        total_stake=parse_ratio(total.get("trmend_posesn_stock_qota_rt")) if total else None,
+        holder_count=len(holders),
+        rcept_no=rcept_no,
+        provenance=Provenance(
+            source=SOURCE,
+            retrieved_at=retrieved_at,
+            source_url=f"{BASE_URL}/hyslrSttus.json",
+            source_ref=rcept_no,
+        ),
+    )
+
+
+# ── 타법인 출자 (자회사·관계기업) ────────────────────────────────────
+@dataclass(frozen=True)
+class Affiliate:
+    """출자 법인 1개."""
+
+    name: str
+    purpose: str  # 경영참여 / 일반투자 / 단순투자
+    stake: float | None  # 지분율 (%)
+    book_value: int | None  # 기말 장부가액 (원)
+
+    @property
+    def is_operating(self) -> bool:
+        """경영참여 = 사업적으로 연결된 곳. 단순투자와 섞으면 사업 구조가 흐려진다."""
+        return "경영참여" in self.purpose
+
+
+@dataclass(frozen=True)
+class Affiliates:
+    """타법인 출자 현황. SOTP·지주사 판별의 재료다."""
+
+    fiscal_year: int
+    entries: list[Affiliate] = field(default_factory=list)
+    rcept_no: str | None = None
+    provenance: Provenance | None = None
+
+    @property
+    def operating(self) -> list[Affiliate]:
+        return [e for e in self.entries if e.is_operating]
+
+    @property
+    def total_book_value(self) -> int:
+        return sum(e.book_value or 0 for e in self.entries)
+
+    def top(self, n: int = 5) -> list[Affiliate]:
+        """장부가 상위 n곳. 34~134건을 전부 싣는 리포트는 없다."""
+        return sorted(self.entries, key=lambda e: -(e.book_value or 0))[:n]
+
+
+def parse_affiliates(
+    rows: list[dict], fiscal_year: int, retrieved_at: dt.datetime
+) -> Affiliates | None:
+    """`otrCprInvstmntSttus` 응답 → Affiliates."""
+    if not rows:
+        return None
+    entries: list[Affiliate] = []
+    for r in rows:
+        name = _norm(r.get("inv_prm"))
+        if not name or name in {"계", "합계", "소계", "-"}:
+            continue
+        entries.append(
+            Affiliate(
+                name=name,
+                purpose=_norm(r.get("invstmnt_purps")),
+                stake=parse_ratio(r.get("trmend_blce_qota_rt")),
+                book_value=parse_number(r.get("trmend_blce_acntbk_amount")),
+            )
+        )
+    if not entries:
+        return None
+    rcept_no = _norm(rows[0].get("rcept_no")) or None
+    return Affiliates(
+        fiscal_year=fiscal_year,
+        entries=entries,
+        rcept_no=rcept_no,
+        provenance=Provenance(
+            source=SOURCE,
+            retrieved_at=retrieved_at,
+            source_url=f"{BASE_URL}/otrCprInvstmntSttus.json",
+            source_ref=rcept_no,
+        ),
+    )
+
+
 # ── 묶음 ─────────────────────────────────────────────────────────────
 @dataclass
 class PeriodicReportInfo:
@@ -519,6 +666,8 @@ class PeriodicReportInfo:
     dividend: DividendInfo | None = None
     audit: AuditOpinion | None = None
     workforce: Workforce | None = None
+    ownership: Ownership | None = None
+    affiliates: Affiliates | None = None
     unavailable: list[str] = field(default_factory=list)
 
 
@@ -530,6 +679,8 @@ class DartReportProvider:
         "dividend": "alotMatter.json",
         "audit": "accnutAdtorNmNdAdtOpinion.json",
         "workforce": "empSttus.json",
+        "ownership": "hyslrSttus.json",
+        "affiliates": "otrCprInvstmntSttus.json",
     }
 
     def __init__(self, dart: DartProvider) -> None:
@@ -567,6 +718,8 @@ class DartReportProvider:
             "dividend": parse_dividend,
             "audit": parse_audit_opinion,
             "workforce": parse_workforce,
+            "ownership": parse_ownership,
+            "affiliates": parse_affiliates,
         }
         for name, endpoint in self.ENDPOINTS.items():
             rows = self._rows(endpoint, corp_code, fiscal_year, reprt_code)
