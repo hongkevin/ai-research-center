@@ -64,7 +64,17 @@ git push origin main
 이력이 사라져 revision 추적이 항상 "직전 보고서 없음"이 됩니다. 붙었는지는
 아래 `/api/health`의 `store.writable`로 확인하십시오.
 
-### 4. 환경변수
+### 4. 리전 — 한국에 가깝게
+
+**Settings → Region**에서 `Asia Southeast`(싱가포르)로 바꾸십시오.
+
+이 앱은 요청 한 건에 DART(한국)를 여러 번 호출하고, 그중 사업보고서 원문은
+5~8MB입니다. 리전이 미국이면 그 왕복이 전부 태평양을 건넙니다 — 실측으로
+같은 작업이 로컬 1.9초 vs 미국 리전 12.2초였습니다.
+
+싱가포르가 Railway가 제공하는 가장 가까운 리전입니다. 한국 리전은 없습니다.
+
+### 5. 환경변수
 
 **Variables** 탭에서 설정합니다.
 
@@ -79,7 +89,7 @@ git push origin main
 
 `PORT`는 Railway가 주입하므로 설정하지 마십시오.
 
-### 5. 확인
+### 6. 확인
 
 ```bash
 curl https://<앱주소>/api/health
