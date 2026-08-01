@@ -27,12 +27,21 @@ from arc.data.base import (
     FinancialStatement,
     PeriodType,
 )
+from arc.data.kr.dart import DartProvider
+from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
 from arc.finmodel.metrics import (
+    INCOME_STATEMENT_METRICS,
     MetricSet,
     build_entries,
     build_margin_bridge,
     build_observations,
     extract_metrics,
+)
+from arc.finmodel.valuation import (
+    ValuationSet,
+    build_valuation,
+    build_valuation_entries,
+    build_valuation_observations,
 )
 from arc.llm.number_registry import NumberRegistry
 from arc.verify.g0 import G0Gate, GateResult
@@ -56,6 +65,9 @@ class ReportResult:
     rendered: str | None = None  # 게이트 통과 시에만 채워진다
     bindings: list[dict] = field(default_factory=list)
     narration: object | None = None  # NarrationResult (LLM 사용 시)
+    report_info: PeriodicReportInfo | None = None  # 주식수·배당·감사의견·인력
+    valuation: ValuationSet | None = None
+    info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
 
     @property
     def publishable(self) -> bool:
@@ -72,6 +84,8 @@ def compose_sections(
     registry: NumberRegistry,
     *,
     consolidation: ConsolidationType = ConsolidationType.CONSOLIDATED,
+    valuation: ValuationSet | None = None,
+    info: PeriodicReportInfo | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
 
@@ -146,9 +160,12 @@ def compose_sections(
             }
         )
 
-    # 실적 테이블 — 확인된 지표만
+    # 실적 테이블 — **손익 계정만.** 자산·부채·자본이 손익 표에 들어가면 안 된다.
     rows = []
-    for key, mv in ms.values.items():
+    for key in INCOME_STATEMENT_METRICS:
+        mv = ms.values.get(key)
+        if mv is None:
+            continue
         rows.append(
             {
                 "label": mv.label,
@@ -169,7 +186,7 @@ def compose_sections(
             "종속회사 실적이 반영되지 않은 수치다."
         )
     if ms.missing:
-        narrative += f" 이번 공시에서 찾지 못한 지표: {', '.join(ms.missing)}."
+        narrative += f" 이번 공시에서 찾지 못한 지표: {', '.join(ms.missing_labels)}."
 
     return {
         "summary": summary,
@@ -191,25 +208,162 @@ def compose_sections(
                 "추정 레이어가 붙으면 이 자리에 전 보고서 대비 변동이 들어간다."
             ),
         },
-        "valuation": {
-            "formula": "미구현 — 시세·밴드 데이터 연결 후 산출한다.",
-            "bear": {"assumption": "—", "range": "—"},
-            "base": {"assumption": "—", "range": "—"},
-            "bull": {"assumption": "—", "range": "—"},
-            "sensitivity_table": "—",
-            # 본문에서 rating·목표주가를 '언급'조차 하지 않는다. G0는 부정문을
-            # 구분하지 못하므로("제시하지 않는다"도 걸린다), 정책 문장은
-            # 디스클레이머 섹션에만 둔다.
-            "narrative": (
-                "밸류에이션은 시세 시계열이 연결된 뒤에 산출한다. "
-                "산출 시에는 시나리오별 적정가치 범위와 산식을 함께 공개한다."
-            ),
-        },
-        "risks": [
-            "공시 기반 지표만 사용했으므로 공시 밖 요인(수요·경쟁·정책)은 반영되지 않았다.",
-            "추정과 밸류에이션이 미구현 상태라 이 노트는 실적 확인 목적에 한정된다.",
-        ],
+        "valuation": _valuation_section(y, p, valuation),
+        "risks": _risk_lines(valuation, info),
     }
+
+
+def _valuation_section(y: int, p, valuation: ValuationSet | None) -> dict[str, object]:
+    """밸류에이션 섹션.
+
+    **본문에서 rating·목표주가를 '언급'조차 하지 않는다.** G0는 부정문을
+    구분하지 못하므로("제시하지 않는다"도 걸린다), 정책 문장은 디스클레이머
+    섹션에만 둔다.
+    """
+    empty = {
+        "formula": "산출하지 않음 — 주식수·배당 공시를 확인하지 못했다.",
+        "bear": {"assumption": "—", "range": "—"},
+        "base": {"assumption": "—", "range": "—"},
+        "bull": {"assumption": "—", "range": "—"},
+        "sensitivity_table": "—",
+        "narrative": "밸류에이션 산출에 필요한 공시를 확인하지 못해 이 섹션을 비워 둔다.",
+    }
+    if valuation is None or not valuation.has_price_anchor:
+        return empty
+
+    anchor = "배당수익률에서 역산한 주가" if valuation.is_implied else "종가"
+    bits = [f"{anchor}를 기준으로 산출한 참고 배수다."]
+    if p(f"per_{y}a"):
+        bits.append(f"PER은 {p(f'per_{y}a')}이다.")
+    if p(f"pbr_{y}a"):
+        bits.append(f"PBR은 {p(f'pbr_{y}a')}이다.")
+    if p(f"roe_{y}a") and p(f"pbr_{y}a"):
+        bits.append(
+            f"자기자본이익률은 {p(f'roe_{y}a')}로, PBR과 함께 보면 "
+            "시장이 이 수익성에 어느 정도 값을 매기고 있는지 가늠할 수 있다."
+        )
+    if p(f"dividend_yield_{y}a") and p(f"payout_ratio_{y}a"):
+        bits.append(
+            f"현금배당수익률은 {p(f'dividend_yield_{y}a')}, 배당성향은 "
+            f"{p(f'payout_ratio_{y}a')}이다."
+        )
+    if valuation.is_implied:
+        bits.append(
+            "이 주가는 공시된 주당배당금과 배당수익률에서 역산한 값이라 특정일 종가가 아니다. "
+            "시세 시계열이 연결되면 대체한다."
+        )
+
+    return {
+        "formula": (
+            "주가 = 주당현금배당금 / 현금배당수익률 (공시 역산) · "
+            "PER = 주가 / 주당순이익 · PBR = 주가 / 주당순자산"
+            if valuation.is_implied
+            else "PER = 주가 / 주당순이익 · PBR = 주가 / 주당순자산"
+        ),
+        "bear": {"assumption": "시나리오 미구현 — 추정 레이어 연결 후 산출", "range": "—"},
+        "base": {"assumption": "당기 실적 기준 실측 배수", "range": p(f"price_{y}a") or "—"},
+        "bull": {"assumption": "시나리오 미구현 — 추정 레이어 연결 후 산출", "range": "—"},
+        "sensitivity_table": "—",
+        "narrative": " ".join(bits),
+    }
+
+
+def _risk_items(
+    valuation: ValuationSet | None, info: PeriodicReportInfo | None
+) -> list[tuple[str, str]]:
+    """(주제 키워드, 문장) 목록.
+
+    **KAM(핵심감사사항)을 먼저 둔다.** 감사인이 지목한 위험 영역이라 우리가
+    만든 일반론보다 근거가 강하다. 다만 적정의견 하에서도 KAM은 항상
+    지정되므로 부실 신호로 단정하지 않는다.
+
+    주제 키워드는 LLM 서술과의 중복 제거에 쓴다 — 같은 논지를 프롬프트로
+    주고 결정론 문장도 붙이면 리스크 섹션에 같은 말이 두 번 실린다(실측).
+    """
+    items: list[tuple[str, str]] = []
+    audit = info.audit if info else None
+    if audit is not None:
+        if not audit.is_clean:
+            items.append(
+                (
+                    "감사의견",
+                    (
+                        f"감사의견이 적정이 아니다({audit.opinion}). 재무제표 신뢰성 자체에 관한 "
+                        "사항이므로 이 노트의 모든 수치를 그 전제 위에서 읽어야 한다."
+                    ),
+                )
+            )
+        for item in audit.kam_items:
+            items.append(
+                (
+                    item,
+                    (
+                        f"감사인이 핵심감사사항으로 지목: {item}. "
+                        "감사인이 중요하다고 판단해 별도 절차를 수행한 영역이다."
+                    ),
+                )
+            )
+        if audit.emphasis:
+            items.append(("강조사항", f"감사보고서 강조사항: {audit.emphasis}."))
+
+    if valuation is not None:
+        if valuation.eps_cross_check_ok is False:
+            items.append(
+                (
+                    "주당이익",
+                    (
+                        "재무제표 주당이익과 배당 공시 주당순이익이 서로 맞지 않아 "
+                        "주당 지표의 신뢰도가 낮다."
+                    ),
+                )
+            )
+        if valuation.shares_issued and not valuation.shares_reconciled:
+            items.append(
+                (
+                    "주식수",
+                    (
+                        "공시된 발행·자기주식·유통 주식수가 서로 맞지 않아 "
+                        "주식수 기반 지표를 확정하지 못했다."
+                    ),
+                )
+            )
+        if valuation.has_price_anchor and valuation.is_implied:
+            items.append(
+                (
+                    "역산",
+                    (
+                        "주가는 배당 공시에서 역산한 값이라 특정일 종가가 아니다. "
+                        "배수 지표는 참고치로만 읽어야 한다."
+                    ),
+                )
+            )
+
+    # 이 둘은 범위 고지라 LLM이 뭘 쓰든 항상 남긴다 (키워드를 비워 중복 제거 대상에서 뺀다)
+    items.append(
+        ("", "공시 기반 지표만 사용했으므로 공시 밖 요인(수요·경쟁·정책)은 반영되지 않았다.")
+    )
+    items.append(("", "추정 레이어가 미구현 상태라 이 노트는 실적 확인 목적에 한정된다."))
+    return items
+
+
+def _risk_lines(valuation: ValuationSet | None, info: PeriodicReportInfo | None) -> list[str]:
+    return [text for _, text in _risk_items(valuation, info)]
+
+
+def merge_risks(
+    llm_risks: list[str],
+    valuation: ValuationSet | None,
+    info: PeriodicReportInfo | None,
+) -> list[str]:
+    """LLM 리스크 + 결정론 리스크. **같은 주제는 한 번만 싣는다.**
+
+    LLM에게 KAM·역산주가를 논지로 주면 LLM이 그걸 리스크로 쓴다. 거기에
+    결정론 문장까지 붙이면 독자는 같은 말을 두 번 읽는다. 결정론 쪽은
+    누락 방지용 안전망이므로, LLM이 이미 다뤘으면 뺀다.
+    """
+    joined = " ".join(llm_risks)
+    keep = [text for key, text in _risk_items(valuation, info) if not key or key not in joined]
+    return [*llm_risks, *keep]
 
 
 # ── 조립 ─────────────────────────────────────────────────────────────
@@ -222,9 +376,19 @@ def _env() -> Environment:
     )
 
 
-def assemble(company: Company, ms: MetricSet, sections: dict, *, published_at: dt.date) -> str:
+def assemble(
+    company: Company,
+    ms: MetricSet,
+    sections: dict,
+    *,
+    published_at: dt.date,
+    valuation: ValuationSet | None = None,
+) -> str:
     """Jinja2 조립. 플레이스홀더는 변수 '값'이라 그대로 살아남는다."""
     tpl = _env().get_template(TEMPLATE_NAME)
+    y = ms.fiscal_year
+    has_price = valuation is not None and valuation.has_price_anchor
+    price_label = "역산 주가" if (valuation and valuation.is_implied) else "주가"
     return tpl.render(
         company={
             "name": company.name,
@@ -242,9 +406,11 @@ def assemble(company: Company, ms: MetricSet, sections: dict, *, published_at: d
             "retrieved_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         },
         header={
-            "market_cap": "—",  # 시세 어댑터 연결 후 채운다
-            "price_date": "—",
-            "close_price": "—",
+            # 헤더도 플레이스홀더로 둔다 — 리터럴을 넣으면 게이트 밖에서
+            # 숫자가 새고, 감사 추적(bindings)에도 잡히지 않는다.
+            "market_cap": _ph(f"market_cap_{y}a") if has_price else "—",
+            "price_date": price_label if has_price else "—",
+            "close_price": _ph(f"price_{y}a") if has_price else "—",
         },
         **sections,
     )
@@ -290,11 +456,14 @@ def build_report(
     consolidation: ConsolidationType | None = None,
     published_at: dt.date | None = None,
     llm: object | None = None,
+    reports: DartReportProvider | None = None,
 ) -> ReportResult:
     """S1 → S6b 관통.
 
     `consolidation`이 None이면 연결→별도 자동 폴백.
     `llm`을 주면 S4 서술을 LLM이 쓰고, 실패하면 결정론 문장으로 폴백한다.
+    `reports`가 없고 provider가 DART면 정기보고서 주요정보를 함께 받는다
+    (주식수·배당·감사의견·인력 → 밸류에이션과 리스크 근거).
     """
     company = provider.get_company(symbol)
     stmt = fetch_statement(
@@ -305,7 +474,25 @@ def build_report(
     registry = NumberRegistry()
     registry.register_all(build_entries(ms, stmt.provenance))
 
-    sections = compose_sections(ms, registry, consolidation=stmt.consolidation)
+    # 정기보고서 주요정보 — 없어도 실적 노트는 낸다. 다만 조용히 넘기지 않고
+    # 실패 사유를 남긴다(커버리지 문제를 숨기면 진단이 불가능해진다).
+    if reports is None and isinstance(provider, DartProvider):
+        reports = DartReportProvider(provider)
+    info: PeriodicReportInfo | None = None
+    info_error: str | None = None
+    valuation: ValuationSet | None = None
+    if reports is not None:
+        try:
+            info = reports.fetch(symbol, fiscal_year)
+        except Exception as exc:  # noqa: BLE001 — 어댑터별 예외 타입이 다르다
+            info_error = f"{type(exc).__name__}: {exc}"
+        else:
+            valuation = build_valuation(ms, info)
+            registry.register_all(build_valuation_entries(valuation, info, stmt.provenance))
+
+    sections = compose_sections(
+        ms, registry, consolidation=stmt.consolidation, valuation=valuation, info=info
+    )
 
     narration = None
     if llm is not None:
@@ -313,6 +500,8 @@ def build_report(
 
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
         obs = build_observations(ms, build_margin_bridge(ms))
+        if valuation is not None and info is not None:
+            obs += build_valuation_observations(valuation, info)
         narration = narrate(
             llm,
             company_name=company.name,
@@ -329,9 +518,13 @@ def build_report(
             sections["earnings"]["narrative"] = (
                 n["earnings_narrative"] + " " + sections["earnings"]["narrative"]
             )
-            sections["risks"] = list(n["risks"]) + list(sections["risks"])
+            sections["risks"] = merge_risks(list(n["risks"]), valuation, info)
     assembled = assemble(
-        company, ms, sections, published_at=published_at or dt.datetime.now(dt.UTC).date()
+        company,
+        ms,
+        sections,
+        published_at=published_at or dt.datetime.now(dt.UTC).date(),
+        valuation=valuation,
     )
 
     gate = G0Gate(registry).check(assembled)
@@ -350,4 +543,7 @@ def build_report(
         rendered=rendered,
         bindings=bindings,
         narration=narration,
+        report_info=info,
+        valuation=valuation,
+        info_error=info_error,
     )

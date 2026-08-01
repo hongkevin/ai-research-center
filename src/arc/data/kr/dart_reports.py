@@ -266,6 +266,9 @@ def parse_dividend(
 
 
 # ── 감사의견 · 핵심감사사항 ──────────────────────────────────────────
+# "없음"을 값으로 취급하면 "강조사항: 해당사항 없음"처럼 빈 내용이 본문에 실린다
+_NO_CONTENT = {"", "-", "–", "—", "해당사항 없음", "해당사항없음", "없음", "N/A"}
+
 _KAM_MARK_RE = re.compile(r"(\d+)\s*[.)]\s*")
 # 한글 순서 표기도 쓴다 — SK하이닉스는 "가. (별도재무제표) …" 형식이다
 _KAM_HANGUL = "가나다라마바사아자차"
@@ -302,7 +305,7 @@ def split_kam(value: str | None) -> list[str]:
     마커는 숫자(1. 2. 3.)와 한글 순서(가. 나. 다.) 둘 다 쓰인다 — 실측으로
     확인됐다(삼성전자=숫자, SK하이닉스=한글).
     """
-    if not value or _norm(value) in {"", "-", "해당사항 없음", "해당사항없음", "없음"}:
+    if not value or _norm(value) in _NO_CONTENT:
         return []
     text = _norm(value)
 
@@ -360,7 +363,7 @@ def parse_audit_opinion(
     if not rows:
         return None
     current = next((r for r in rows if "당기" in _norm(r.get("bsns_year"))), rows[0])
-    emphasis = _norm(current.get("emphs_matter")) or None
+    emphasis = _norm(current.get("emphs_matter"))
     rcept_no = _norm(current.get("rcept_no")) or None
     return AuditOpinion(
         fiscal_year=fiscal_year,
@@ -368,7 +371,7 @@ def parse_audit_opinion(
         auditor=_norm(current.get("adtor")) or None,
         opinion=_norm(current.get("adt_opinion")) or None,
         kam_items=split_kam(current.get("core_adt_matter")),
-        emphasis=None if emphasis in {"-", ""} else emphasis,
+        emphasis=None if emphasis in _NO_CONTENT else emphasis,
         rcept_no=rcept_no,
         provenance=Provenance(
             source=SOURCE,

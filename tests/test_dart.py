@@ -173,3 +173,135 @@ def test_missing_api_key_raises(monkeypatch):
     monkeypatch.delenv("DART_API_KEY", raising=False)
     with pytest.raises(ValueError):
         DartProvider()
+
+
+# ── 주요계정 폴백 (fnlttSinglAcnt) ───────────────────────────────────
+def _major_row(fs_div, sj_div, name, cur, prior="0"):
+    return {
+        "rcept_no": "20260319001417",
+        "fs_div": fs_div,
+        "sj_div": sj_div,
+        "account_nm": name,
+        "thstrm_amount": cur,
+        "frmtrm_amount": prior,
+        "bfefrmtrm_amount": "0",
+        "currency": "KRW",
+    }
+
+
+MAJOR_PAYLOAD = {
+    "status": "000",
+    "list": [
+        _major_row("CFS", "BS", "자산총계", "1,043,888,016,418"),
+        _major_row("CFS", "IS", "매출액", "536,289,118,812"),
+        _major_row("CFS", "IS", "영업이익", "214,395,758,571"),
+        _major_row("CFS", "IS", "당기순이익(손실)", "168,255,434,874"),
+        _major_row("CFS", "IS", "당기순이익(손실)", "168,255,434,874"),  # 중복 행
+        _major_row("OFS", "BS", "자산총계", "989,620,033,035"),
+        _major_row("OFS", "IS", "매출액", "473,789,922,204"),
+    ],
+}
+
+
+class TestMajorAccountsFallback:
+    """전체계정(013)일 때 주요계정으로 폴백한다 — 소형주 커버리지의 핵심."""
+
+    def _parse(self, consolidation=ConsolidationType.CONSOLIDATED, payload=None):
+        return DartProvider.parse_major_accounts(
+            payload or MAJOR_PAYLOAD,
+            symbol="214450",
+            fiscal_year=2025,
+            period=PeriodType.ANNUAL,
+            consolidation=consolidation,
+            retrieved_at=NOW,
+        )
+
+    def test_filters_to_requested_basis(self):
+        """fs_div를 줘도 CFS·OFS가 **모두** 온다. 안 거르면 자산총계가 두 개다."""
+        stmt = self._parse()
+        assets = [i for i in stmt.items if i.account_name == "자산총계"]
+        assert len(assets) == 1
+        assert assets[0].amount == 1_043_888_016_418
+
+    def test_separate_basis_picks_ofs(self):
+        stmt = self._parse(ConsolidationType.SEPARATE)
+        assets = [i for i in stmt.items if i.account_name == "자산총계"]
+        assert len(assets) == 1
+        assert assets[0].amount == 989_620_033_035
+
+    def test_duplicate_rows_deduped(self):
+        stmt = self._parse()
+        ni = [i for i in stmt.items if i.account_name == "당기순이익(손실)"]
+        assert len(ni) == 1
+
+    def test_no_account_id_available(self):
+        """주요계정에는 표준계정 코드가 없다 — 계정명 매칭에만 의존하게 된다."""
+        stmt = self._parse()
+        assert all(i.account_id is None for i in stmt.items)
+
+    def test_provenance_points_at_filing(self):
+        stmt = self._parse()
+        assert stmt.rcept_no == "20260319001417"
+        assert "20260319001417" in (stmt.provenance.source_url or "")
+
+    def test_missing_fs_div_field_keeps_all_rows(self):
+        payload = {"status": "000", "list": [{**_major_row("CFS", "IS", "매출액", "100")}]}
+        del payload["list"][0]["fs_div"]
+        stmt = self._parse(payload=payload)
+        assert len(stmt.items) == 1
+
+
+class TestFinancialsFallbackRouting:
+    def _provider(self):
+        p = DartProvider(api_key="x" * 40)
+        p._corp_code_map = {"214450": {"corp_code": "00970453", "corp_name": "파마리서치"}}
+        return p
+
+    @respx.mock
+    def test_falls_back_to_major_accounts_on_013(self):
+        """실측: 사업보고서는 있는데 전체계정만 013인 회사가 있다."""
+        respx.get(f"{BASE_URL}/fnlttSinglAcntAll.json").mock(
+            return_value=httpx.Response(
+                200, json={"status": "013", "message": "조회된 데이타가 없습니다."}
+            )
+        )
+        route = respx.get(f"{BASE_URL}/fnlttSinglAcnt.json").mock(
+            return_value=httpx.Response(200, json=MAJOR_PAYLOAD)
+        )
+        stmt = self._provider().get_financials("214450", 2025, PeriodType.ANNUAL)
+        assert route.called
+        assert any(i.account_name == "매출액" for i in stmt.items)
+
+    @respx.mock
+    def test_other_errors_are_not_swallowed(self):
+        """013이 아닌 오류까지 폴백하면 진짜 장애가 숨는다."""
+        respx.get(f"{BASE_URL}/fnlttSinglAcntAll.json").mock(
+            return_value=httpx.Response(200, json={"status": "020", "message": "요청 제한 초과"})
+        )
+        with pytest.raises(DartError):
+            self._provider().get_financials("214450", 2025, PeriodType.ANNUAL)
+
+    @respx.mock
+    def test_no_fallback_when_full_accounts_available(self):
+        full = {
+            "status": "000",
+            "list": [
+                {
+                    "rcept_no": "1",
+                    "account_id": "ifrs-full_Revenue",
+                    "account_nm": "매출액",
+                    "sj_div": "IS",
+                    "thstrm_amount": "100",
+                    "frmtrm_amount": "90",
+                }
+            ],
+        }
+        respx.get(f"{BASE_URL}/fnlttSinglAcntAll.json").mock(
+            return_value=httpx.Response(200, json=full)
+        )
+        route = respx.get(f"{BASE_URL}/fnlttSinglAcnt.json").mock(
+            return_value=httpx.Response(200, json=MAJOR_PAYLOAD)
+        )
+        stmt = self._provider().get_financials("214450", 2025, PeriodType.ANNUAL)
+        assert not route.called
+        assert stmt.items[0].account_id == "ifrs-full_Revenue"

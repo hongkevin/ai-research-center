@@ -45,7 +45,12 @@ ACCOUNT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "pretax_income": {
         "account_ids": ("ifrs-full_ProfitLossBeforeTax",),
-        "names": ("법인세비용차감전순이익", "법인세비용차감전순손익", "세전이익"),
+        "names": (
+            "법인세비용차감전순이익",
+            "법인세비용차감전순손익",
+            "세전이익",
+            "법인세차감전 순이익",  # 주요계정 API 표기 (공백 주의)
+        ),
     },
     "net_income": {
         "account_ids": ("ifrs-full_ProfitLoss",),
@@ -55,7 +60,44 @@ ACCOUNT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
         "account_ids": ("ifrs-full_DilutedEarningsLossPerShare",),
         "names": ("희석주당이익", "희석주당순이익", "희석주당이익(손실)"),
     },
+    # 지배주주 귀속분 — ROE·EPS의 올바른 분자다. `net_income`(전체)에는
+    # 비지배지분이 섞여 있어 지배주주 지표와 섞으면 안 된다. 실측: 삼성전자
+    # FY2025 전체 45.2조 vs 지배주주 44.26조(= 배당공시 (연결)당기순이익).
+    "net_income_parent": {
+        "account_ids": ("ifrs-full_ProfitLossAttributableToOwnersOfParent",),
+        "names": (),  # 계정명이 "지배기업 소유주지분"이라 이름 매칭은 위험하다
+    },
+    # ── 재무상태표 ──
+    "total_assets": {
+        "account_ids": ("ifrs-full_Assets",),
+        "names": ("자산총계",),
+    },
+    "total_liabilities": {
+        "account_ids": ("ifrs-full_Liabilities",),
+        "names": ("부채총계",),
+    },
+    "total_equity": {
+        "account_ids": ("ifrs-full_Equity",),
+        "names": ("자본총계",),
+    },
+    "equity_parent": {
+        "account_ids": ("ifrs-full_EquityAttributableToOwnersOfParent",),
+        "names": (),
+    },
 }
+
+# 손익 표에 넣을 지표와 순서. 재무상태표 계정이 손익 표에 들어가면 안 된다.
+INCOME_STATEMENT_METRICS: tuple[str, ...] = (
+    "revenue",
+    "cost_of_sales",
+    "gross_profit",
+    "sga",
+    "operating_income",
+    "pretax_income",
+    "net_income",
+    "net_income_parent",
+    "eps_diluted",
+)
 
 # 손익 관련 지표는 IS(손익계산서)를 우선하고 CIS(포괄손익계산서)로 폴백한다.
 _STATEMENT_PREFERENCE = ("IS", "CIS")
@@ -69,6 +111,11 @@ _LABELS = {
     "pretax_income": "법인세차감전순이익",
     "net_income": "당기순이익",
     "eps_diluted": "희석주당이익",
+    "net_income_parent": "지배주주순이익",
+    "total_assets": "자산총계",
+    "total_liabilities": "부채총계",
+    "total_equity": "자본총계",
+    "equity_parent": "지배주주지분",
 }
 
 # 주당 지표는 원 단위 금액이 아니라 '원/주'다. 조·억 표기를 쓰면 안 된다.
@@ -109,6 +156,11 @@ class MetricSet:
     fiscal_year: int
     values: dict[str, MetricValue] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
+
+    @property
+    def missing_labels(self) -> list[str]:
+        """못 찾은 지표의 한글 라벨. 독자에게 `cost_of_sales`는 의미가 없다."""
+        return [_LABELS.get(k, k) for k in self.missing]
 
     @property
     def coverage_ok(self) -> bool:
