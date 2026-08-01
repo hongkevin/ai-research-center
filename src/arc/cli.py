@@ -288,6 +288,106 @@ def benchmark(
 
 
 @app.command()
+def backtest(
+    symbols: str = typer.Argument(..., help="종목코드 쉼표 구분. `-`면 표준입력에서 읽는다"),
+    start: int = typer.Option(..., "--start", help="첫 기준 연도 (이 해 실적으로 다음 해를 추정)"),
+    end: int = typer.Option(..., "--end", help="마지막 기준 연도"),
+    separate: bool = typer.Option(False, "--separate", help="별도재무제표 사용"),
+    csv_out: Path | None = typer.Option(None, "--csv", help="종목별 오차를 CSV로 저장"),
+) -> None:
+    """기계적 연장 기준선이 실제로 얼마나 틀리는지 잰다 (Q8).
+
+    FY(Y) 사업보고서만으로 FY(Y+1)을 추정하고 FY(Y+1) 보고서의 당기 값과
+    대조한다. 뒤 연도 정보가 섞이면 백테스트가 거짓말이 되므로 두 방향
+    모두 코드가 막는다 (`finmodel/backtest.py`).
+    """
+    import sys
+
+    from arc.data.base import PeriodType
+    from arc.finmodel.backtest import BACKTEST_METRICS, describe, run
+
+    provider = _provider()
+    raw = sys.stdin.read() if symbols == "-" else symbols
+    codes = [s.strip() for s in raw.replace("\n", ",").split(",") if s.strip()]
+    if not codes:
+        typer.secho("종목코드가 없습니다.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    consolidation = ConsolidationType.SEPARATE if separate else ConsolidationType.CONSOLIDATED
+
+    failures: dict[str, int] = {}
+
+    def fetch(symbol: str, year: int):
+        """공시가 없거나 커버리지가 모자라면 None — 실패 사유는 세어서 보고한다."""
+        try:
+            stmt = provider.get_financials(symbol, year, PeriodType.ANNUAL, consolidation)
+        except Exception as exc:  # noqa: BLE001 — 어댑터별 예외 타입이 다르다
+            failures[type(exc).__name__] = failures.get(type(exc).__name__, 0) + 1
+            return None
+        ms = extract_metrics(stmt)
+        return ms if ms.coverage_ok else None
+
+    total = len(codes)
+    seen: set[str] = set()
+
+    def progress(symbol: str, year: int) -> None:
+        if symbol not in seen:
+            seen.add(symbol)
+            typer.echo(f"  [{len(seen):>3}/{total}] {symbol}", nl=False)
+        typer.echo(f" {year}", nl=False)
+        if year == end + 1:
+            typer.echo("")
+
+    result = run(codes, list(range(start, end + 1)), fetch, on_progress=progress)
+    typer.echo("")
+
+    if failures:
+        typer.secho(
+            "  조회 실패: " + ", ".join(f"{k} {v}건" for k, v in sorted(failures.items())),
+            fg=typer.colors.YELLOW,
+        )
+    typer.echo("")
+    for line in describe(result):
+        typer.echo(f"  {line}")
+
+    if result.skipped:
+        typer.echo("\n  산출하지 않은 사유:")
+        reasons: dict[str, int] = {}
+        for s in result.skipped:
+            head = s.reason.split(".")[0][:60]
+            reasons[head] = reasons.get(head, 0) + 1
+        for reason, n in sorted(reasons.items(), key=lambda x: -x[1]):
+            typer.echo(f"    {n:>3}건  {reason}")
+
+    if csv_out is not None:
+        import csv
+
+        csv_out.parent.mkdir(parents=True, exist_ok=True)
+        with csv_out.open("w", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            w.writerow(
+                ["symbol", "base_year", "target_year", "metric", "estimate", "actual", "error_pct"]
+            )
+            for e in result.errors:
+                w.writerow(
+                    [
+                        e.symbol,
+                        e.base_year,
+                        e.target_year,
+                        e.metric,
+                        e.estimate,
+                        e.actual,
+                        f"{e.error_pct:.4f}" if e.error_pct is not None else "",
+                    ]
+                )
+        typer.echo(f"\n  → {csv_out} ({len(result.errors)}행)")
+
+    # 지표가 하나도 안 나오면 사람이 알아야 한다 (조용히 0건으로 끝내지 않는다)
+    if not any(result.summaries[m].n for m, _ in BACKTEST_METRICS):
+        typer.secho("\n  대조된 추정이 하나도 없습니다.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+
+@app.command()
 def web(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port", "-p"),

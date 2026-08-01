@@ -426,7 +426,7 @@ def _segment_profit_section(y: int, p, sp: SegmentProfitSet | None) -> dict[str,
     표를 못 내는 이유는 남긴다 — 단일 영업부문이라 공시가 없는 것과 파싱이
     깨진 것은 완전히 다른 사실이고, 섹션이 통째로 사라지면 구분되지 않는다.
     """
-    out: dict[str, object] = {"table": [], "note": "", "has_prior": False}
+    out: dict[str, object] = {"table": [], "assets": [], "note": "", "has_prior": False}
     if sp is None:
         return out
     if not sp.usable:
@@ -434,6 +434,7 @@ def _segment_profit_section(y: int, p, sp: SegmentProfitSet | None) -> dict[str,
         return out
     out["has_prior"] = sp.has_prior
     rows = []
+    assets = []
     for line in sp.lines:
         base = _opseg_key(sp, line)
         rows.append(
@@ -443,10 +444,22 @@ def _segment_profit_section(y: int, p, sp: SegmentProfitSet | None) -> dict[str,
                 "rev_share": p(f"{base}_rev_share_{y}a") or "—",
                 "op": p(f"{base}_op_{y}a") or "—",
                 "margin": p(f"{base}_margin_{y}a") or "—",
+                "ebitda_margin": p(f"{base}_ebitda_margin_{y}a") or "—",
                 "margin_chg": p(f"{base}_margin_chg_{y}a") or "—",
             }
         )
+        # 부문 자산은 공시하는 회사만 있다 (경영위원회에 정기 제공될 때만
+        # 기준서가 요구한다). 없으면 표 자체를 내지 않는다.
+        if p(f"{base}_assets_{y}a"):
+            assets.append(
+                {
+                    "label": line.name,
+                    "assets": p(f"{base}_assets_{y}a"),
+                    "asset_return": p(f"{base}_asset_return_{y}a") or "—",
+                }
+            )
     out["table"] = rows
+    out["assets"] = assets
     return out
 
 

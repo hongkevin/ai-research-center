@@ -63,6 +63,10 @@ OP_TOLERANCE_OF_REVENUE_PCT = 0.1
 SEGMENT_SUM_MIN_RATIO = 0.95
 SEGMENT_SUM_MAX_RATIO = 2.5
 
+# 「이 회사의 사업은 …」이라고 말할 때 끼워 줄 최소 매출 비중(%). 잔여 버킷
+# (「기타부문」)이 논지의 주어가 되면 안 된다.
+MATERIAL_SHARE_PCT = 5.0
+
 # 계정 라벨 — **완전 일치로 본다.** 부분 일치를 쓰면 「매출원가」·「매출총이익」이
 # 매출 행으로 잡힌다.
 _REVENUE_LABELS = frozenset(
@@ -99,12 +103,40 @@ class SegmentProfitLine:
     operating_income: int
     revenue_prior: int | None = None
     op_prior: int | None = None
+    depreciation: int | None = None  # 감가상각비 + 무형자산상각비
+    assets: int | None = None  # 부문 자산 (공시하는 회사만)
 
     @property
     def op_margin(self) -> float | None:
         if not self.revenue:
             return None
         return self.operating_income / self.revenue * 100.0
+
+    @property
+    def ebitda(self) -> int | None:
+        """영업이익 + 감가상각비.
+
+        **자본집약도가 다른 부문을 같은 잣대로 보게 해 준다.** 실측: 삼성전자
+        DS 부문의 감가상각비는 DX 부문의 14배다. 영업이익률만 보면 두 사업이
+        같은 종류의 수익성을 가진 것처럼 읽힌다.
+        """
+        if self.depreciation is None:
+            return None
+        return self.operating_income + self.depreciation
+
+    @property
+    def ebitda_margin(self) -> float | None:
+        e = self.ebitda
+        if e is None or not self.revenue:
+            return None
+        return e / self.revenue * 100.0
+
+    @property
+    def asset_return(self) -> float | None:
+        """부문 자산 대비 영업이익. 기말 자산 기준이다(평균이 아니다)."""
+        if not self.assets:
+            return None
+        return self.operating_income / self.assets * 100.0
 
     @property
     def op_margin_prior(self) -> float | None:
@@ -194,14 +226,49 @@ class SegmentProfitSet:
 
 
 # ── 파싱 ─────────────────────────────────────────────────────────────
-def read_segment_grid(
-    grid: list[list[str]],
-) -> tuple[list[str], list[float | None], list[float | None]] | None:
-    """전치 표 → (열별 부문명, 열별 매출, 열별 영업이익).
+@dataclass(frozen=True)
+class SegmentGrid:
+    """전치 표에서 읽어낸 열 단위 값들. 모두 같은 열 배치를 공유한다."""
+
+    names: list[str]
+    revenue: list[float | None]
+    profit: list[float | None]
+    depreciation: list[float | None]  # 감가상각비 + 무형자산상각비
+    aliases: list[str]  # 「각 보고부문의 약칭」 행 — 자산 표가 이 이름을 쓴다
+
+
+def _is_depreciation_label(label: str) -> bool:
+    v = norm_cell(label)
+    return v.startswith("감가상각") or v in {"무형자산상각비", "무형상각비", "상각비"}
+
+
+def _depreciation_rows(grid: list[list[str]]) -> list[int]:
+    """감가상각 행들의 인덱스. **합산 행이 있으면 그것만 쓴다.**
+
+    회사마다 쪼개는 방식이 다르다(실측): 삼성전자는 「감가상각비」와
+    「무형자산상각비」를 따로 쓰고, LG전자는 「감가상각비 및 무형자산상각비」로
+    합쳐 쓴다. 합산 행과 개별 행을 함께 더하면 이중 계상된다.
+    """
+    combined = [
+        i
+        for i, row in enumerate(grid)
+        if row and _is_depreciation_label(row[0]) and ("및" in row[0] or "와" in row[0])
+    ]
+    if combined:
+        return combined[:1]
+    return [i for i, row in enumerate(grid) if row and _is_depreciation_label(row[0])]
+
+
+def read_segment_grid(grid: list[list[str]]) -> SegmentGrid | None:
+    """전치 표 → 열별 부문명·매출·영업이익·감가상각비.
 
     **매출 행과 영업이익 행이 둘 다 있어야 한다.** 이 조건 하나가 같은
     주석 안의 다른 표들(지역별 매출·주요 고객·비유동자산)을 전부 걸러낸다 —
     그 표들에는 영업이익 행이 없다.
+
+    감가상각비는 **있으면 덤으로** 읽는다. 이 행에는 따로 검산을 걸지 않는데,
+    검증이 필요한 것은 값이 아니라 **열 배치와 단위**이고 그건 매출·영업이익
+    총계가 이미 확정한다. 같은 격자의 다른 행은 같은 열을 쓴다.
     """
     rev_idx = op_idx = None
     for i, row in enumerate(grid):
@@ -219,13 +286,54 @@ def read_segment_grid(
     if not names:
         return None
 
-    width = max(len(names), len(grid[rev_idx]), len(grid[op_idx]))
+    dep_idx = _depreciation_rows(grid)
+    width = max(
+        [len(names), len(grid[rev_idx]), len(grid[op_idx])] + [len(grid[i]) for i in dep_idx]
+    )
 
     def column(row: list[str]) -> list[float | None]:
         return [cell_number(row[c]) if c < len(row) else None for c in range(width)]
 
-    names = names + [""] * (width - len(names))
-    return names, column(grid[rev_idx]), column(grid[op_idx])
+    dep: list[float | None] = [None] * width
+    for i in dep_idx:
+        for c, v in enumerate(column(grid[i])):
+            if v is not None:
+                dep[c] = (dep[c] or 0.0) + v
+
+    # 약칭 행 — 자산 표가 부문을 약칭으로 부르는 회사가 있다(LG전자: HS·MS·VS).
+    # 위치로 짜맞추지 않고 **공시가 준 대응표**를 쓴다.
+    aliases = [""] * width
+    for row in grid:
+        if row and "약칭" in norm_cell(row[0]):
+            aliases = [row[c].strip() if c < len(row) else "" for c in range(width)]
+            break
+
+    return SegmentGrid(
+        names=names + [""] * (width - len(names)),
+        revenue=column(grid[rev_idx]),
+        profit=column(grid[op_idx]),
+        depreciation=dep,
+        aliases=aliases,
+    )
+
+
+def read_asset_row(grid: list[list[str]]) -> tuple[list[str], list[float | None]] | None:
+    """부문별 **자산** 표. 손익 표와 다른 표에 실린다.
+
+    자산은 재무상태표 자산총계 하나로만 검산할 수 있어 손익(매출+영업이익
+    두 값)보다 약하다. 그래서 이 표는 **부문 이름이 손익 표와 같을 때만**
+    받아들인다 — 구조 검증은 손익 표가 이미 끝냈고, 이름 일치가 그 결과를
+    이 표로 옮겨 준다.
+    """
+    for i, row in enumerate(grid):
+        if row and norm_cell(row[0]) == "자산":
+            names = _header_names(grid, before=i)
+            if not names:
+                return None
+            width = max(len(names), len(row))
+            values = [cell_number(row[c]) if c < len(row) else None for c in range(width)]
+            return names + [""] * (width - len(names)), values
+    return None
 
 
 def _header_names(grid: list[list[str]], *, before: int) -> list[str]:
@@ -309,6 +417,8 @@ class _Parsed:
     scale: int
     revenue_gap_pct: float
     op_gap_pct: float
+    depreciation: list[int | None] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
 
 
 def _parse_table(
@@ -320,7 +430,7 @@ def _parse_table(
     read = read_segment_grid(grid)
     if read is None:
         return None
-    names, revenue, profit = read
+    names, revenue, profit = read.names, read.revenue, read.profit
 
     scales = [caption_scale] if caption_scale else []
     scales += [s for s in _SCALE_CANDIDATES if s != caption_scale]
@@ -337,12 +447,92 @@ def _parse_table(
             names=[names[c].strip() for c in seg_cols],
             revenue=[round((revenue[c] or 0) * scale) for c in seg_cols],
             profit=[round((profit[c] or 0) * scale) for c in seg_cols],
+            depreciation=[
+                round(read.depreciation[c] * scale) if read.depreciation[c] is not None else None
+                for c in seg_cols
+            ],
+            aliases=[read.aliases[c] for c in seg_cols],
             revenue_total=rev_total,
             op_total=op_total,
             scale=scale,
             revenue_gap_pct=(rev_total - ref_revenue) / abs(ref_revenue) * 100.0,
             op_gap_pct=(op_total - ref_op) / abs(ref_revenue) * 100.0,
         )
+    return None
+
+
+def _parse_assets(
+    grids: list[list[list[str]]],
+    *,
+    names: list[str],
+    aliases: list[str],
+    scale: int,
+    total_assets: int | None,
+) -> list[int | None] | None:
+    """부문별 자산. **총계가 자산총계와 맞고 부문 이름이 손익 표와 같을 때만.**
+
+    실측: LG전자 68,620,167백만원·롯데케미칼 31,117,333,050천원이 재무상태표
+    자산총계와 그대로 일치했다. 삼성전자는 「보고부문별 자산과 부채는 경영위원회에
+    정기적으로 제공되지 않아 포함하지 않았습니다」라고 명시한다 — 없는 게 결함이
+    아니라 기준서(제1108호)가 요구하지 않는 경우다.
+
+    **일부만 대응돼도 그만큼은 쓴다.** LG전자의 자산 표는 「기타부문 및 내부거래」로
+    묶여 있어 손익 표의 「기타부문」과 짝이 없다. 전부 버리면 나머지 다섯 부문의
+    자산까지 잃는다 — 짝이 없는 부문만 비운다.
+    """
+    if not total_assets:
+        return None
+    # 손익 표의 부문명 → 그 부문이 자산 표에서 불릴 수 있는 이름들
+    wanted = {
+        norm_cell(name): {norm_cell(name)} | ({norm_cell(alias)} if alias else set())
+        for name, alias in zip(names, aliases, strict=True)
+    }
+    for grid in grids:
+        read = read_asset_row(grid)
+        if read is None:
+            continue
+        asset_names, values = read
+
+        # 부문 열을 **먼저** 정한다. 합계 열에 닿으면 그 뒤는 조정 열이고
+        # 부문명이 되풀이된다 — 멈추지 않으면 조정 열의 빈 값이 부문 자산을
+        # 덮어쓴다(롯데케미칼 실측).
+        seg_cols: list[int] = []
+        for c in range(1, len(asset_names)):
+            label = norm_cell(asset_names[c])
+            if not label or _is_total_label(label):
+                break
+            seg_cols.append(c)
+        if not seg_cols:
+            continue
+
+        # 총계 열은 **부문 열보다 뒤에 있어야 한다.** 이 조건이 없으면 자산총계와
+        # 우연히 가까운 부문 열 하나가 총계로 위장하고, 그 왼쪽 몇 개만 부문으로
+        # 잡혀 조용히 틀린 표가 나온다. 자산은 검산 근거가 하나뿐이라
+        # (손익은 매출·영업이익 둘) 구조 조건으로 보강한다.
+        total_col = None
+        for c in range(len(values) - 1, seg_cols[-1], -1):
+            v = values[c]
+            if v is None:
+                continue
+            if abs(v * scale - total_assets) <= abs(total_assets) * TOTAL_TOLERANCE_PCT / 100:
+                total_col = c
+                break
+        if total_col is None:
+            continue
+
+        by_name: dict[str, float] = {}
+        for c in seg_cols:
+            if values[c] is None:
+                continue
+            label = norm_cell(asset_names[c])
+            for name, accepted in wanted.items():
+                if label in accepted:
+                    by_name.setdefault(name, values[c])
+        if len(by_name) < 2:
+            continue
+        return [
+            round(by_name[norm_cell(n)] * scale) if norm_cell(n) in by_name else None for n in names
+        ]
     return None
 
 
@@ -397,6 +587,13 @@ def build_segment_profit(
                 prior = cand
                 break
 
+        assets = _parse_assets(
+            grids,
+            names=current.names,
+            aliases=current.aliases,
+            scale=current.scale,
+            total_assets=ms.get("total_assets"),
+        )
         lines = [
             SegmentProfitLine(
                 name=name,
@@ -404,6 +601,8 @@ def build_segment_profit(
                 operating_income=current.profit[i],
                 revenue_prior=prior.revenue[i] if prior else None,
                 op_prior=prior.profit[i] if prior else None,
+                depreciation=current.depreciation[i] if current.depreciation else None,
+                assets=assets[i] if assets else None,
             )
             for i, name in enumerate(current.names)
         ]
@@ -522,6 +721,52 @@ def build_segment_profit_entries(sp: SegmentProfitSet, prov: Provenance) -> list
                     inputs=[f"{base}_revenue_{y}a"],
                 )
             )
+        for key, value, unit, label, formula in (
+            (
+                "ebitda",
+                line.ebitda,
+                "원",
+                f"{line.name} EBITDA ({y}A)",
+                f"{line.name} 영업이익 + 감가상각비",
+            ),
+            (
+                "ebitda_margin",
+                line.ebitda_margin,
+                "%",
+                f"{line.name} EBITDA 마진 ({y}A)",
+                f"{line.name} EBITDA / {line.name} 매출",
+            ),
+            (
+                "assets",
+                line.assets,
+                "원",
+                f"{line.name} 부문 자산 ({y}A)",
+                None,
+            ),
+            (
+                "asset_return",
+                line.asset_return,
+                "%",
+                f"{line.name} 자산 대비 영업이익 ({y}A)",
+                f"{line.name} 영업이익 / {line.name} 기말 부문 자산",
+            ),
+        ):
+            if value is None:
+                continue
+            display = fmt_krw(round(value)) if unit == "원" else fmt_pct(value)
+            out.append(
+                NumberEntry(
+                    key=f"{base}_{key}_{y}a",
+                    value=value,
+                    unit=unit,
+                    display=display,
+                    provenance=prov,
+                    label=label,
+                    formula=formula,
+                    inputs=[f"{base}_op_{y}a", f"{base}_revenue_{y}a"] if formula else [],
+                )
+            )
+
         op_share = sp.op_share(line)
         if op_share is not None:
             out.append(
@@ -601,6 +846,39 @@ def build_segment_profit_observations(sp: SegmentProfitSet) -> list[str]:
         obs.append(
             f"영업이익률이 가장 높은 부문은 {best.name}이고 가장 낮은 부문은 {worst.name}이다. "
             "부문 구성이 바뀌면 전사 이익률은 실제 수익성 변화 없이도 움직인다."
+        )
+
+    # 자본집약도 — 영업이익률만 보면 감가상각 부담이 다른 사업이 같은 종류의
+    # 수익성을 가진 것처럼 읽힌다. 실측: 삼성전자 DS의 감가상각비는 DX의 14배다.
+    #
+    # 잔여 항목은 빼고 본다. LG전자 「기타부문」은 매출 비중 2.4%인데 상각 부담이
+    # 가장 무거워 1위로 잡혔다 — 회사의 사업을 말하는 문장이 잔여 버킷으로
+    # 시작하면 안 된다.
+    capital = [
+        x
+        for x in sp.lines
+        if x.ebitda_margin is not None
+        and x.op_margin is not None
+        and (sp.rev_share(x) or 0) >= MATERIAL_SHARE_PCT
+    ]
+    if len(capital) >= 2:
+        heaviest = max(capital, key=lambda x: (x.ebitda_margin or 0) - (x.op_margin or 0))
+        lightest = min(capital, key=lambda x: (x.ebitda_margin or 0) - (x.op_margin or 0))
+        if heaviest.name != lightest.name:
+            obs.append(
+                f"감가상각 부담이 가장 무거운 부문은 {heaviest.name}이고 가장 가벼운 부문은 "
+                f"{lightest.name}이다. 영업이익률만 비교하면 두 사업의 수익성을 같은 잣대로 "
+                "보게 되므로, 상각 전 기준으로도 함께 봐야 한다."
+            )
+
+    invested = [x for x in sp.lines if x.asset_return is not None]
+    if len(invested) >= 2:
+        best_roa = max(invested, key=lambda x: x.asset_return or 0)
+        worst_roa = min(invested, key=lambda x: x.asset_return or 0)
+        obs.append(
+            f"부문 자산이 공시돼 있어 투입 대비 성과를 가를 수 있다. 자산 대비 영업이익이 "
+            f"가장 높은 부문은 {best_roa.name}, 가장 낮은 부문은 {worst_roa.name}이다. "
+            "이익률이 높아도 자산이 무거우면 자본 효율은 다르게 읽힌다."
         )
 
     losers = sp.loss_makers
