@@ -34,6 +34,7 @@ from arc.pipeline.earnings_review import ReportResult, build_report, save_estima
 from arc.render.charts import Slice, legend, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.snapshot import SnapshotStore
+from arc.web.auth import BasicAuthMiddleware, LLMBudget
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # uvicorn은 CLI를 거치지 않고 모듈을 직접 import한다 — 여기서도 키를 읽어야 한다
@@ -47,6 +48,9 @@ STORE_DIR = Path(os.environ.get("ARC_STORE_DIR", REPO_ROOT / ".arc-store"))
 DRAFTS_DIR = REPO_ROOT / "drafts"
 
 app = FastAPI(title="AI Research Center", docs_url="/api/docs")
+# 공개 주소에 올릴 때 서버의 LLM 키가 무방비가 되면 안 된다 (auth.py 참조)
+app.add_middleware(BasicAuthMiddleware)
+LLM_BUDGET = LLMBudget()
 
 
 @dataclass
@@ -78,6 +82,7 @@ class ViewModel:
     llm_model: str = ""
     llm_cost: float | None = None
     published_path: str = ""
+    notice: str = ""
     error: str = ""
 
 
@@ -190,10 +195,15 @@ def _generate(
     """
     provider = DartProvider()
     client = None
+    budget_exhausted = False
     if use_llm:
-        from arc.llm.client import get_client
+        if LLM_BUDGET.take():
+            from arc.llm.client import get_client
 
-        client = get_client()
+            client = get_client()
+        else:
+            # 상한에 닿으면 **LLM만 끈다.** 화면이 죽는 것보다 수치만 나오는 편이 낫다.
+            budget_exhausted = True
 
     store = SnapshotStore(STORE_DIR)
     published_at = dt.datetime.now(dt.UTC).date()
@@ -207,6 +217,11 @@ def _generate(
         assumptions=overrides or None,
     )
     vm = _to_view(r)
+    if budget_exhausted:
+        vm.notice = (
+            f"LLM 생성 한도({LLM_BUDGET.limit}건)에 도달해 결정론 문장으로 생성했습니다. "
+            "수치와 게이트는 동일합니다."
+        )
 
     if publish and r.publishable:
         if r.estimates is not None and r.estimates.usable:
@@ -315,4 +330,12 @@ def api_search(q: str = "", limit: int = 10):
 
 @app.get("/api/health")
 def api_health():
-    return {"status": "ok", "dart_key": bool(os.environ.get("DART_API_KEY"))}
+    """플랫폼 헬스체크용. **인증 없이 열려 있다** (auth.PUBLIC_PATHS)."""
+    return {
+        "status": "ok",
+        "dart_key": bool(os.environ.get("DART_API_KEY")),
+        "llm_key": bool(os.environ.get("OPENAI_API_KEY")),
+        "auth": bool(os.environ.get("ARC_PASSWORD")),
+        "llm_used": LLM_BUDGET.used,
+        "llm_limit": LLM_BUDGET.limit,
+    }

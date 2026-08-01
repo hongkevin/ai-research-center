@@ -42,3 +42,13 @@ src/arc/
 ├── verify/     # 검증 게이트 G0/G1/G2 (TODO 5~6주차)
 └── render/     # Jinja2 → HTML/PDF (TODO)
 ```
+
+## 배포
+
+동료가 브라우저로 접속해 테스트하는 절차는 [docs/DEPLOY.md](docs/DEPLOY.md)를 보십시오.
+
+요약: **Railway**(영속 볼륨 필요) · GitHub `main` 푸시 → 자동 배포 ·
+접근 제어는 공유 비밀번호(`ARC_PASSWORD`).
+
+Vercel은 이 앱에 맞지 않습니다 — 서버리스라 추정 이력(`.arc-store`)이
+재시작마다 사라져 revision 추적이 죽습니다.

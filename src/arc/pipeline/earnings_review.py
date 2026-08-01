@@ -15,6 +15,7 @@ S4가 아직 LLM이 아닌 이유: 게이트·계산·조립이 먼저 검증돼
 from __future__ import annotations
 
 import datetime as dt
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,8 +72,35 @@ from arc.finmodel.valuation import (
 from arc.llm.number_registry import NumberRegistry
 from arc.verify.g0 import G0Gate, GateResult
 
-TEMPLATE_DIR = Path(__file__).resolve().parents[3] / "templates"
 TEMPLATE_NAME = "earnings_review.md.j2"
+
+
+def _template_dir() -> Path:
+    """리포트 템플릿 위치.
+
+    개발에서는 저장소 루트의 `templates/`지만, **설치된 패키지에서는 그 경로가
+    존재하지 않는다.** wheel은 `src/arc/**`만 담으므로 `parents[3]`가
+    site-packages 밖을 가리킨다(실측: wheel 42개 파일에 `.j2`가 없었다).
+
+    순서대로 찾는다:
+      1. `ARC_TEMPLATE_DIR` — 배포에서 명시 (Dockerfile이 설정한다)
+      2. 저장소 루트 — 개발·editable 설치
+      3. 작업 디렉터리 — 컨테이너에서 WORKDIR에 복사된 경우
+    """
+    env = os.environ.get("ARC_TEMPLATE_DIR")
+    candidates = [Path(env)] if env else []
+    candidates += [
+        Path(__file__).resolve().parents[3] / "templates",
+        Path.cwd() / "templates",
+    ]
+    for path in candidates:
+        if (path / TEMPLATE_NAME).is_file():
+            return path
+    # 못 찾으면 첫 후보를 돌려준다 — Jinja2가 명확한 오류를 낸다
+    return candidates[0]
+
+
+TEMPLATE_DIR = _template_dir()
 
 
 @dataclass

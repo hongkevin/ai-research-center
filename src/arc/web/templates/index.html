@@ -221,6 +221,12 @@
 
   {# ── 가운데: 노트 ── #}
   <div class="col">
+    {% if vm and vm.notice %}
+      <div class="card" style="border-color: var(--warn); max-width: 860px">
+        <span class="badge badge--warn">● 안내</span>
+        <div class="hint" style="margin-top:6px">{{ vm.notice }}</div>
+      </div>
+    {% endif %}
     {% if vm and vm.published_path %}
       <div class="card" style="border-color: var(--ok); max-width: 860px">
         <span class="badge badge--ok">● 발간 완료</span>

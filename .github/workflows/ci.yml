@@ -1,0 +1,70 @@
+# main 푸시·PR마다 게이트를 돌린다.
+#
+# 이 저장소의 핵심 자산은 **테스트가 지키는 불변식**이다 — 숫자는 레지스트리를
+# 거치고, 검산이 안 맞으면 쓰지 않고, 미검증 레인에는 숫자가 없다. CI가 깨진
+# 채로 배포되면 그 보장이 사라진다.
+#
+# 네트워크가 필요한 테스트는 없다 (전부 픽스처·목킹). API 키도 필요 없다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: uv 설치
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Python 3.12
+        run: uv python install 3.12
+
+      - name: 의존성
+        run: uv pip install --system -e ".[web,dev]"
+
+      - name: 린트
+        run: |
+          ruff check src tests
+          ruff format --check src tests
+
+      - name: 테스트
+        run: pytest -q
+
+      - name: 커밋에 비밀키가 없는지
+        # 실제로 한 번 들어갔던 적이 있다. 사람이 기억하는 대신 CI가 본다.
+        run: |
+          if git grep -nE 'sk-proj-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,}' -- . ':!*.lock'; then
+            echo "::error::커밋에 API 키로 보이는 문자열이 있습니다."
+            exit 1
+          fi
+          echo "비밀키 패턴 없음"
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: 이미지 빌드 (배포 전에 깨지는지 확인)
+        run: docker build -t arc:ci .
+      - name: 헬스체크
+        run: |
+          docker run -d --name arc -p 8000:8000 -e PORT=8000 arc:ci
+          for i in $(seq 1 30); do
+            if curl -fs http://127.0.0.1:8000/api/health; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "::error::헬스체크 실패"
+          docker logs arc
+          exit 1
