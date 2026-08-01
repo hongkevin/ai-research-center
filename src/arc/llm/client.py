@@ -50,6 +50,9 @@ class ProviderSpec:
     env_key: str
     models: dict[Tier, str]
     pricing: dict[Tier, Pricing]
+    # GPT-5.x 계열은 max_tokens를 거부하고 max_completion_tokens를 쓴다.
+    # 다른 OpenAI 호환 provider는 대부분 max_tokens 그대로다.
+    token_param: str = "max_tokens"
     note: str = ""
 
 
@@ -62,14 +65,15 @@ PROVIDERS: dict[str, ProviderSpec] = {
         env_key="OPENAI_API_KEY",
         models={
             Tier.LIGHT: "gpt-5.6-luna",
-            Tier.WRITE: "gpt-5.6-terra",
+            Tier.WRITE: "gpt-5.6-luna",
             Tier.VERIFY: "gpt-5.6-sol",
         },
         pricing={
             Tier.LIGHT: Pricing(0.20, 1.20),  # Luna (2026-07-30 80% 인하)
-            Tier.WRITE: Pricing(2.00, 12.00),  # Terra (2026-07-30 20% 인하)
+            Tier.WRITE: Pricing(0.20, 1.20),  # Luna — 제약된 작문이라 저가로 시작해 벤치마크로 검증
             Tier.VERIFY: Pricing(5.00, 30.00),  # Sol
         },
+        token_param="max_completion_tokens",
     ),
     "deepseek": ProviderSpec(
         name="deepseek",
@@ -156,7 +160,7 @@ class OpenAICompatClient(LLMClient):
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "max_tokens": max_tokens,
+            self.spec.token_param: max_tokens,
         }
         t0 = time.monotonic()
         r = httpx.post(
@@ -185,12 +189,19 @@ class OpenAICompatClient(LLMClient):
         )
 
     def healthcheck(self) -> tuple[bool, str]:
-        """가장 싼 티어로 최소 요청 1건. 키·모델 접근 가능 여부를 본다."""
+        """가장 싼 티어로 최소 요청 1건.
+
+        추론 모델(GPT-5.x)은 max_completion_tokens를 추론에 먼저 소모하므로
+        예산을 너무 작게 주면 본문이 빈 문자열로 돌아온다. 여유를 둔다.
+        """
         import httpx
 
         try:
             c = self.complete(
-                system="Reply with the single word: ok", user="ping", tier=Tier.LIGHT, max_tokens=8
+                system="Reply with the single word: ok",
+                user="ping",
+                tier=Tier.LIGHT,
+                max_tokens=512,
             )
         except httpx.HTTPStatusError as e:
             try:
