@@ -31,16 +31,20 @@ jobs:
       - name: Python 3.12
         run: uv python install 3.12
 
+      # 러너의 시스템 파이썬은 externally-managed라 --system 설치가 막힌다.
+      # 프로젝트 venv를 만들고 uv run으로 그 안에서 돌린다.
       - name: 의존성
-        run: uv pip install --system -e ".[web,dev]"
+        run: |
+          uv venv
+          uv pip install -e ".[web,dev]"
 
       - name: 린트
         run: |
-          ruff check src tests
-          ruff format --check src tests
+          uv run ruff check src tests
+          uv run ruff format --check src tests
 
       - name: 테스트
-        run: pytest -q
+        run: uv run pytest -q
 
       - name: 커밋에 비밀키가 없는지
         # 실제로 한 번 들어갔던 적이 있다. 사람이 기억하는 대신 CI가 본다.

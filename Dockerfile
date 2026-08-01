@@ -16,7 +16,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # 의존성을 먼저 넣어 레이어 캐시를 살린다 — 코드만 바뀌면 재설치하지 않는다
-COPY pyproject.toml README.md ./
+# LICENSE도 필요하다 — pyproject의 license = { file = "LICENSE" } 때문에
+# 없으면 메타데이터 생성이 실패한다 (CI가 잡았다)
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 RUN pip install --no-cache-dir ".[web]"
 
