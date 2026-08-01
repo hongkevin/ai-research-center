@@ -84,6 +84,21 @@ def _norm(s: str | None) -> str:
     return " ".join(str(s or "").split())
 
 
+# 공시 표의 각주 참조 — `(*6)`·`(주1)`·`(注2)`. 이름의 일부가 아니다.
+_FOOTNOTE_RE = re.compile(r"\s*[(（]\s*[*※주注]\s*\d*\s*[)）]\s*")
+
+
+def _strip_footnote(name: str) -> str:
+    """법인명에서 각주 표시를 뗀다.
+
+    실측: 롯데케미칼의 출자 현황은 `LOTTE Chemical Titan Holding Berhad (*6)`
+    처럼 각주 번호를 이름에 붙여 준다. 그대로 본문 표에 실으면 **G0가 미등록
+    숫자로 보고 발간을 막는다** — 그리고 그건 옳은 판정이다. 이 6은 레지스트리에
+    없는 숫자이고 우리가 뜻을 보장할 수 없다. 게이트를 푸는 대신 이름을 고친다.
+    """
+    return _FOOTNOTE_RE.sub(" ", name).strip()
+
+
 # ── 주식의 총수 ──────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class ShareCounts:
@@ -629,7 +644,7 @@ def parse_affiliates(
         return None
     entries: list[Affiliate] = []
     for r in rows:
-        name = _norm(r.get("inv_prm"))
+        name = _strip_footnote(_norm(r.get("inv_prm")))
         if not name or name in {"계", "합계", "소계", "-"}:
             continue
         entries.append(

@@ -30,7 +30,7 @@ from arc.data.base import (
     PeriodType,
 )
 from arc.data.kr.dart import DartProvider
-from arc.data.kr.dart_document import fetch_document, find_section
+from arc.data.kr.dart_document import fetch_document, find_section, find_sections
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
 from arc.finmodel.business import (
     BusinessProfile,
@@ -56,6 +56,12 @@ from arc.finmodel.metrics import (
     build_margin_bridge,
     build_observations,
     extract_metrics,
+)
+from arc.finmodel.segment_profit import (
+    SegmentProfitSet,
+    build_segment_profit,
+    build_segment_profit_entries,
+    build_segment_profit_observations,
 )
 from arc.finmodel.segments import (
     SegmentBreakdown,
@@ -124,6 +130,7 @@ class ReportResult:
     estimates: EstimateSet | None = None
     revisions: list[Revision] = field(default_factory=list)
     segments: SegmentBreakdown | None = None
+    segment_profit: SegmentProfitSet | None = None
     business: BusinessProfile | None = None
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
 
@@ -147,6 +154,7 @@ def compose_sections(
     estimates: EstimateSet | None = None,
     revisions: list[Revision] | None = None,
     segments: SegmentBreakdown | None = None,
+    segment_profit: SegmentProfitSet | None = None,
     business: BusinessProfile | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
@@ -203,6 +211,24 @@ def compose_sections(
                 ),
             }
         )
+    if segment_profit is not None and segment_profit.usable and segment_profit.leaders_differ:
+        # 부문 손익이 공시된 회사에서만 할 수 있는 주장이다 — 전사 지표에는
+        # 이 사실이 아예 나타나지 않는다.
+        rl, pl = segment_profit.revenue_leader, segment_profit.profit_leader
+        points.append(
+            {
+                "title": f"외형은 {rl.name}이 끌지만 이익은 {pl.name}에서 나온다",
+                "body": (
+                    f"매출 비중이 가장 큰 부문은 {rl.name}이나, 영업이익이 가장 큰 부문은 "
+                    f"{pl.name}이다. {pl.name}의 영업이익률은 {p(f'{_opseg_key(segment_profit, pl)}_margin_{y}a')}로 "
+                    f"{rl.name}의 {p(f'{_opseg_key(segment_profit, rl)}_margin_{y}a')}와 다르다. "
+                    f"전사 이익률은 {pl.name}의 흐름과 부문 구성비에 좌우되므로, "
+                    f"{rl.name}의 외형만 보고 이익 방향을 읽으면 어긋난다. "
+                    f"다만 {pl.name}의 이익률이 업황을 타는 것이라면 이 구도는 유지되지 않는다. "
+                    "다음 공시에서 부문별 이익률의 방향을 먼저 확인해야 한다."
+                ),
+            }
+        )
     if p(f"revenue_yoy_{y}a") and p(f"operating_income_yoy_{y}a"):
         points.append(
             {
@@ -250,6 +276,12 @@ def compose_sections(
     if ms.missing:
         narrative += f" 이번 공시에서 찾지 못한 지표: {', '.join(ms.missing_labels)}."
 
+    # 부문 구분을 **한 리포트에 하나만** 싣는다. 영업부문 주석(D33)이 있으면
+    # 「매출 및 수주상황」 표(D28)는 내리고 4.1만 남긴다. 실측: 삼성전자는 앞이
+    # 제ㆍ상품/용역 2개, 뒤가 DX·DS·SDC·Harman 4개라 같은 문서에서 「부문」이
+    # 두 뜻이 됐다. D28은 주석이 없는 회사에서 계속 쓰인다.
+    has_operating_segments = segment_profit is not None and segment_profit.usable
+
     return {
         "summary": summary,
         "investment_points": points,
@@ -257,10 +289,13 @@ def compose_sections(
             "period_label": f"{y}년",
             "table": rows,
             "segment_table": _segment_rows(y, p, segments),
+            "segment_profit": _segment_profit_section(y, p, segment_profit),
             "narrative": narrative,
         },
         "estimates": _estimates_section(y, p, estimates, revisions or []),
-        "business": _business_section(y, p, business, segments, info),
+        "business": _business_section(
+            y, p, business, None if has_operating_segments else segments, info
+        ),
         # LLM이 있으면 덮어쓴다. 없으면 원문을 그대로 싣지 않고 사실만 남긴다 —
         # 공시 문체가 리포트에 섞이면 장르가 깨진다.
         "business_narrative": (
@@ -370,6 +405,48 @@ def _segment_rows(y: int, p, seg: SegmentBreakdown | None) -> list[dict[str, str
                 "share": p(f"segment{i + 1}_share_{y}a") or "—",
             }
         )
+    return out
+
+
+def _segment_names(sp: SegmentProfitSet | None, seg: SegmentBreakdown | None) -> list[str]:
+    """산업 서사 레인에 넘길 부문명. 영업부문 주석이 있으면 그쪽이 정본이다."""
+    if sp is not None and sp.usable:
+        return [x.name for x in sp.lines]
+    return [x.name for x in seg.lines] if seg is not None and seg.usable else []
+
+
+def _opseg_key(sp: SegmentProfitSet, line) -> str:
+    """부문 → 레지스트리 키 접두사. 순번이 키를 정하므로 목록에서 찾는다."""
+    return f"opseg{sp.lines.index(line) + 1}"
+
+
+def _segment_profit_section(y: int, p, sp: SegmentProfitSet | None) -> dict[str, object]:
+    """부문별 수익성 표. **검산이 닫히지 않으면 표를 내지 않는다.**
+
+    표를 못 내는 이유는 남긴다 — 단일 영업부문이라 공시가 없는 것과 파싱이
+    깨진 것은 완전히 다른 사실이고, 섹션이 통째로 사라지면 구분되지 않는다.
+    """
+    out: dict[str, object] = {"table": [], "note": "", "has_prior": False}
+    if sp is None:
+        return out
+    if not sp.usable:
+        out["note"] = sp.note
+        return out
+    out["has_prior"] = sp.has_prior
+    rows = []
+    for line in sp.lines:
+        base = _opseg_key(sp, line)
+        rows.append(
+            {
+                "label": line.name,
+                "revenue": p(f"{base}_revenue_{y}a") or "—",
+                "rev_share": p(f"{base}_rev_share_{y}a") or "—",
+                "op": p(f"{base}_op_{y}a") or "—",
+                "margin": p(f"{base}_margin_{y}a") or "—",
+                "margin_chg": p(f"{base}_margin_chg_{y}a") or "—",
+            }
+        )
+    out["table"] = rows
     return out
 
 
@@ -809,6 +886,7 @@ def build_report(
     # 사업보고서 **원문** — 한 번만 받아 여러 섹션에 쓴다 (5~8MB).
     # 실패해도 노트 생성을 막지 않는다.
     segments: SegmentBreakdown | None = None
+    segment_profit: SegmentProfitSet | None = None
     business: BusinessProfile | None = None
     if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
         step("document", "사업보고서 원문 (5~8MB)")
@@ -817,6 +895,13 @@ def build_report(
             info_error = doc_error
 
         if text:
+            # 부문별 **손익** — IFRS 8 주석. 제목이 회사마다 다르고 연결·별도가
+            # 함께 실려 있어 후보를 전부 넘기고 검산이 고르게 한다.
+            # 당기·전기 표가 한 섹션에 있어 40,000자로는 전기가 잘린다(실측).
+            segment_profit = build_segment_profit(
+                find_sections(text, "부문", span=150_000), ms, stmt.rcept_no
+            )
+
             # 「2. 주요 제품 및 서비스」를 먼저 본다 — 「4. 매출 및 수주상황」보다
             # 표가 단순하고(내수/수출 중첩 없음) 3개년이 나란히 있다.
             for keyword in ("주요 제품", "매출"):
@@ -836,6 +921,8 @@ def build_report(
 
         if segments is not None and segments.usable:
             registry.register_all(build_segment_entries(segments, stmt.provenance))
+        if segment_profit is not None and segment_profit.usable:
+            registry.register_all(build_segment_profit_entries(segment_profit, stmt.provenance))
         if business is not None:
             registry.register_all(build_business_entries(business, stmt.provenance))
 
@@ -862,6 +949,7 @@ def build_report(
         estimates=estimates,
         revisions=revisions,
         segments=segments,
+        segment_profit=segment_profit,
         business=business,
     )
 
@@ -877,7 +965,11 @@ def build_report(
         obs += build_estimate_observations(estimates, revisions)
         if business is not None:
             obs += build_business_observations(business)
-        if segments is not None:
+        # 부문 구분은 하나만 준다 — 두 분류를 함께 주면 LLM이 「부문」을 두 뜻으로
+        # 섞어 쓴다(실측). 이익까지 있는 영업부문 주석이 있으면 그쪽만 쓴다.
+        if segment_profit is not None and segment_profit.usable:
+            obs += build_segment_profit_observations(segment_profit)
+        elif segments is not None:
             obs += build_segment_observations(segments)
         narration = narrate(
             llm,
@@ -908,7 +1000,7 @@ def build_report(
                 llm,
                 company_name=company.name,
                 profile_text=business.overview,
-                segments=[x.name for x in segments.lines] if segments and segments.usable else [],
+                segments=_segment_names(segment_profit, segments),
                 registry=registry,
             )
             sections["industry_context"] = industry_text
@@ -940,6 +1032,7 @@ def build_report(
         bindings=bindings,
         narration=narration,
         segments=segments,
+        segment_profit=segment_profit,
         business=business,
         report_info=info,
         valuation=valuation,

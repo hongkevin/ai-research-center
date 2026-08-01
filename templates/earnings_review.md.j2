@@ -42,10 +42,14 @@
 
 {# 이 노트가 재무 기계학에서 벗어나는 자리. 원문 조회가 실패해도 섹션은
    남기고 그 사실을 적는다 — 통째로 사라지면 "사업 설명이 없는 회사"로 읽힌다. #}
+{# 하위 번호는 세어서 매긴다. 「부문 구성」은 영업부문 주석(D33)이 있으면
+   내려가므로, 번호를 고정하면 2.1 다음이 2.3이 되어 섹션이 빠진 것처럼 읽힌다. #}
+{% set sub = namespace(n=0) %}
 {% if business.note %}
 {{ business.note }}
 {% else %}
-### 2.1 사업 구조
+{% set sub.n = sub.n + 1 %}
+### 2.{{ sub.n }} 사업 구조
 
 {{ business_narrative }}
 {% if business.signals %}
@@ -55,7 +59,8 @@
 {% endif %}
 
 {% if business.segment_table %}
-### 2.2 부문 구성
+{% set sub.n = sub.n + 1 %}
+### 2.{{ sub.n }} 부문 구성
 
 | 부문 | {{ earnings.period_label }} | 비중 | 증감률 |
 |---|---|---|---|
@@ -65,7 +70,8 @@
 
 {% endif %}
 {% if business.ownership or business.affiliates %}
-### 2.3 지배구조와 자회사
+{% set sub.n = sub.n + 1 %}
+### 2.{{ sub.n }} 지배구조와 자회사
 
 {{ business.ownership }}
 {% if business.affiliates %}
@@ -97,6 +103,28 @@
 
 {{ earnings.narrative }}
 
+{% if earnings.segment_profit.table %}
+### 4.1 부문별 수익성
+
+{# IFRS 8 「영업부문」 주석. 총계가 손익계산서의 매출액·영업이익과 맞는 것만
+   싣는다 — 어긋나면 표를 통째로 내리고 사유만 남긴다 (D33). #}
+| 부문 | {{ earnings.period_label }} 매출 | 비중(부문 합계 대비) | 영업이익 | 영업이익률 | 이익률 증감 |
+|---|---|---|---|---|---|
+{% for row in earnings.segment_profit.table %}
+| {{ row.label }} | {{ row.revenue }} | {{ row.rev_share }} | {{ row.op }} | {{ row.margin }} | {{ row.margin_chg }} |
+{% endfor %}
+
+부문 매출·영업이익은 사업보고서 영업부문 주석에서 확인했으며, 주석의 총계가 손익계산서의 매출액·영업이익과 일치함을 검산했습니다. 부문 매출에는 부문 간 내부거래가 남아 있어 부문 합계는 연결 매출액과 다를 수 있습니다.
+{% if not earnings.segment_profit.has_prior %}
+전기 비교치를 확인하지 못해 이익률 증감은 비워 두었습니다.
+{% endif %}
+
+{% elif earnings.segment_profit.note %}
+### 4.1 부문별 수익성
+
+{{ earnings.segment_profit.note }}
+
+{% endif %}
 ## 5. 실적 추정
 
 **추정 가정** (모든 가정은 명시하고, 계산은 결정적 코드로 수행):
