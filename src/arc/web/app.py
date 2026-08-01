@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -72,6 +73,19 @@ class ViewModel:
     llm_cost: float | None = None
     published_path: str = ""
     error: str = ""
+
+
+# corpCode.xml은 1.5MB zip이라 요청마다 받으면 검색이 못 쓸 만큼 느려진다.
+# 프로세스 수명 동안 하나만 둔다.
+_SEARCH_PROVIDER: DartProvider | None = None
+
+
+def _search_provider() -> DartProvider:
+    global _SEARCH_PROVIDER
+    if _SEARCH_PROVIDER is None:
+        _SEARCH_PROVIDER = DartProvider()
+        _SEARCH_PROVIDER.load_corp_codes()
+    return _SEARCH_PROVIDER
 
 
 def _to_view(r: ReportResult) -> ViewModel:
@@ -171,6 +185,25 @@ def _generate(
     return vm
 
 
+def _resolve_symbol(value: str) -> str:
+    """입력이 종목코드가 아니면 회사명으로 보고 찾는다.
+
+    자동완성을 안 쓰고 이름만 타이핑해도 동작해야 한다. 결과가 여럿이면
+    **고르지 않고 알린다** — 임의로 하나를 고르면 사용자가 다른 회사의
+    리포트를 자기 것으로 착각한다.
+    """
+    v = value.strip()
+    if re.fullmatch(r"\d{6}", v):
+        return v
+    hits = _search_provider().search_companies(v, limit=6)
+    if not hits:
+        raise ValueError(f"'{v}'에 해당하는 상장사를 찾지 못했습니다.")
+    if len(hits) > 1 and hits[0]["name"] != v:
+        names = ", ".join(f"{h['name']}({h['symbol']})" for h in hits)
+        raise ValueError(f"'{v}'와 일치하는 회사가 여럿입니다 — 하나를 골라 주세요: {names}")
+    return hits[0]["symbol"]
+
+
 def _parse_overrides(raw: str) -> dict[str, float]:
     """`key=value` 줄바꿈/콤마 목록 → 가정. 잘못된 줄은 무시하지 않고 알린다."""
     out: dict[str, float] = {}
@@ -206,6 +239,7 @@ def generate(
 ):
     symbol = symbol.strip()
     try:
+        symbol = _resolve_symbol(symbol)
         vm = _generate(
             symbol,
             year,
@@ -235,6 +269,15 @@ def api_reports(payload: dict):
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)
     return JSONResponse(vm.__dict__)
+
+
+@app.get("/api/search")
+def api_search(q: str = "", limit: int = 10):
+    """회사명·종목코드 검색. 종목코드를 외우지 않아도 되게 한다."""
+    try:
+        return {"results": _search_provider().search_companies(q, limit)}
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}", "results": []}, 503)
 
 
 @app.get("/api/health")
