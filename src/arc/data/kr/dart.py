@@ -209,16 +209,37 @@ class DartProvider(DataProvider):
         period: PeriodType,
         consolidation: ConsolidationType = ConsolidationType.CONSOLIDATED,
     ) -> FinancialStatement:
+        """재무제표 조회. 전체계정이 없으면 **주요계정으로 폴백한다.**
+
+        `fnlttSinglAcntAll`(전체 재무제표)과 `fnlttSinglAcnt`(주요계정)은
+        커버리지가 다르다. 실측: 파마리서치(214450) FY2025는 사업보고서를
+        제출했고 정기보고서 주요정보 API도 응답하는데 **전체계정만 013**이다.
+
+        주요계정은 30개뿐이라 매출원가·판관비가 없어 마진 브리지를 만들 수
+        없다. 그래도 매출·영업이익·순이익·자산·부채·자본은 있으므로
+        "리포트를 못 쓴다"와 "일부 지표가 없다" 사이에서 후자를 택한다.
+        """
         corp_code = self.corp_code_for(symbol)
-        payload = self._get_json(
-            "fnlttSinglAcntAll.json",
-            {
-                "corp_code": corp_code,
-                "bsns_year": str(fiscal_year),
-                "reprt_code": _REPRT_CODE[period],
-                "fs_div": consolidation.value,
-            },
-        )
+        params = {
+            "corp_code": corp_code,
+            "bsns_year": str(fiscal_year),
+            "reprt_code": _REPRT_CODE[period],
+            "fs_div": consolidation.value,
+        }
+        try:
+            payload = self._get_json("fnlttSinglAcntAll.json", params)
+        except DartError as exc:
+            if exc.status != "013":
+                raise
+            payload = self._get_json("fnlttSinglAcnt.json", params)
+            return self.parse_major_accounts(
+                payload,
+                symbol=symbol,
+                fiscal_year=fiscal_year,
+                period=period,
+                consolidation=consolidation,
+                retrieved_at=self._now(),
+            )
         return self.parse_financials(
             payload,
             symbol=symbol,
@@ -226,6 +247,67 @@ class DartProvider(DataProvider):
             period=period,
             consolidation=consolidation,
             retrieved_at=self._now(),
+        )
+
+    @staticmethod
+    def parse_major_accounts(
+        payload: dict,
+        symbol: str,
+        fiscal_year: int,
+        period: PeriodType,
+        consolidation: ConsolidationType,
+        retrieved_at: dt.datetime,
+    ) -> FinancialStatement:
+        """fnlttSinglAcnt.json(주요계정) 응답 → FinancialStatement.
+
+        전체계정과 형태가 다르다:
+
+        * `fs_div` 파라미터를 줘도 **CFS·OFS를 모두 돌려준다.** 행의 `fs_div`로
+          걸러야 한다. 안 그러면 연결·별도가 섞여 자산총계가 두 개가 된다.
+        * `account_id`가 없다. 계정명 매칭에만 의존하게 된다.
+        * 같은 계정이 중복으로 온다 (당기순이익 2행).
+        """
+        want = consolidation.value
+        rows = [r for r in payload.get("list", []) if (r.get("fs_div") or want) == want]
+        if not rows:  # fs_div 필드가 아예 없는 응답이면 그대로 쓴다
+            rows = payload.get("list", [])
+
+        items: list[FinancialLineItem] = []
+        seen: set[tuple[str, str | None]] = set()
+        for row in rows:
+            name = row.get("account_nm", "")
+            key = (name, row.get("sj_div"))
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(
+                FinancialLineItem(
+                    account_id=None,  # 주요계정에는 표준계정 코드가 없다
+                    account_name=name,
+                    amount=_parse_amount(row.get("thstrm_amount")),
+                    prior_amount=_parse_amount(row.get("frmtrm_amount")),
+                    prior2_amount=_parse_amount(row.get("bfefrmtrm_amount")),
+                    currency=row.get("currency") or "KRW",
+                    statement_type=row.get("sj_div"),
+                )
+            )
+
+        rcept_no = rows[0].get("rcept_no") if rows else None
+        return FinancialStatement(
+            symbol=symbol,
+            fiscal_year=fiscal_year,
+            period=period,
+            consolidation=consolidation,
+            items=items,
+            rcept_no=rcept_no,
+            provenance=Provenance(
+                source=SOURCE,
+                retrieved_at=retrieved_at,
+                source_ref=rcept_no,
+                source_url=(
+                    f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}" if rcept_no else None
+                ),
+            ),
         )
 
     @staticmethod
