@@ -44,12 +44,25 @@ git push origin main
 1. [railway.app](https://railway.app) → **New Project** → **Deploy from GitHub repo**
 2. `ai-research-center` 선택. `railway.toml`과 `Dockerfile`을 자동으로 씁니다.
 
-### 3. 볼륨 (필수)
+### 3. 볼륨
 
-**Settings → Volumes → Add Volume**, 마운트 경로 `/data`.
+**Settings 안에 없습니다.** 프로젝트 캔버스에서 만듭니다:
 
-볼륨이 없으면 컨테이너가 재시작할 때마다 추정 이력이 사라집니다. 생성은
-계속되지만 revision 추적이 항상 "직전 보고서 없음"이 됩니다.
+- `⌘K`(맥) / `Ctrl+K` → "Volume" 검색, 또는
+- 프로젝트 캔버스 **빈 곳을 우클릭** → Volume 추가
+
+그다음 **연결할 서비스를 고르고**, 서비스 설정에서 **마운트 경로**를 지정합니다.
+
+마운트 경로는 `/data`로 두면 Dockerfile 기본값(`ARC_STORE_DIR=/data/arc-store`)과
+맞습니다. 다른 경로에 붙였다면 환경변수를 그에 맞춰 바꾸십시오 — 예를 들어
+`/app/data`에 붙였으면 `ARC_STORE_DIR=/app/data/arc-store`.
+
+무료 플랜은 프로젝트당 볼륨 1개·0.5GB입니다. 이 저장소는 Parquet 스냅샷이라
+수십 KB 수준이므로 충분합니다.
+
+**볼륨이 없어도 리포트는 생성됩니다.** 다만 컨테이너가 재시작할 때마다 추정
+이력이 사라져 revision 추적이 항상 "직전 보고서 없음"이 됩니다. 붙었는지는
+아래 `/api/health`의 `store.writable`로 확인하십시오.
 
 ### 4. 환경변수
 
@@ -70,11 +83,26 @@ git push origin main
 
 ```bash
 curl https://<앱주소>/api/health
-# {"status":"ok","dart_key":true,"llm_key":true,"auth":true,"llm_used":0,"llm_limit":200}
+```
+```json
+{
+  "status": "ok",
+  "dart_key": true,
+  "llm_key": true,
+  "auth": true,
+  "llm_used": 0,
+  "llm_limit": 200,
+  "store": { "writable": true, "path": "/data/arc-store" }
+}
 ```
 
-`auth`가 `false`면 **비밀번호가 안 걸린 상태**입니다. 즉시 `ARC_PASSWORD`를
-설정하십시오 — 주소를 아는 누구나 서버의 LLM 키를 쓸 수 있습니다.
+확인할 것 두 가지:
+
+- `auth`가 `false`면 **비밀번호가 안 걸린 상태**입니다. 즉시 `ARC_PASSWORD`를
+  설정하십시오 — 주소를 아는 누구나 서버의 LLM 키를 쓸 수 있습니다.
+- `store.writable`이 `false`면 볼륨이 안 붙었거나 `ARC_STORE_DIR`과 마운트
+  경로가 다릅니다. `reason`에 사유가 나옵니다. 리포트 생성은 되지만 revision
+  추적이 죽습니다.
 
 ---
 

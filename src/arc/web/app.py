@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
@@ -53,6 +54,8 @@ TEMPLATES = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 # 추정 이력 — revision을 보여주려면 직전 **발간**이 있어야 한다
 STORE_DIR = Path(os.environ.get("ARC_STORE_DIR", REPO_ROOT / ".arc-store"))
 DRAFTS_DIR = REPO_ROOT / "drafts"
+
+log = logging.getLogger("arc.web")
 
 app = FastAPI(title="AI Research Center", docs_url="/api/docs")
 # 공개 주소에 올릴 때 서버의 LLM 키가 무방비가 되면 안 된다 (auth.py 참조)
@@ -214,7 +217,9 @@ def _generate(
             # 상한에 닿으면 **LLM만 끈다.** 화면이 죽는 것보다 수치만 나오는 편이 낫다.
             budget_exhausted = True
 
-    store = SnapshotStore(STORE_DIR)
+    # 저장소를 못 쓰면 **이력 없이 계속한다.** 볼륨이 안 붙었거나 경로가
+    # 틀렸다고 생성이 죽으면 안 된다 — 추정 이력은 향상이지 필수가 아니다.
+    store = _open_store()
     published_at = dt.datetime.now(dt.UTC).date()
     r = build_report(
         symbol,
@@ -234,13 +239,41 @@ def _generate(
         )
 
     if publish and r.publishable:
-        if r.estimates is not None and r.estimates.usable:
+        if store is not None and r.estimates is not None and r.estimates.usable:
             save_estimates(store, r.estimates, symbol, published_at)
         DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
         path = DRAFTS_DIR / f"{symbol}-FY{year}-{published_at.isoformat()}.md"
         path.write_text(r.rendered or "", encoding="utf-8")
         vm.published_path = str(path)
     return vm
+
+
+def _open_store() -> SnapshotStore | None:
+    """추정 이력 저장소. 쓸 수 없으면 None.
+
+    Railway에서 볼륨을 안 붙였거나 마운트 경로가 `ARC_STORE_DIR`과 다르면
+    쓰기가 실패한다. 그때 500을 내면 **생성 자체가 막힌다** — 이력은
+    revision 추적을 위한 향상이지 리포트 생성의 전제가 아니다.
+    """
+    try:
+        return SnapshotStore(STORE_DIR)
+    except OSError as exc:
+        log.warning("추정 이력 저장소를 열지 못했습니다 (%s): %s", STORE_DIR, exc)
+        return None
+
+
+def _store_status() -> dict[str, object]:
+    """볼륨이 제대로 붙었는지 — 배포 직후 확인용."""
+    store = _open_store()
+    if store is None:
+        return {"writable": False, "path": str(STORE_DIR), "reason": "디렉터리를 만들 수 없음"}
+    probe = store.base_dir / ".write-probe"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        return {"writable": False, "path": str(STORE_DIR), "reason": str(exc)}
+    return {"writable": True, "path": str(STORE_DIR)}
 
 
 def _resolve_symbol(value: str) -> str:
@@ -427,4 +460,6 @@ def api_health():
         "auth": bool(os.environ.get("ARC_PASSWORD")),
         "llm_used": LLM_BUDGET.used,
         "llm_limit": LLM_BUDGET.limit,
+        # 볼륨이 붙었는지. false면 생성은 되지만 revision 추적이 죽는다.
+        "store": _store_status(),
     }
