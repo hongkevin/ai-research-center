@@ -43,6 +43,17 @@
 | {{ row.label }} | {{ row.current }} | {{ row.prior }} | {{ row.yoy }} |
 {% endfor %}
 
+{% if earnings.segment_table %}
+{# 합계가 손익계산서 매출액과 일치할 때만 표시된다 (segments.py) #}
+**부문별 매출**
+
+| 부문 | {{ earnings.period_label }} | 비중 |
+|---|---|---|
+{% for row in earnings.segment_table %}
+| {{ row.label }} | {{ row.amount }} | {{ row.share }} |
+{% endfor %}
+
+{% endif %}
 {{ earnings.narrative }}
 
 ## 5. 실적 추정

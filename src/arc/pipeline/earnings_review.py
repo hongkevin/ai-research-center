@@ -28,6 +28,7 @@ from arc.data.base import (
     PeriodType,
 )
 from arc.data.kr.dart import DartProvider
+from arc.data.kr.dart_document import fetch_section
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
 from arc.finmodel.estimates import (
     ESTIMATE_DATASET,
@@ -47,6 +48,12 @@ from arc.finmodel.metrics import (
     build_margin_bridge,
     build_observations,
     extract_metrics,
+)
+from arc.finmodel.segments import (
+    SegmentBreakdown,
+    build_segment_entries,
+    build_segment_observations,
+    build_segments,
 )
 from arc.finmodel.valuation import (
     ValuationSet,
@@ -81,6 +88,7 @@ class ReportResult:
     valuation: ValuationSet | None = None
     estimates: EstimateSet | None = None
     revisions: list[Revision] = field(default_factory=list)
+    segments: SegmentBreakdown | None = None
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
 
     @property
@@ -102,6 +110,7 @@ def compose_sections(
     info: PeriodicReportInfo | None = None,
     estimates: EstimateSet | None = None,
     revisions: list[Revision] | None = None,
+    segments: SegmentBreakdown | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
 
@@ -210,6 +219,7 @@ def compose_sections(
         "earnings": {
             "period_label": f"{y}년",
             "table": rows,
+            "segment_table": _segment_rows(y, p, segments),
             "narrative": narrative,
         },
         "estimates": _estimates_section(y, p, estimates, revisions or []),
@@ -295,6 +305,25 @@ def _estimates_section(
         "table": rows,
         "revision_narrative": narrative,
     }
+
+
+def _segment_rows(y: int, p, seg: SegmentBreakdown | None) -> list[dict[str, str]]:
+    """부문별 매출 표. 검산에 실패한 부문 구성은 **표시하지 않는다.**"""
+    if seg is None or not seg.usable:
+        return []
+    out = []
+    for i in range(len(seg.lines)):
+        amount = p(f"segment{i + 1}_revenue_{y}a")
+        if amount is None:
+            continue
+        out.append(
+            {
+                "label": seg.lines[i].name,
+                "amount": amount,
+                "share": p(f"segment{i + 1}_share_{y}a") or "—",
+            }
+        )
+    return out
 
 
 def _valuation_section(
@@ -610,6 +639,7 @@ def build_report(
     reports: DartReportProvider | None = None,
     store: object | None = None,
     assumptions: dict[str, float] | None = None,
+    with_segments: bool = True,
 ) -> ReportResult:
     """S1 → S6b 관통.
 
@@ -643,6 +673,17 @@ def build_report(
             valuation = build_valuation(ms, info)
             registry.register_all(build_valuation_entries(valuation, info, stmt.provenance))
 
+    # 부문별 매출 — 사업보고서 **원문**에서 뽑고 매출액으로 검산한다.
+    # 원문이 5~8MB라 느리고, 실패해도 노트 생성을 막지 않는다.
+    segments: SegmentBreakdown | None = None
+    if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
+        section, doc_error = fetch_section(provider, stmt.rcept_no, "매출")
+        if doc_error and info_error is None:
+            info_error = doc_error
+        segments = build_segments(section, ms, stmt.rcept_no)
+        if segments.usable:
+            registry.register_all(build_segment_entries(segments, stmt.provenance))
+
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
     estimates = build_estimates(ms, assumptions)
     previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
@@ -664,6 +705,7 @@ def build_report(
         info=info,
         estimates=estimates,
         revisions=revisions,
+        segments=segments,
     )
 
     narration = None
@@ -675,6 +717,8 @@ def build_report(
         if valuation is not None and info is not None:
             obs += build_valuation_observations(valuation, info)
         obs += build_estimate_observations(estimates, revisions)
+        if segments is not None:
+            obs += build_segment_observations(segments)
         narration = narrate(
             llm,
             company_name=company.name,
@@ -717,6 +761,7 @@ def build_report(
         rendered=rendered,
         bindings=bindings,
         narration=narration,
+        segments=segments,
         report_info=info,
         valuation=valuation,
         info_error=info_error,
