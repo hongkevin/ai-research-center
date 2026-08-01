@@ -220,3 +220,79 @@ class TestAssumptionParsing:
 
         with pytest.raises(ValueError):
             _parse_overrides(raw)
+
+
+class TestCompanySearch:
+    """종목코드를 외우지 않아도 되게 한다 — corpCode.xml이 전 상장사 목록이다."""
+
+    INDEX = {
+        "214450": {"corp_name": "파마리서치", "stock_code": "214450"},
+        "217950": {"corp_name": "파마리서치바이오", "stock_code": "217950"},
+        "068270": {"corp_name": "셀트리온", "stock_code": "068270"},
+        "068760": {"corp_name": "셀트리온제약", "stock_code": "068760"},
+        "005930": {"corp_name": "삼성전자", "stock_code": "005930"},
+        "000660": {"corp_name": "(주)에스케이하이닉스", "stock_code": "000660"},
+    }
+
+    def _search(self, q, limit=10):
+        from arc.data.kr.dart import search_corp_index
+
+        return search_corp_index(self.INDEX, q, limit)
+
+    def test_exact_symbol_first(self):
+        assert self._search("214450")[0]["symbol"] == "214450"
+
+    def test_exact_name_beats_prefix(self):
+        """'셀트리온'은 셀트리온제약보다 셀트리온이 먼저다."""
+        assert self._search("셀트리온")[0]["symbol"] == "068270"
+
+    def test_prefix_beats_substring(self):
+        names = [h["name"] for h in self._search("파마리서치")]
+        assert names[0] == "파마리서치"
+        assert "파마리서치바이오" in names
+
+    def test_legal_form_ignored(self):
+        """'(주)에스케이하이닉스'를 '에스케이하이닉스'로 찾을 수 있어야 한다."""
+        assert self._search("에스케이하이닉스")[0]["symbol"] == "000660"
+
+    def test_empty_query_returns_nothing(self):
+        assert self._search("") == []
+        assert self._search("   ") == []
+
+    def test_no_match_returns_empty(self):
+        assert self._search("존재하지않는회사") == []
+
+    def test_limit_respected(self):
+        assert len(self._search("셀", limit=1)) == 1
+
+
+class TestSymbolResolution:
+    def _resolve(self, value, monkeypatch):
+        import arc.web.app as web
+
+        class _Fake:
+            def search_companies(self, q, limit=6):
+                from arc.data.kr.dart import search_corp_index
+
+                return search_corp_index(TestCompanySearch.INDEX, q, limit)
+
+        monkeypatch.setattr(web, "_search_provider", lambda: _Fake())
+        return web._resolve_symbol(value)
+
+    def test_six_digit_passes_through(self, monkeypatch):
+        assert self._resolve("214450", monkeypatch) == "214450"
+
+    def test_name_resolved(self, monkeypatch):
+        assert self._resolve("삼성전자", monkeypatch) == "005930"
+
+    def test_exact_name_wins_over_ambiguity(self, monkeypatch):
+        assert self._resolve("셀트리온", monkeypatch) == "068270"
+
+    def test_ambiguous_asks_instead_of_guessing(self, monkeypatch):
+        """임의로 고르면 사용자가 다른 회사의 리포트를 자기 것으로 착각한다."""
+        with pytest.raises(ValueError, match="여럿"):
+            self._resolve("파마", monkeypatch)
+
+    def test_unknown_name_raises(self, monkeypatch):
+        with pytest.raises(ValueError, match="찾지 못"):
+            self._resolve("없는회사", monkeypatch)

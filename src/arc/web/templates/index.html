@@ -63,6 +63,24 @@
   form.busy .spin::after { content: " — 생성 중…"; color: var(--accent); }
   .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
 
+  /* ── 회사 검색 ── */
+  .combo { position: relative; }
+  .sug {
+    display: none; position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    max-height: 260px; overflow-y: auto; box-shadow: 0 10px 26px rgba(0,0,0,.32);
+  }
+  .sug.on { display: block; }
+  .sug button {
+    width: 100%; margin: 0; padding: 8px 10px; border: 0; border-bottom: 1px solid var(--line);
+    background: transparent; color: var(--text); font: inherit; font-size: 13.5px;
+    font-weight: 500; text-align: left; display: flex; justify-content: space-between; gap: 8px;
+    border-radius: 0; cursor: pointer;
+  }
+  .sug button:last-child { border-bottom: 0; }
+  .sug button:hover, .sug button.on { background: var(--accent); color: #fff; filter: none; }
+  .sug .code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; opacity: .8; }
+
   .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
            border-radius: 999px; font-size: 12px; font-weight: 600; }
   .badge--ok  { background: color-mix(in srgb, var(--ok) 16%, transparent);  color: var(--ok); }
@@ -140,8 +158,12 @@
   <div class="col col--left">
     <form method="post">
       <h2 class="sec spin">생성</h2>
-      <label for="symbol">종목코드</label>
-      <input id="symbol" name="symbol" type="text" value="{{ symbol }}" placeholder="214450" required>
+      <label for="symbol">회사명 또는 종목코드</label>
+      <div class="combo">
+        <input id="symbol" name="symbol" type="text" value="{{ symbol }}"
+               placeholder="파마리서치" autocomplete="off" required>
+        <div id="sug" class="sug"></div>
+      </div>
       <label for="year">사업연도</label>
       <input id="year" name="year" type="number" value="{{ year }}" min="2015" max="2030">
 
@@ -274,6 +296,61 @@
 <div id="pop"></div>
 
 <script>
+// 회사명 검색 — 종목코드를 외우지 않아도 되게 한다.
+// corpCode.xml(전 상장사)을 서버가 캐시하므로 외부 검색 API가 필요 없다.
+(function () {
+  const input = document.getElementById('symbol');
+  const box = document.getElementById('sug');
+  if (!input || !box) return;
+  let items = [], active = -1, timer = null, lastQuery = '';
+
+  const close = () => { box.classList.remove('on'); active = -1; };
+
+  function render() {
+    if (!items.length) return close();
+    box.innerHTML = items.map((it, i) =>
+      `<button type="button" data-i="${i}" class="${i === active ? 'on' : ''}">` +
+      `<span>${it.name}</span><span class="code">${it.symbol}</span></button>`).join('');
+    box.classList.add('on');
+  }
+
+  function pick(i) {
+    if (!items[i]) return;
+    // 종목코드를 넣는다 — 이름을 넣으면 동명이인 회사에서 서버가 되묻게 된다
+    input.value = items[i].symbol;
+    close();
+  }
+
+  async function search(q) {
+    if (q.length < 1) return close();
+    try {
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=10`);
+      const d = await r.json();
+      items = d.results || []; active = -1; render();
+    } catch { close(); }
+  }
+
+  input.addEventListener('input', () => {
+    const q = input.value.trim();
+    if (q === lastQuery) return;
+    lastQuery = q;
+    clearTimeout(timer);
+    timer = setTimeout(() => search(q), 160);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (!box.classList.contains('on')) return;
+    if (e.key === 'ArrowDown') { active = Math.min(active + 1, items.length - 1); render(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); render(); e.preventDefault(); }
+    else if (e.key === 'Enter' && active >= 0) { pick(active); e.preventDefault(); }
+    else if (e.key === 'Escape') close();
+  });
+  box.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-i]');
+    if (b) pick(Number(b.dataset.i));
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.combo')) close(); });
+})();
+
 // LLM 서술은 20초쯤 걸린다. 아무 반응이 없으면 사용자가 다시 누른다.
 document.querySelector('form')?.addEventListener('submit', (e) => {
   e.currentTarget.classList.add('busy');

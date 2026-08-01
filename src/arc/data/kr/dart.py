@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import os
+import re
 import time
 import xml.etree.ElementTree as ET
 import zipfile
@@ -165,6 +166,15 @@ class DartProvider(DataProvider):
                 "modify_date": (node.findtext("modify_date") or "").strip(),
             }
         return mapping
+
+    def search_companies(self, query: str, limit: int = 12) -> list[dict[str, str]]:
+        """회사명·종목코드로 상장사를 찾는다.
+
+        `corpCode.xml`은 전 상장사 목록이라 검색에 그대로 쓸 수 있다. 별도
+        검색 API가 필요 없고, 오프라인이며, 종목코드를 외울 필요가 없어진다.
+        """
+        mapping = self.load_corp_codes()
+        return search_corp_index(mapping, query, limit)
 
     def corp_code_for(self, symbol: str) -> str:
         """종목코드(6자리) → DART 고유번호(8자리)."""
@@ -408,6 +418,52 @@ class DartProvider(DataProvider):
 
     def get_news(self, query: str, limit: int = 20) -> list[NewsItem]:
         raise NotImplementedError("뉴스는 kr/naver_news 어댑터를 사용하라")
+
+
+# 회사명 앞뒤의 법인격 표기 — 검색에서는 무시한다 ("(주)파마리서치" == "파마리서치")
+_LEGAL_FORM_RE = re.compile(r"\(주\)|\(유\)|주식회사|㈜|㈐|\s")
+
+
+def normalize_company_name(name: str) -> str:
+    return _LEGAL_FORM_RE.sub("", name or "").lower()
+
+
+def search_corp_index(
+    mapping: dict[str, dict[str, str]], query: str, limit: int = 12
+) -> list[dict[str, str]]:
+    """{종목코드: entry} → 검색 결과.
+
+    순위: 종목코드 완전일치 > 이름 완전일치 > 접두 일치 > 부분 일치.
+    접두를 부분보다 위에 두는 이유는 "삼성"을 치면 "삼성전자"가 "제일기획"의
+    모회사 표기보다 먼저 와야 하기 때문이다.
+    """
+    q = query.strip()
+    if not q:
+        return []
+    qn = normalize_company_name(q)
+    if not qn:
+        return []
+
+    scored: list[tuple[int, int, dict[str, str]]] = []
+    for code, entry in mapping.items():
+        name = entry.get("corp_name", "")
+        nn = normalize_company_name(name)
+        if code == q:
+            rank = 0
+        elif nn == qn:
+            rank = 1
+        elif nn.startswith(qn):
+            rank = 2
+        elif qn in nn:
+            rank = 3
+        elif q.isdigit() and code.startswith(q):
+            rank = 4
+        else:
+            continue
+        scored.append((rank, len(nn), {"name": name, "symbol": code}))
+
+    scored.sort(key=lambda x: (x[0], x[1], x[2]["name"]))
+    return [item for _, _, item in scored[:limit]]
 
 
 def _parse_amount(raw: str | None) -> int | None:
