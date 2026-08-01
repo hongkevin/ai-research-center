@@ -197,14 +197,32 @@ class NumberRegistry:
         """본문의 `{{num:key}}` 플레이스홀더를 레지스트리 값으로 치환.
 
         미등록 key는 치환하지 않고 그대로 둔다 — G0가 잡는다.
+
+        치환하면서 **바로 뒤의 조사를 교정한다.** LLM은 값의 끝소리를 모른 채
+        조사를 붙이므로("{{num:...}}으로") 단위에 따라 틀린다("40.0%으로").
+        단위는 치환 시점에 확정되므로 이건 판단이 아니라 계산이다
+        (`arc.llm.josa` 참조).
         """
+        from arc.llm.josa import replace_particle
 
-        def sub(m: re.Match[str]) -> str:
-            key = m.group(1)
-            entry = self._entries.get(key)
-            return entry.rendered() if entry else m.group(0)
-
-        return PLACEHOLDER_RE.sub(sub, text)
+        out: list[str] = []
+        pos = 0
+        for m in PLACEHOLDER_RE.finditer(text):
+            if m.start() < pos:  # 조사 교정으로 이미 지나친 구간
+                continue
+            out.append(text[pos : m.start()])
+            entry = self._entries.get(m.group(1))
+            if entry is None:
+                out.append(m.group(0))
+                pos = m.end()
+                continue
+            value = entry.rendered()
+            out.append(value)
+            particle, consumed = replace_particle(value, text[m.end() : m.end() + 3])
+            out.append(particle)
+            pos = m.end() + consumed
+        out.append(text[pos:])
+        return "".join(out)
 
     def bindings(self, text: str) -> list[dict[str, object]]:
         """치환 감사 기록. 어떤 플레이스홀더가 무슨 값으로 바뀌었는지."""

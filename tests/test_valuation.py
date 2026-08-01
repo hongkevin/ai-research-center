@@ -31,7 +31,7 @@ from arc.finmodel.valuation import (
     build_valuation_observations,
 )
 from arc.llm.number_registry import NumberRegistry
-from arc.pipeline.earnings_review import merge_risks
+from arc.pipeline.earnings_review import _method_notes, _risk_lines, merge_risks
 
 PROV = Provenance(source="opendart", retrieved_at=dt.datetime(2026, 8, 1, tzinfo=dt.UTC))
 
@@ -268,42 +268,93 @@ class TestValuationObservations:
         assert "부실로 단정하면 안 된다" in obs
 
 
+class TestRiskSectionScope:
+    """리스크 섹션에는 **회사의 리스크만.** 방법론이 섞이면 감사보고서가 된다."""
+
+    def _audit(self, opinion="적정의견", kam=("수익인식 기간귀속의 적정성",), emphasis=None):
+        return AuditOpinion(
+            fiscal_year=2025,
+            period_label="제10기 (당기)",
+            auditor="한영회계법인",
+            opinion=opinion,
+            kam_items=list(kam),
+            emphasis=emphasis,
+        )
+
+    def test_kam_never_quoted_in_body(self):
+        """적정의견 하의 KAM은 본문에 인용하지 않는다 — 회계법인 산출물처럼 읽힌다."""
+        info = _info(audit=self._audit())
+        lines = _risk_lines(build_valuation(_metrics(), info), info)
+        joined = " ".join(lines)
+        assert "핵심감사사항" not in joined
+        assert "감사인" not in joined
+
+    def test_kam_still_reaches_the_thesis(self):
+        """본문에서 뺐다고 버리는 게 아니다. 논지로는 간다 (LLM이 사업 언어로 옮긴다)."""
+        info = _info(audit=self._audit())
+        obs = " ".join(build_valuation_observations(build_valuation(_metrics(), info), info))
+        assert "수익인식 기간귀속" in obs
+
+    def test_non_clean_opinion_is_a_company_risk(self):
+        """비적정 의견은 실제로 material하다. 증권사 리포트도 이건 다룬다."""
+        info = _info(audit=self._audit(opinion="의견거절"))
+        lines = _risk_lines(build_valuation(_metrics(), info), info)
+        assert any("적정이 아니다" in line for line in lines)
+
+    def test_method_limits_not_in_risks(self):
+        """역산 주가·커버리지는 우리 자료의 한계지 회사의 리스크가 아니다."""
+        info = _info(audit=self._audit())
+        lines = " ".join(_risk_lines(build_valuation(_metrics(), info), info))
+        assert "역산" not in lines
+        assert "공시 기반 지표만" not in lines
+
+    def test_method_limits_land_in_method_notes(self):
+        info = _info(audit=self._audit())
+        notes = " ".join(_method_notes(_metrics(), build_valuation(_metrics(), info), info))
+        assert "역산한 값" in notes
+        assert "공시 기반 지표만" in notes
+        assert "추정 레이어" in notes
+
+    def test_missing_accounts_disclosed_in_method_notes(self):
+        ms = extract_metrics(_stmt([_li("매출액", 1000, 900), _li("영업이익", 200, 140)]))
+        notes = " ".join(_method_notes(ms, None, None))
+        assert "확인하지 못한 계정" in notes
+        assert "매출원가" in notes  # 영문 키가 아니라 한글 라벨
+
+
 class TestMergeRisks:
-    def _info_with_kam(self):
+    def _info_with_bad_opinion(self):
         return _info(
             audit=AuditOpinion(
                 fiscal_year=2025,
                 period_label="제10기 (당기)",
                 auditor="한영회계법인",
-                opinion="적정의견",
-                kam_items=["수익인식 기간귀속의 적정성"],
+                opinion="의견거절",
+                kam_items=[],
             )
         )
 
-    def test_llm_covering_kam_drops_deterministic_duplicate(self):
+    def test_llm_covering_topic_drops_deterministic_duplicate(self):
         """같은 논지를 프롬프트로 주고 결정론 문장도 붙이면 두 번 실린다."""
-        info = self._info_with_kam()
+        info = self._info_with_bad_opinion()
         v = build_valuation(_metrics(), info)
-        llm = ["감사인이 수익인식 기간귀속의 적정성을 지목한 만큼 확인이 필요하다."]
+        llm = ["감사의견이 의견거절이라 재무제표 신뢰성부터 확인해야 한다."]
         merged = merge_risks(llm, v, info)
-        assert sum("수익인식 기간귀속" in r for r in merged) == 1
+        assert sum("적정이 아니다" in r for r in merged) == 0
+        assert len(merged) == 1
 
     def test_uncovered_topic_is_kept(self):
-        info = self._info_with_kam()
+        info = self._info_with_bad_opinion()
         v = build_valuation(_metrics(), info)
         merged = merge_risks(["전혀 다른 이야기"], v, info)
-        assert any("수익인식 기간귀속" in r for r in merged)
-
-    def test_scope_disclaimers_always_kept(self):
-        """범위 고지는 LLM이 뭘 쓰든 남아야 한다."""
-        info = self._info_with_kam()
-        v = build_valuation(_metrics(), info)
-        merged = merge_risks(["공시 기반 지표만 사용했다"], v, info)
-        assert any("공시 밖 요인" in r for r in merged)
-        assert any("추정 레이어" in r for r in merged)
+        assert any("적정이 아니다" in r for r in merged)
 
     def test_llm_risks_come_first(self):
-        info = self._info_with_kam()
+        info = self._info_with_bad_opinion()
         v = build_valuation(_metrics(), info)
         merged = merge_risks(["LLM이 쓴 첫 줄"], v, info)
         assert merged[0] == "LLM이 쓴 첫 줄"
+
+    def test_never_returns_empty(self):
+        """리스크가 하나도 없으면 템플릿에 빈 목록이 남는다."""
+        assert merge_risks([], None, None)

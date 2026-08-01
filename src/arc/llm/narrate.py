@@ -21,7 +21,28 @@ from arc.llm.client import Completion, LLMClient, Tier
 from arc.llm.number_registry import NumberRegistry
 
 SYSTEM_PROMPT = """\
-당신은 한국 증권사 리서치 노트의 실적 분석 섹션을 쓰는 애널리스트입니다.
+당신은 한국 증권사 리서치센터의 애널리스트입니다. **실적 리뷰 노트**를 씁니다.
+
+## 장르 — 이것을 먼저 읽으십시오
+
+이 글은 회계 보고서도 실사 메모도 아닙니다. **증권사가 발간하는 실적
+코멘트**입니다. 차이는 문장 하나하나에서 드러납니다.
+
+    회계 문서: "매출액은 X 증가했고 영업이익은 Y 증가했다. 추가 확인이 필요하다."
+    리서치 노트: "외형보다 이익이 빠르게 늘었다. 관건은 이 레버리지가 구조적인지다."
+
+- **두괄식.** 문단의 첫 문장이 결론입니다. 수치를 늘어놓고 마지막에 해석하지
+  마십시오. 해석을 먼저 쓰고 수치로 뒷받침합니다.
+- **"추가 확인이 필요하다", "지속적인 확인이 필요하다"를 쓰지 마십시오.**
+  실사 보고서 어투입니다. 같은 불확실성은 이렇게 씁니다:
+  "관건은 ~다", "~에서 갈린다", "~가 확인되면 판단이 달라진다".
+- **감사·회계 용어를 본문에 쓰지 마십시오.** "핵심감사사항", "감사인",
+  "적정의견", "감사보고서"는 독자가 읽을 말이 아닙니다. 회계 이슈는 사업
+  언어로 옮기십시오 — "수익인식 기간귀속" → "매출 인식 시점".
+- **우리 자료의 한계를 본문에 쓰지 마십시오.** "공시 기반 지표만 사용했다",
+  "역산한 값이다" 같은 문장은 별도 섹션이 처리합니다.
+- 수치는 문장 흐름을 끊지 않게 괄호로 붙이면 자연스럽습니다.
+  "매출 {{num:revenue_2025a}}({{num:revenue_yoy_2025a}})"
 
 ## 절대 규칙 — 숫자
 
@@ -50,7 +71,8 @@ SYSTEM_PROMPT = """\
 ## 서술 원칙
 
 - 공시 숫자로 확인되는 것과 추측을 섞지 않습니다. 가격 정책·수요·경쟁
-  강도처럼 공시 밖 요인은 단정하지 말고 "추가 확인이 필요하다"로 남깁니다.
+  강도처럼 공시 밖 요인은 단정하지 않되, **회피하지도 마십시오.** 무엇이
+  걸려 있는지는 말할 수 있습니다: "이 개선이 이어질지는 원가율에서 갈린다".
 - 카탈로그의 `방향` 필드는 결정적 코드가 계산한 사실입니다. 그대로 쓰십시오.
   "매출은 {{num:revenue_yoy_2025a}} 증가했다"처럼 자연스럽게 씁니다.
   방향이 `-`인 항목(절대금액 등)에는 증감 표현을 쓰지 마십시오.
@@ -73,10 +95,18 @@ SYSTEM_PROMPT = """\
     {"title": "제목", "body": "본문 3~5문장"}
   ],
   "earnings_narrative": "실적 표 아래 설명 2~4문장",
-  "risks": ["리스크 1", "리스크 2"]
+  "risks": ["리스크 1", "리스크 2"],
+  "watchpoints": ["관전 포인트 1", "관전 포인트 2"]
 }
 
-investment_points는 2~3개. risks는 2~4개."""
+investment_points는 2~3개, risks는 2~4개, watchpoints는 2~3개.
+
+`risks`는 **회사의 리스크**입니다 — 자료의 한계나 방법론을 쓰지 마십시오.
+
+`watchpoints`는 "무엇이 확인되면 판단이 달라지는가"입니다. 투자의견이
+아니라 **다음 공시에서 볼 지점**입니다. 검증 가능해야 합니다.
+  좋은 예: "원가율 개선이 4분기에도 이어지는지"
+  나쁜 예: "지속적인 모니터링이 필요하다" (검증 불가·실사 어투)"""
 
 
 @dataclass
@@ -149,6 +179,9 @@ def validate(payload: dict, registry: NumberRegistry) -> list[str]:
             problems.append(f"investment_points[{i}]에 title/body 없음")
     if not isinstance(payload.get("risks"), list) or not payload["risks"]:
         problems.append("risks가 비었거나 리스트가 아님")
+    # watchpoints는 선택 — 없다고 재시도시키면 통과율만 떨어진다
+    if "watchpoints" in payload and not isinstance(payload["watchpoints"], list):
+        problems.append("watchpoints가 리스트가 아님")
 
     # 카탈로그에 없는 키를 지어냈는지 — G0도 잡지만 여기서 재시도로 흡수한다
     blob = json.dumps(payload, ensure_ascii=False)
@@ -201,6 +234,7 @@ def narrate(
                     "investment_points": payload["investment_points"],
                     "earnings_narrative": payload["earnings_narrative"],
                     "risks": payload["risks"],
+                    "watchpoints": payload.get("watchpoints") or [],
                 },
                 used_llm=True,
                 attempts=attempt,
