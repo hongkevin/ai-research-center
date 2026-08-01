@@ -39,7 +39,12 @@ def _attrs(entry) -> str:
         ("data-url", (prov.source_url or "") if prov else ""),
         ("data-retrieved", prov.retrieved_at.isoformat(timespec="seconds") if prov else ""),
     ]
-    return " ".join(f'{k}="{_html.escape(str(v), quote=True)}"' for k, v in pairs if v)
+    # 파이프는 반드시 엔티티로 바꾼다. YoY 산식이 절댓값을 `|revenue_2024a|`로
+    # 쓰는데, 이 문자가 속성 안에 살아 있으면 **마크다운 표의 셀 구분자로
+    # 해석돼** 그 뒤 셀이 통째로 이스케이프된 문자열로 렌더된다(실측).
+    return " ".join(
+        f'{k}="{_html.escape(str(v), quote=True).replace("|", "&#124;")}"' for k, v in pairs if v
+    )
 
 
 def substitute_with_spans(text: str, registry: NumberRegistry) -> str:

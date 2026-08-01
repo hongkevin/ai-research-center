@@ -89,6 +89,27 @@ class TestNumbersCarryProvenance:
         out = substitute_with_spans("{{num:nope_2025a}}", _registry())
         assert "{{num:nope_2025a}}" in out
 
+    def test_pipe_in_formula_does_not_break_tables(self):
+        """YoY 산식은 절댓값을 `|x|`로 쓴다. 표 안에서 셀 구분자로 해석되면
+        뒤 셀이 통째로 이스케이프된 문자열로 렌더된다 (실측)."""
+        reg = NumberRegistry()
+        reg.register(
+            NumberEntry(
+                key="revenue_yoy_2025a",
+                value=53.2,
+                unit="%",
+                display="53.2%",
+                provenance=PROV,
+                label="매출액 YoY",
+                formula="(revenue_2025a - revenue_2024a) / |revenue_2024a|",
+            )
+        )
+        md = "| 항목 | 증감률 |\n|---|---|\n| 매출액 | {{num:revenue_yoy_2025a}} |\n"
+        html = render_html(md, reg)
+        assert "&#124;" in html
+        assert "&lt;span" not in html  # 셀이 이스케이프되지 않았다
+        assert html.count("<td>") == 2
+
     def test_value_is_html_escaped(self):
         reg = NumberRegistry()
         reg.register(
