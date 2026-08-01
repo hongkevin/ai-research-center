@@ -49,6 +49,7 @@ class ReportResult:
     gate: GateResult
     rendered: str | None = None  # 게이트 통과 시에만 채워진다
     bindings: list[dict] = field(default_factory=list)
+    narration: object | None = None  # NarrationResult (LLM 사용 시)
 
     @property
     def publishable(self) -> bool:
@@ -266,8 +267,13 @@ def build_report(
     period: PeriodType = PeriodType.ANNUAL,
     consolidation: ConsolidationType | None = None,
     published_at: dt.date | None = None,
+    llm: object | None = None,
 ) -> ReportResult:
-    """S1 → S6b 관통. `consolidation`이 None이면 연결→별도 자동 폴백."""
+    """S1 → S6b 관통.
+
+    `consolidation`이 None이면 연결→별도 자동 폴백.
+    `llm`을 주면 S4 서술을 LLM이 쓰고, 실패하면 결정론 문장으로 폴백한다.
+    """
     company = provider.get_company(symbol)
     stmt = fetch_statement(
         symbol, fiscal_year, provider, period=period, consolidation=consolidation
@@ -278,7 +284,31 @@ def build_report(
     registry.register_all(build_entries(ms, stmt.provenance))
 
     sections = compose_sections(ms, registry, consolidation=stmt.consolidation)
-    assembled = assemble(company, ms, sections, published_at=published_at or dt.datetime.now(dt.UTC).date())
+
+    narration = None
+    if llm is not None:
+        from arc.llm.narrate import narrate
+
+        basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
+        narration = narrate(
+            llm,
+            company_name=company.name,
+            fiscal_year=fiscal_year,
+            basis=basis,
+            registry=registry,
+        )
+        if narration.used_llm:
+            # 결정론 골격 위에 LLM 문장만 덮는다. 표·가정·디스클레이머는 그대로.
+            n = narration.sections
+            sections["summary"] = n["summary"]
+            sections["investment_points"] = n["investment_points"]
+            sections["earnings"]["narrative"] = (
+                n["earnings_narrative"] + " " + sections["earnings"]["narrative"]
+            )
+            sections["risks"] = list(n["risks"]) + list(sections["risks"])
+    assembled = assemble(
+        company, ms, sections, published_at=published_at or dt.datetime.now(dt.UTC).date()
+    )
 
     gate = G0Gate(registry).check(assembled)
     rendered = registry.render_text(assembled) if gate.passed else None
@@ -295,4 +325,5 @@ def build_report(
         gate=gate,
         rendered=rendered,
         bindings=bindings,
+        narration=narration,
     )
