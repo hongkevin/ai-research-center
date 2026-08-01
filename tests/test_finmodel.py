@@ -42,25 +42,28 @@ def stmt(items: list[FinancialLineItem], year: int = 2025) -> FinancialStatement
 
 def li(name, amount, prior=None, account_id=None, sj="IS"):
     return FinancialLineItem(
-        account_id=account_id, account_name=name,
-        amount=amount, prior_amount=prior, statement_type=sj,
+        account_id=account_id,
+        account_name=name,
+        amount=amount,
+        prior_amount=prior,
+        statement_type=sj,
     )
 
 
 # ── 계정과목 매핑 ────────────────────────────────────────────────────
 class TestAccountMapping:
     def test_by_account_id_preferred(self):
-        s = stmt([
-            li("아무거나", 100, 90, account_id="ifrs-full_Revenue"),
-            li("매출액", 999, 888),  # 이름 매칭 후보지만 id 매칭이 이긴다
-        ])
+        s = stmt(
+            [
+                li("아무거나", 100, 90, account_id="ifrs-full_Revenue"),
+                li("매출액", 999, 888),  # 이름 매칭 후보지만 id 매칭이 이긴다
+            ]
+        )
         m = extract_metrics(s)
         assert m.values["revenue"].current == 100
         assert m.values["revenue"].matched_by == "account_id"
 
-    @pytest.mark.parametrize(
-        "name", ["매출액", "수익(매출액)", "영업수익", "매출", "수익"]
-    )
+    @pytest.mark.parametrize("name", ["매출액", "수익(매출액)", "영업수익", "매출", "수익"])
     def test_revenue_name_variants(self, name):
         m = extract_metrics(stmt([li(name, 500, 400)]))
         assert m.values["revenue"].current == 500
@@ -71,9 +74,7 @@ class TestAccountMapping:
         m = extract_metrics(stmt([li(name, 50, 40)]))
         assert m.values["operating_income"].current == 50
 
-    @pytest.mark.parametrize(
-        "name", ["당기순이익", "당기순이익(손실)", "연결당기순이익"]
-    )
+    @pytest.mark.parametrize("name", ["당기순이익", "당기순이익(손실)", "연결당기순이익"])
     def test_net_income_variants(self, name):
         m = extract_metrics(stmt([li(name, 30, 20)]))
         assert m.values["net_income"].current == 30
@@ -83,10 +84,12 @@ class TestAccountMapping:
         assert m.values["operating_income"].current == 50
 
     def test_is_preferred_over_cis(self):
-        s = stmt([
-            li("매출액", 200, 180, sj="CIS"),
-            li("매출액", 100, 90, sj="IS"),
-        ])
+        s = stmt(
+            [
+                li("매출액", 200, 180, sj="CIS"),
+                li("매출액", 100, 90, sj="IS"),
+            ]
+        )
         assert extract_metrics(s).values["revenue"].current == 100
 
     def test_missing_metric_not_fabricated(self):
@@ -156,10 +159,12 @@ class TestFormat:
 # ── Registry 항목 생성 ───────────────────────────────────────────────
 class TestBuildEntries:
     def _entries(self):
-        s = stmt([
-            li("매출액", 1_000_000_000_000, 900_000_000_000),
-            li("영업이익", 100_000_000_000, 81_000_000_000),
-        ])
+        s = stmt(
+            [
+                li("매출액", 1_000_000_000_000, 900_000_000_000),
+                li("영업이익", 100_000_000_000, 81_000_000_000),
+            ]
+        )
         return {e.key: e for e in build_entries(extract_metrics(s), PROV)}
 
     def test_keys_follow_convention(self):
@@ -194,11 +199,13 @@ class TestBuildEntries:
         """build_entries 결과에 key 중복이 없어야 레지스트리에 그대로 넣을 수 있다."""
         from arc.llm.number_registry import NumberRegistry
 
-        s = stmt([
-            li("매출액", 1_000_000_000_000, 900_000_000_000),
-            li("영업이익", 100_000_000_000, 81_000_000_000),
-            li("당기순이익", 70_000_000_000, 60_000_000_000),
-        ])
+        s = stmt(
+            [
+                li("매출액", 1_000_000_000_000, 900_000_000_000),
+                li("영업이익", 100_000_000_000, 81_000_000_000),
+                li("당기순이익", 70_000_000_000, 60_000_000_000),
+            ]
+        )
         r = NumberRegistry()
         r.register_all(build_entries(extract_metrics(s), PROV))  # 중복이면 ValueError
         assert len(r) > 8

@@ -27,6 +27,14 @@ ACCOUNT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
         "account_ids": ("ifrs-full_Revenue", "ifrs_Revenue"),
         "names": ("매출액", "수익(매출액)", "영업수익", "매출", "수익"),
     },
+    "cost_of_sales": {
+        "account_ids": ("ifrs-full_CostOfSales",),
+        "names": ("매출원가", "영업비용"),
+    },
+    "gross_profit": {
+        "account_ids": ("ifrs-full_GrossProfit",),
+        "names": ("매출총이익", "매출총이익(손실)"),
+    },
     "operating_income": {
         "account_ids": ("dart_OperatingIncomeLoss", "ifrs-full_ProfitLossFromOperatingActivities"),
         "names": ("영업이익", "영업이익(손실)", "영업손실"),
@@ -42,9 +50,19 @@ _STATEMENT_PREFERENCE = ("IS", "CIS")
 
 _LABELS = {
     "revenue": "매출액",
+    "cost_of_sales": "매출원가",
+    "gross_profit": "매출총이익",
     "operating_income": "영업이익",
     "net_income": "당기순이익",
 }
+
+# 매출 대비 비율을 계산할 지표 → (키 접두사, 라벨)
+_MARGIN_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("gross_profit", "gross_margin", "매출총이익률"),
+    ("cost_of_sales", "cost_ratio", "원가율"),
+    ("operating_income", "operating_margin", "영업이익률"),
+    ("net_income", "net_margin", "순이익률"),
+)
 
 
 def _norm(s: str) -> str:
@@ -111,12 +129,15 @@ def extract_metrics(stmt: FinancialStatement) -> MetricSet:
 
 def _find(stmt: FinancialStatement, spec: dict[str, tuple[str, ...]]):
     """account_id 우선, account_name 폴백. 손익표(IS)를 CIS보다 우선한다."""
+
     def by_pref(items):
         return sorted(
             items,
-            key=lambda i: _STATEMENT_PREFERENCE.index(i.statement_type)
-            if i.statement_type in _STATEMENT_PREFERENCE
-            else len(_STATEMENT_PREFERENCE),
+            key=lambda i: (
+                _STATEMENT_PREFERENCE.index(i.statement_type)
+                if i.statement_type in _STATEMENT_PREFERENCE
+                else len(_STATEMENT_PREFERENCE)
+            ),
         )
 
     # 1단계: 표준계정 코드
@@ -185,14 +206,27 @@ def build_entries(ms: MetricSet, prov: Provenance) -> list[NumberEntry]:
     y = ms.fiscal_year
     out: list[NumberEntry] = []
 
-    def add(key: str, value, unit: str, display: str | None, label: str,
-            formula: str | None = None, inputs: list[str] | None = None) -> None:
+    def add(
+        key: str,
+        value,
+        unit: str,
+        display: str | None,
+        label: str,
+        formula: str | None = None,
+        inputs: list[str] | None = None,
+    ) -> None:
         if value is None or display is None:
             return
         out.append(
             NumberEntry(
-                key=key, value=value, unit=unit, display=display,
-                provenance=prov, label=label, formula=formula, inputs=inputs or [],
+                key=key,
+                value=value,
+                unit=unit,
+                display=display,
+                provenance=prov,
+                label=label,
+                formula=formula,
+                inputs=inputs or [],
             )
         )
 
@@ -205,34 +239,48 @@ def build_entries(ms: MetricSet, prov: Provenance) -> list[NumberEntry]:
     for key, mv in ms.values.items():
         v = yoy(mv.current, mv.prior)
         add(
-            f"{key}_yoy_{y}a", v, "%", fmt_pct(v), f"{mv.label} YoY ({y}A)",
+            f"{key}_yoy_{y}a",
+            v,
+            "%",
+            fmt_pct(v),
+            f"{mv.label} YoY ({y}A)",
             formula=f"({key}_{y}a - {key}_{y - 1}a) / |{key}_{y - 1}a|",
             inputs=[f"{key}_{y}a", f"{key}_{y - 1}a"],
         )
 
-    # 마진
+    # 매출 대비 비율 + 전년 대비 변화(pp)
     rev, rev_prior = ms.get("revenue"), ms.get_prior("revenue")
-    for key, label in (("operating_income", "영업이익률"), ("net_income", "순이익률")):
-        v = margin(ms.get(key), rev)
+    for src, ratio, label in _MARGIN_SPECS:
+        v = margin(ms.get(src), rev)
         add(
-            f"{key.split('_')[0]}_margin_{y}a", v, "%", fmt_pct(v), f"{label} ({y}A)",
-            formula=f"{key}_{y}a / revenue_{y}a",
-            inputs=[f"{key}_{y}a", f"revenue_{y}a"],
+            f"{ratio}_{y}a",
+            v,
+            "%",
+            fmt_pct(v),
+            f"{label} ({y}A)",
+            formula=f"{src}_{y}a / revenue_{y}a",
+            inputs=[f"{src}_{y}a", f"revenue_{y}a"],
         )
-        vp = margin(ms.get_prior(key), rev_prior)
+        vp = margin(ms.get_prior(src), rev_prior)
         add(
-            f"{key.split('_')[0]}_margin_{y - 1}a", vp, "%", fmt_pct(vp), f"{label} ({y - 1}A)",
-            formula=f"{key}_{y - 1}a / revenue_{y - 1}a",
-            inputs=[f"{key}_{y - 1}a", f"revenue_{y - 1}a"],
+            f"{ratio}_{y - 1}a",
+            vp,
+            "%",
+            fmt_pct(vp),
+            f"{label} ({y - 1}A)",
+            formula=f"{src}_{y - 1}a / revenue_{y - 1}a",
+            inputs=[f"{src}_{y - 1}a", f"revenue_{y - 1}a"],
         )
-        # 마진 변화 (pp)
         if v is not None and vp is not None:
             d = v - vp
             add(
-                f"{key.split('_')[0]}_margin_chg_{y}a", d, "pp", f"{d:+.1f}pp",
+                f"{ratio}_chg_{y}a",
+                d,
+                "pp",
+                f"{d:+.1f}pp",
                 f"{label} 변화 ({y - 1}A→{y}A)",
-                formula=f"{key.split('_')[0]}_margin_{y}a - {key.split('_')[0]}_margin_{y - 1}a",
-                inputs=[f"{key.split('_')[0]}_margin_{y}a", f"{key.split('_')[0]}_margin_{y - 1}a"],
+                formula=f"{ratio}_{y}a - {ratio}_{y - 1}a",
+                inputs=[f"{ratio}_{y}a", f"{ratio}_{y - 1}a"],
             )
 
     return out

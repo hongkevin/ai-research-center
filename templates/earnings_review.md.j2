@@ -1,10 +1,17 @@
-{#-
-  실적 리뷰 노트 템플릿 (ARCHITECTURE.md §6 — 8개 섹션).
-  - 본문 텍스트(summary, points[].body 등)는 S4 산출물로, Number Registry
-    치환이 끝난 상태로 주입된다. 이 템플릿은 조립만 담당한다.
-  - 단일 목표주가·투자의견 섹션은 존재하지 않는다 (§3 불변식 1).
--#}
-{#- 1. 헤더 — 기본정보 -#}
+{# 실적 리뷰 노트 템플릿 (ARCHITECTURE.md §6 — 8개 섹션).
+
+   - 본문 텍스트(summary, points[].body 등)는 S4 산출물이며 `{{num:key}}`
+     플레이스홀더를 포함한 상태로 주입된다. 이 템플릿은 조립만 담당한다.
+     치환은 G0 통과 후 NumberRegistry.render_text()가 수행한다.
+   - 단일 목표주가·투자의견 섹션은 존재하지 않는다 (§3 불변식 1, D4).
+
+   공백 규칙: 환경이 trim_blocks + lstrip_blocks이므로 주석 태그만으로는
+   흔적이 남지 않는다. 주석·블록 태그에 하이픈(공백 제거 표시)을 붙이면 앞
+   제목의 개행까지 먹어 "## 8. 디스클레이머1. 본 자료는…" 처럼 붙으니 쓰지 말 것.
+   블록 태그 뒤에는 개행이 사라지므로 빈 줄이 필요하면 명시한다.
+
+   주의: 이 주석 안에 Jinja 구분자를 문자 그대로 쓰면 렉서가 파싱을 시도해
+   TemplateSyntaxError가 난다. #}
 # {{ company.name }} ({{ company.symbol }}) — {{ report.period_label }} 실적 리뷰
 
 | 항목 | 내용 |
@@ -20,38 +27,47 @@
 {{ summary }}
 
 ## 3. 투자포인트
+
 {% for point in investment_points %}
 ### {{ loop.index }}. {{ point.title }}
 
 {{ point.body }}
+
 {% endfor %}
 ## 4. 실적 분석
 
-{#- 발표 실적 vs 전기(QoQ)·전년(YoY) 비교 테이블 -#}
-| 항목 | {{ earnings.period_label }} | 전기 대비(QoQ) | 전년 대비(YoY) |
+{# 당기 vs 전기 비교. 전기는 당기 공시의 비교표시 값이다 (재작성 반영). #}
+| 항목 | {{ earnings.period_label }} | 전기 | 증감률 |
 |---|---|---|---|
-{% for row in earnings.table -%}
-| {{ row.label }} | {{ row.current }} | {{ row.qoq }} | {{ row.yoy }} |
+{% for row in earnings.table %}
+| {{ row.label }} | {{ row.current }} | {{ row.prior }} | {{ row.yoy }} |
 {% endfor %}
+
 {{ earnings.narrative }}
 
 ## 5. 실적 추정
 
 **추정 가정** (모든 가정은 명시하고, 계산은 결정적 코드로 수행):
+
 {% for assumption in estimates.assumptions %}
 - {{ assumption }}
 {% endfor %}
+
+{# 전 보고서 대비 추정 변화 추적 — 핵심 차별화 (§6-5).
+   추정 행이 없으면 표 머리만 남아 깨지므로 조건부로 낸다. #}
+{% if estimates.table %}
 | 항목 | {{ estimates.period_label }} 추정 | 직전 보고서 추정 | 변화 |
 |---|---|---|---|
-{% for row in estimates.table -%}
+{% for row in estimates.table %}
 | {{ row.label }} | {{ row.current }} | {{ row.previous }} | {{ row.delta }} |
 {% endfor %}
-{#- 전 보고서 대비 추정 변화 추적 — 핵심 차별화 (§6-5) -#}
+
+{% endif %}
 {{ estimates.revision_narrative }}
 
 ## 6. 밸류에이션
 
-{#- 시나리오 3개 + 감도표 + 산식 전면 공개. 단일 목표주가 없음 (§3, D4) -#}
+{# 시나리오 3개 + 감도표 + 산식 전면 공개. 단일 목표주가 없음 (§3, D4). #}
 **산출 산식**: {{ valuation.formula }}
 
 | 시나리오 | 가정 | 적정가치 범위 |
@@ -67,12 +83,14 @@
 {{ valuation.narrative }}
 
 ## 7. 리스크 요인
+
 {% for risk in risks %}
 - {{ risk }}
 {% endfor %}
+
 ## 8. 디스클레이머
 
-{#- 3중 디스클레이머 — G0 게이트가 존재를 강제한다 (§3 불변식 3) -#}
+{# 3중 디스클레이머 — G0 게이트가 존재를 강제한다 (§3 불변식 3). #}
 1. 본 자료는 자본시장법상 조사분석자료가 아닙니다.
 2. 본 자료는 특정 금융투자상품의 매매를 권유하는 투자권유가 아니며, 투자 판단의 최종 책임은 투자자 본인에게 있습니다.
 3. 본 자료는 AI(인공지능)를 활용하여 생성되었으며, 사람의 검토를 거쳐 발간되었습니다. (AI 기본법 제31조에 따른 표시)

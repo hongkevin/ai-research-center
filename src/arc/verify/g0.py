@@ -36,7 +36,12 @@ from arc.llm.number_registry import NumberRegistry
 _BANNED_OPINION: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"목표\s?주가|목표가|적정\s?주가|Target\s?Price", re.IGNORECASE), "단일 목표주가"),
     (re.compile(r"투자\s?의견|투자\s?등급"), "투자의견"),
-    (re.compile(r"\b(Strong\s?Buy|Must\s?Buy|Buy|Sell|Hold|Overweight|Underweight)\b", re.IGNORECASE), "rating"),
+    (
+        re.compile(
+            r"\b(Strong\s?Buy|Must\s?Buy|Buy|Sell|Hold|Overweight|Underweight)\b", re.IGNORECASE
+        ),
+        "rating",
+    ),
     (re.compile(r"비중\s?(확대|축소)"), "rating"),
     (re.compile(r"상승\s?여력|하락\s?여력|upside|downside", re.IGNORECASE), "기대수익률"),
 ]
@@ -64,7 +69,10 @@ _REQUIRED_SECTIONS: list[tuple[str, re.Pattern[str]]] = [
 # ── §3 불변식 3 — 3중 디스클레이머 ───────────────────────────────────
 _REQUIRED_DISCLAIMERS: list[tuple[str, re.Pattern[str]]] = [
     ("조사분석자료 아님", re.compile(r"조사\s?분석\s?자료가?\s?아닙니다|조사분석자료가?\s?아님")),
-    ("투자권유 아님", re.compile(r"투자\s?권유가?\s?아니며|투자\s?권유가?\s?아닙니다|투자\s?권유가?\s?아님")),
+    (
+        "투자권유 아님",
+        re.compile(r"투자\s?권유가?\s?아니며|투자\s?권유가?\s?아닙니다|투자\s?권유가?\s?아님"),
+    ),
     ("AI 생성물 표시", re.compile(r"AI\s?\(?인공지능\)?를?\s?활용|AI\s?생성|인공지능을?\s?활용")),
 ]
 
@@ -142,7 +150,9 @@ class G0Gate:
         out: list[GateViolation] = []
 
         # 디스클레이머 안의 "투자권유가 아니며" 는 정상 문구다. 해당 섹션은 제외한다.
-        body = re.split(r"^#{1,3}\s*\d*\.?\s*디스클레이머", report_markdown, maxsplit=1, flags=re.MULTILINE)[0]
+        body = re.split(
+            r"^#{1,3}\s*\d*\.?\s*디스클레이머", report_markdown, maxsplit=1, flags=re.MULTILINE
+        )[0]
 
         for rx, kind in _BANNED_OPINION:
             for m in rx.finditer(body):
@@ -169,14 +179,10 @@ class G0Gate:
         out: list[GateViolation] = []
         for name, rx in _REQUIRED_SECTIONS:
             if not rx.search(report_markdown):
-                out.append(
-                    GateViolation(rule="missing_section", detail=f"필수 섹션 누락: {name}")
-                )
+                out.append(GateViolation(rule="missing_section", detail=f"필수 섹션 누락: {name}"))
         for name, rx in _REQUIRED_DISCLAIMERS:
             if not rx.search(report_markdown):
                 out.append(
-                    GateViolation(
-                        rule="missing_disclaimer", detail=f"디스클레이머 누락: {name}"
-                    )
+                    GateViolation(rule="missing_disclaimer", detail=f"디스클레이머 누락: {name}")
                 )
         return out

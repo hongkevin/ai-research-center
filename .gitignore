@@ -36,3 +36,6 @@ dist/
 /data/
 .coverage
 .claude/settings.local.json
+
+# 생성된 초안 (검토 전)
+drafts/

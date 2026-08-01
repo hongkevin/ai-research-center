@@ -53,6 +53,11 @@ _WHITELIST: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\(\d{6}\)"), "종목코드"),
     # 추정·실적 표기: "2026E", "2025A" (E=estimate, A=actual)
     (re.compile(r"\d{4}\s?[EAea](?![0-9])"), "추정·실적 연도 표기"),
+    # ISO 날짜·타임스탬프 (작성일·조회시각 등 메타데이터. 재무 주장이 아니다)
+    (
+        re.compile(r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:[+-]\d{2}:\d{2}|Z)?)?"),
+        "ISO 날짜·시각",
+    ),
 ]
 
 # ── 재무 크기를 나타내는 숫자 = 반드시 잡아야 함 (high) ───────────────
@@ -165,6 +170,7 @@ class NumberRegistry:
 
         미등록 key는 치환하지 않고 그대로 둔다 — G0가 잡는다.
         """
+
         def sub(m: re.Match[str]) -> str:
             key = m.group(1)
             entry = self._entries.get(key)

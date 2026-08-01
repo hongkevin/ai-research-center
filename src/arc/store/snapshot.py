@@ -81,19 +81,13 @@ class SnapshotStore:
         """
         if as_of is not None and as_of.tzinfo is None:
             as_of = as_of.replace(tzinfo=dt.UTC)
-        candidates = [
-            ts
-            for ts in self.list_snapshots(dataset)
-            if as_of is None or ts <= as_of
-        ]
+        candidates = [ts for ts in self.list_snapshots(dataset) if as_of is None or ts <= as_of]
         if not candidates:
             return []
         target = max(candidates)
         path = self.base_dir / dataset / f"{_SNAPSHOT_PREFIX}{target.strftime(_TS_FORMAT)}.parquet"
         with duckdb.connect() as con:
-            table = con.execute(
-                "SELECT * FROM read_parquet(?)", [str(path)]
-            ).fetch_arrow_table()
+            table = con.execute("SELECT * FROM read_parquet(?)", [str(path)]).fetch_arrow_table()
         return table.to_pylist()
 
     def query(self, sql: str, params: list | None = None) -> list[dict]:

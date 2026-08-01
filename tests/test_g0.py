@@ -21,14 +21,22 @@ def gate() -> G0Gate:
     r = NumberRegistry()
     r.register_all(
         [
-            NumberEntry(key="rev_2025a", value=3_009_100, unit="억원",
-                        display="300조 9,100억원", provenance=PROV),
-            NumberEntry(key="rev_yoy_2025a", value=12.3, unit="%",
-                        display="12.3%", provenance=PROV),
-            NumberEntry(key="fair_low", value=52_000, unit="원",
-                        display="52,000원", provenance=PROV),
-            NumberEntry(key="fair_high", value=68_000, unit="원",
-                        display="68,000원", provenance=PROV),
+            NumberEntry(
+                key="rev_2025a",
+                value=3_009_100,
+                unit="억원",
+                display="300조 9,100억원",
+                provenance=PROV,
+            ),
+            NumberEntry(
+                key="rev_yoy_2025a", value=12.3, unit="%", display="12.3%", provenance=PROV
+            ),
+            NumberEntry(
+                key="fair_low", value=52_000, unit="원", display="52,000원", provenance=PROV
+            ),
+            NumberEntry(
+                key="fair_high", value=68_000, unit="원", display="68,000원", provenance=PROV
+            ),
         ]
     )
     return G0Gate(r)
@@ -81,7 +89,9 @@ class TestValidReport:
 
 class TestNumbers:
     def test_unregistered_literal_blocks(self):
-        bad = VALID_REPORT.replace("전년 대비 {{num:rev_yoy_2025a}} 성장", "전년 대비 약 12.3% 성장")
+        bad = VALID_REPORT.replace(
+            "전년 대비 {{num:rev_yoy_2025a}} 성장", "전년 대비 약 12.3% 성장"
+        )
         r = gate().check(bad)
         assert not r.passed
         assert any(v.rule == "unregistered_number" for v in r.violations)
