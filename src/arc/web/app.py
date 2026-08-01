@@ -23,6 +23,8 @@ import json
 import logging
 import os
 import re
+import threading
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -57,7 +59,28 @@ DRAFTS_DIR = REPO_ROOT / "drafts"
 
 log = logging.getLogger("arc.web")
 
-app = FastAPI(title="AI Research Center", docs_url="/api/docs")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """시작할 때 corpCode를 **백그라운드로** 미리 받는다.
+
+    첫 요청이 1.5MB 다운로드를 뒤집어쓰면 그 사람만 유독 느리다. 시작을
+    붙들지 않는 이유는 헬스체크 때문이다 — 기다리게 하면 플랫폼이 배포를
+    실패로 본다.
+    """
+
+    def warm() -> None:
+        try:
+            _shared_provider()
+            log.info("corpCode 캐시 준비 완료")
+        except Exception as exc:  # noqa: BLE001 — 실패해도 첫 요청이 다시 시도한다
+            log.warning("corpCode 캐시 준비 실패: %s", exc)
+
+    threading.Thread(target=warm, daemon=True, name="arc-warm").start()
+    yield
+
+
+app = FastAPI(title="AI Research Center", docs_url="/api/docs", lifespan=_lifespan)
 # 공개 주소에 올릴 때 서버의 LLM 키가 무방비가 되면 안 된다 (auth.py 참조)
 app.add_middleware(BasicAuthMiddleware)
 LLM_BUDGET = LLMBudget()
@@ -97,17 +120,33 @@ class ViewModel:
     error: str = ""
 
 
-# corpCode.xml은 1.5MB zip이라 요청마다 받으면 검색이 못 쓸 만큼 느려진다.
-# 프로세스 수명 동안 하나만 둔다.
-_SEARCH_PROVIDER: DartProvider | None = None
+# corpCode.xml은 1.5MB zip이고 파싱까지 하면 무겁다. **프로세스 수명 동안
+# 하나만 둔다** — 검색뿐 아니라 생성도 같은 인스턴스를 쓴다.
+#
+# 요청마다 DartProvider()를 새로 만들면 종목코드→corp_code를 찾으려고 매번
+# 1.5MB를 다시 받는다. 로컬(한국)에서는 1초라 안 보이지만 배포 리전이 멀면
+# 그대로 드러난다 — 실측: Railway에서 회사 정보 조회 한 단계에 8.9초.
+_PROVIDER: DartProvider | None = None
+_PROVIDER_LOCK = threading.Lock()
+
+
+def _shared_provider() -> DartProvider:
+    """생성·검색이 함께 쓰는 DART 클라이언트.
+
+    작업이 백그라운드 스레드에서 도니 락으로 초기화를 한 번만 보장한다.
+    `DartProvider` 자체는 조회만 하므로 스레드 간 공유해도 안전하다.
+    """
+    global _PROVIDER
+    with _PROVIDER_LOCK:
+        if _PROVIDER is None:
+            provider = DartProvider()
+            provider.load_corp_codes()
+            _PROVIDER = provider
+    return _PROVIDER
 
 
 def _search_provider() -> DartProvider:
-    global _SEARCH_PROVIDER
-    if _SEARCH_PROVIDER is None:
-        _SEARCH_PROVIDER = DartProvider()
-        _SEARCH_PROVIDER.load_corp_codes()
-    return _SEARCH_PROVIDER
+    return _shared_provider()
 
 
 def _to_view(r: ReportResult) -> ViewModel:
@@ -205,7 +244,7 @@ def _generate(
     저장되고 다음 발간의 revision 기준이 된다. 생성할 때마다 저장하면
     가정을 만지작거린 흔적이 전부 "직전 추정"이 되어 이력이 무의미해진다.
     """
-    provider = DartProvider()
+    provider = _shared_provider()
     client = None
     budget_exhausted = False
     if use_llm:

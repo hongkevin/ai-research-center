@@ -399,3 +399,41 @@ class TestStoreResilience:
         monkeypatch.setattr(web, "STORE_DIR", tmp_path / "store")
         web._store_status()
         assert not list((tmp_path / "store").glob(".write-probe"))
+
+
+class TestProviderSharing:
+    """요청마다 DartProvider를 새로 만들면 corpCode.xml(1.5MB)을 매번 다시 받는다.
+
+    로컬(한국)에서는 1초라 안 보이지만 배포 리전이 멀면 그대로 드러난다 —
+    실측: Railway에서 '회사 정보 조회' 한 단계에 8.9초가 걸렸다.
+    """
+
+    def test_same_instance_reused(self, monkeypatch):
+        import arc.web.app as web
+
+        created = []
+
+        class _Fake:
+            def __init__(self):
+                created.append(self)
+
+            def load_corp_codes(self):
+                return {}
+
+        monkeypatch.setattr(web, "_PROVIDER", None)
+        monkeypatch.setattr(web, "DartProvider", _Fake)
+        a, b = web._shared_provider(), web._shared_provider()
+        assert a is b
+        assert len(created) == 1
+
+    def test_search_uses_the_same_instance(self, monkeypatch):
+        """검색과 생성이 캐시를 나눠 가지면 절반은 여전히 다시 받는다."""
+        import arc.web.app as web
+
+        class _Fake:
+            def load_corp_codes(self):
+                return {}
+
+        monkeypatch.setattr(web, "_PROVIDER", None)
+        monkeypatch.setattr(web, "DartProvider", _Fake)
+        assert web._search_provider() is web._shared_provider()
