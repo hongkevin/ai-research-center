@@ -26,17 +26,30 @@ def reg() -> NumberRegistry:
     r.register_all(
         [
             NumberEntry(
-                key="rev_2025a", value=3_009_100, unit="억원",
-                display="300조 9,100억원", provenance=PROV, label="매출액 (2025A)",
+                key="rev_2025a",
+                value=3_009_100,
+                unit="억원",
+                display="300조 9,100억원",
+                provenance=PROV,
+                label="매출액 (2025A)",
             ),
             NumberEntry(
-                key="rev_yoy_2025a", value=12.3, unit="%",
-                display="12.3%", provenance=PROV, label="매출 YoY (2025A)",
-                formula="(rev_2025a - rev_2024a) / rev_2024a", inputs=["rev_2025a", "rev_2024a"],
+                key="rev_yoy_2025a",
+                value=12.3,
+                unit="%",
+                display="12.3%",
+                provenance=PROV,
+                label="매출 YoY (2025A)",
+                formula="(rev_2025a - rev_2024a) / rev_2024a",
+                inputs=["rev_2025a", "rev_2024a"],
             ),
             NumberEntry(
-                key="op_margin_2025a", value=8.7, unit="%",
-                display="8.7%", provenance=PROV, label="영업이익률 (2025A)",
+                key="op_margin_2025a",
+                value=8.7,
+                unit="%",
+                display="8.7%",
+                provenance=PROV,
+                label="영업이익률 (2025A)",
                 formula="op_2025a / rev_2025a",
             ),
         ]

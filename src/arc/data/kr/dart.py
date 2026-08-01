@@ -264,9 +264,7 @@ class DartProvider(DataProvider):
                 retrieved_at=retrieved_at,
                 source_ref=rcept_no,
                 source_url=(
-                    f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-                    if rcept_no
-                    else None
+                    f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}" if rcept_no else None
                 ),
             ),
         )
