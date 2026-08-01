@@ -19,11 +19,10 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
 from arc.data.base import Provenance
-from arc.data.kr.dart_document import Section, detect_unit_scale
+from arc.data.kr.dart_document import Section, cell_number, detect_unit_scale, norm_cell
 from arc.finmodel.metrics import MetricSet, fmt_krw, fmt_pct
 from arc.llm.number_registry import NumberEntry
 
@@ -40,24 +39,9 @@ _CHANNEL = ("내수", "수출", "내 수", "수 출", "국내", "해외")
 # 표 전체 합계 행
 _GRAND_TOTAL = ("합계", "총계", "합 계", "총 계")
 
-_NUM_RE = re.compile(r"^\(?-?[\d,]+(?:\.\d+)?\)?$")
-
-
-def _num(cell: str) -> float | None:
-    s = cell.strip().replace(" ", "")
-    if not s or not _NUM_RE.match(s):
-        return None
-    neg = s.startswith("(") and s.endswith(")")
-    s = s.strip("()").replace(",", "")
-    try:
-        v = float(s)
-    except ValueError:
-        return None
-    return -v if neg else v
-
-
-def _norm(s: str) -> str:
-    return s.replace(" ", "").strip()
+# 셀 파싱은 부문 매출·부문 손익이 같은 규칙을 써야 한다 → dart_document로 올렸다
+_num = cell_number
+_norm = norm_cell
 
 
 @dataclass(frozen=True)

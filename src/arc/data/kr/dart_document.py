@@ -49,6 +49,32 @@ def clean_cell(raw: str) -> str:
     return " ".join(text.split())
 
 
+_NUM_RE = re.compile(r"^\(?-?[\d,]+(?:\.\d+)?\)?$")
+
+
+def cell_number(cell: str) -> float | None:
+    """셀 → 숫자. 숫자만 있는 셀이 아니면 None.
+
+    회계 표기의 괄호는 **음수**다. `(1,234)`를 1,234로 읽으면 적자 부문이
+    흑자로 뒤집힌다.
+    """
+    s = cell.strip().replace(" ", "")
+    if not s or not _NUM_RE.match(s):
+        return None
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.strip("()").replace(",", "")
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return -v if neg else v
+
+
+def norm_cell(s: str) -> str:
+    """라벨 비교용 정규화 — 공백을 제거한다 (`소 계` == `소계`)."""
+    return s.replace(" ", "").strip()
+
+
 def extract_main_xml(payload: bytes) -> str:
     """`document.xml` 응답(ZIP) → 본문 XML 문자열.
 
@@ -121,18 +147,30 @@ class Section:
         return [expand_table(m.group(0)) for m in _TABLE_RE.finditer(self.body)]
 
 
-def find_section(text: str, *keywords: str, span: int = 40_000) -> Section | None:
-    """제목에 `keywords`가 모두 들어간 첫 섹션을 돌려준다.
+def find_sections(text: str, *keywords: str, span: int = 40_000) -> list[Section]:
+    """제목에 `keywords`가 모두 들어간 섹션을 **전부** 돌려준다.
 
     섹션 끝을 정확히 알 수 없어 다음 제목까지, 없으면 `span`만큼 자른다.
     표 파싱은 어차피 뒤에서 검증되므로 넉넉히 자르는 편이 안전하다.
+
+    복수형이 필요한 이유: 부문 주석의 제목이 회사마다 다르고(「부문별 보고」·
+    「부문별정보」·「영업부문」·「부문정보」) 같은 보고서에 **연결과 별도가 모두**
+    실린다. 어느 것이 맞는지는 제목으로 가릴 수 없고 검산이 가른다 —
+    후보를 다 넘기고 재무제표와 맞는 것을 고른다.
     """
     titles = [(m.start(), clean_cell(m.group(1))) for m in _TITLE_RE.finditer(text)]
+    out: list[Section] = []
     for i, (pos, title) in enumerate(titles):
         if all(k in title for k in keywords):
             end = titles[i + 1][0] if i + 1 < len(titles) else pos + span
-            return Section(title=title, start=pos, body=text[pos : min(end, pos + span)])
-    return None
+            out.append(Section(title=title, start=pos, body=text[pos : min(end, pos + span)]))
+    return out
+
+
+def find_section(text: str, *keywords: str, span: int = 40_000) -> Section | None:
+    """제목에 `keywords`가 모두 들어간 **첫** 섹션."""
+    found = find_sections(text, *keywords, span=span)
+    return found[0] if found else None
 
 
 # 표 위 캡션의 단위 표기 — 금액 스케일을 여기서 읽는다
