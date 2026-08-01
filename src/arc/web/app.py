@@ -31,6 +31,7 @@ from fastapi.templating import Jinja2Templates
 
 from arc.data.kr.dart import DartProvider
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
+from arc.render.charts import Slice, legend, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.snapshot import SnapshotStore
 
@@ -68,6 +69,11 @@ class ViewModel:
     assumptions: list[dict] = field(default_factory=list)
     revisions: list[dict] = field(default_factory=list)
     estimate_warnings: list[str] = field(default_factory=list)
+    segment_chart: str = ""  # 인라인 SVG
+    segment_legend: str = ""
+    trend_chart: str = ""
+    trend_legend: str = ""
+    industry_context: bool = False  # 미검증 레인이 있었는가
     llm_used: bool = False
     llm_model: str = ""
     llm_cost: float | None = None
@@ -131,6 +137,33 @@ def _to_view(r: ReportResult) -> ViewModel:
         }
         for x in r.revisions
     ]
+
+    seg = r.segments
+    if seg is not None and seg.usable and len(seg.lines) > 1:
+        ordered = sorted(seg.lines, key=lambda x: -x.amount)
+        names = [x.name for x in ordered]
+        shares = [
+            Slice(
+                label=x.name, share=x.share if x.share is not None else x.amount / seg.total * 100
+            )
+            for x in ordered
+        ]
+        v.segment_chart = segment_bar(shares)
+        v.segment_legend = legend(names)
+
+    ms = r.metrics
+    years = [str(ms.fiscal_year - 2), str(ms.fiscal_year - 1), str(ms.fiscal_year)]
+    trend = []
+    for key, label in (("revenue", "매출액"), ("operating_income", "영업이익")):
+        mv = ms.values.get(key)
+        if mv is None:
+            continue
+        vals = [float(mv.prior2 or 0), float(mv.prior or 0), float(mv.current or 0)]
+        if any(vals):
+            trend.append((label, vals))
+    if trend:
+        v.trend_chart = trend_bars(years, trend)
+        v.trend_legend = legend([n for n, _ in trend])
 
     n = r.narration
     if n is not None:

@@ -138,6 +138,24 @@
   .rev { display: flex; justify-content: space-between; font-size: 12.5px; padding: 4px 0; }
   .rev .up { color: var(--ok); } .rev .down { color: var(--bad); }
   .empty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+
+  /* ── 차트 ── */
+  .chart { margin: 14px 0 4px; color: var(--text); }
+  .chart svg { display: block; }
+
+  /* ── 미검증 레인: 시각적으로 확실히 갈라야 한다 ── */
+  .note blockquote {
+    margin: 10px 0; padding: 10px 14px; border-left: 3px solid var(--warn);
+    background: color-mix(in srgb, var(--warn) 9%, transparent);
+    border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
+  }
+  .note blockquote strong { color: var(--warn); }
+
+  /* ── 목차 ── */
+  .toc { font-size: 12.5px; line-height: 1.9; }
+  .toc a { display: block; color: var(--muted); text-decoration: none; }
+  .toc a:hover { color: var(--accent); }
+  .toc a.sub { padding-left: 12px; font-size: 12px; opacity: .8; }
   .err { background: color-mix(in srgb, var(--bad) 12%, transparent); border: 1px solid var(--bad);
          border-radius: 10px; padding: 14px; font-size: 13.5px; }
 </style>
@@ -212,7 +230,20 @@
     {% if vm and vm.error %}
       <div class="err"><b>생성 실패</b><br>{{ vm.error }}</div>
     {% elif vm and vm.gate_passed %}
-      <div class="note">{{ vm.body_html | safe }}</div>
+      {% if vm.segment_chart or vm.trend_chart %}
+        <div class="note" style="margin-bottom:12px">
+          {% if vm.segment_chart %}
+            <h2 style="margin-top:0;border:0;padding:0">부문 구성</h2>
+            <div class="chart">{{ vm.segment_chart | safe }}{{ vm.segment_legend | safe }}</div>
+          {% endif %}
+          {% if vm.trend_chart %}
+            <h2>3개년 추이</h2>
+            <div class="chart">{{ vm.trend_chart | safe }}{{ vm.trend_legend | safe }}</div>
+            <div class="hint">정확한 수치는 아래 표에 있습니다. 차트는 크기 비교용입니다.</div>
+          {% endif %}
+        </div>
+      {% endif %}
+      <div class="note" id="note">{{ vm.body_html | safe }}</div>
     {% elif vm %}
       <div class="err">
         <b>G0 게이트 차단 — 발간할 수 없습니다.</b><br>
@@ -230,6 +261,10 @@
 
   {# ── 오른쪽: 근거 ── #}
   <div class="col col--right">
+    {% if vm and vm.gate_passed %}
+      <h2 class="sec">목차</h2>
+      <div class="card"><nav class="toc" id="toc"></nav></div>
+    {% endif %}
     {% if vm and not vm.error %}
       <h2 class="sec">발간 게이트</h2>
       <div class="card">
@@ -296,6 +331,28 @@
 <div id="pop"></div>
 
 <script>
+// 목차 — 노트의 제목에서 만든다. 서버가 섹션 목록을 따로 들고 있으면
+// 템플릿과 어긋날 수 있어, 렌더된 결과에서 뽑는 편이 안전하다.
+(function () {
+  const note = document.getElementById('note');
+  const toc = document.getElementById('toc');
+  if (!note || !toc) return;
+  const heads = note.querySelectorAll('h2, h3');
+  heads.forEach((h, i) => {
+    const id = 'sec-' + i;
+    h.id = id;
+    const a = document.createElement('a');
+    a.href = '#' + id;
+    a.textContent = h.textContent;
+    if (h.tagName === 'H3') a.className = 'sub';
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    toc.appendChild(a);
+  });
+})();
+
 // 회사명 검색 — 종목코드를 외우지 않아도 되게 한다.
 // corpCode.xml(전 상장사)을 서버가 캐시하므로 외부 검색 API가 필요 없다.
 (function () {
