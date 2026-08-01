@@ -22,9 +22,49 @@
 | 주가 ({{ header.price_date }}) | {{ header.close_price }} |
 | 작성일 | {{ report.published_at }} |
 
-## 2. 요약
+## 1. 요약
 
 {{ summary }}
+
+## 2. 사업 이해
+
+{# 이 노트가 재무 기계학에서 벗어나는 자리. 원문 조회가 실패해도 섹션은
+   남기고 그 사실을 적는다 — 통째로 사라지면 "사업 설명이 없는 회사"로 읽힌다. #}
+{% if business.note %}
+{{ business.note }}
+{% else %}
+### 2.1 사업 구조
+
+{{ business_narrative }}
+{% if business.signals %}
+
+공시에서 확인되는 축: {{ business.signals | join(' · ') }}.
+{% endif %}
+{% endif %}
+
+{% if business.segment_table %}
+### 2.2 부문 구성
+
+| 부문 | {{ earnings.period_label }} | 비중 | 증감률 |
+|---|---|---|---|
+{% for row in business.segment_table %}
+| {{ row.label }} | {{ row.amount }} | {{ row.share }} | {{ row.yoy }} |
+{% endfor %}
+
+{% endif %}
+{% if business.ownership or business.affiliates %}
+### 2.3 지배구조와 자회사
+
+{{ business.ownership }}
+{% if business.affiliates %}
+
+| 경영참여 출자처 | 목적 | 지분율 |
+|---|---|---|
+{% for a in business.affiliates %}
+| {{ a.name }} | {{ a.purpose }} | {{ a.stake }} |
+{% endfor %}
+{% endif %}
+{% endif %}
 
 ## 3. 투자포인트
 
@@ -43,17 +83,6 @@
 | {{ row.label }} | {{ row.current }} | {{ row.prior }} | {{ row.yoy }} |
 {% endfor %}
 
-{% if earnings.segment_table %}
-{# 합계가 손익계산서 매출액과 일치할 때만 표시된다 (segments.py) #}
-**부문별 매출**
-
-| 부문 | {{ earnings.period_label }} | 비중 |
-|---|---|---|
-{% for row in earnings.segment_table %}
-| {{ row.label }} | {{ row.amount }} | {{ row.share }} |
-{% endfor %}
-
-{% endif %}
 {{ earnings.narrative }}
 
 ## 5. 실적 추정

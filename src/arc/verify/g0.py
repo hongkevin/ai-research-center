@@ -58,6 +58,9 @@ _BANNED_ASSERTION: list[tuple[re.Pattern[str], str]] = [
 # ── §6 필수 섹션 (템플릿 8개) ────────────────────────────────────────
 _REQUIRED_SECTIONS: list[tuple[str, re.Pattern[str]]] = [
     ("요약", re.compile(r"^#{1,3}\s*\d*\.?\s*요약", re.MULTILINE)),
+    # 사업 이해 — 원문 조회가 실패해도 섹션 자체는 렌더된다(내용에 사유를 적는다).
+    # 필수로 두는 이유: 회사가 무엇을 하는지 없는 리포트는 종목 리포트가 아니다.
+    ("사업 이해", re.compile(r"^#{1,3}\s*[\d.]*\s*사업\s?이해", re.MULTILINE)),
     ("투자포인트", re.compile(r"^#{1,3}\s*\d*\.?\s*투자\s?포인트", re.MULTILINE)),
     ("실적 분석", re.compile(r"^#{1,3}\s*\d*\.?\s*실적\s?분석", re.MULTILINE)),
     ("실적 추정", re.compile(r"^#{1,3}\s*\d*\.?\s*실적\s?추정", re.MULTILINE)),

@@ -28,8 +28,14 @@ from arc.data.base import (
     PeriodType,
 )
 from arc.data.kr.dart import DartProvider
-from arc.data.kr.dart_document import fetch_section
+from arc.data.kr.dart_document import fetch_document, find_section
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
+from arc.finmodel.business import (
+    BusinessProfile,
+    build_business_entries,
+    build_business_observations,
+    build_business_profile,
+)
 from arc.finmodel.estimates import (
     ESTIMATE_DATASET,
     EstimateSet,
@@ -89,6 +95,7 @@ class ReportResult:
     estimates: EstimateSet | None = None
     revisions: list[Revision] = field(default_factory=list)
     segments: SegmentBreakdown | None = None
+    business: BusinessProfile | None = None
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
 
     @property
@@ -111,6 +118,7 @@ def compose_sections(
     estimates: EstimateSet | None = None,
     revisions: list[Revision] | None = None,
     segments: SegmentBreakdown | None = None,
+    business: BusinessProfile | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
 
@@ -223,6 +231,14 @@ def compose_sections(
             "narrative": narrative,
         },
         "estimates": _estimates_section(y, p, estimates, revisions or []),
+        "business": _business_section(y, p, business, segments, info),
+        # LLM이 있으면 덮어쓴다. 없으면 원문을 그대로 싣지 않고 사실만 남긴다 —
+        # 공시 문체가 리포트에 섞이면 장르가 깨진다.
+        "business_narrative": (
+            "회사가 공시한 사업 서술을 확인했다. 서술 요약은 LLM 서술 레이어가 담당한다."
+            if business is not None and business.usable
+            else "사업 서술을 확인하지 못했다."
+        ),
         "valuation": _valuation_section(y, p, valuation, estimates),
         "risks": _risk_lines(valuation, info)
         or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."],
@@ -323,6 +339,78 @@ def _segment_rows(y: int, p, seg: SegmentBreakdown | None) -> list[dict[str, str
                 "share": p(f"segment{i + 1}_share_{y}a") or "—",
             }
         )
+    return out
+
+
+def _business_section(
+    y: int,
+    p,
+    profile: BusinessProfile | None,
+    seg: SegmentBreakdown | None,
+    info: PeriodicReportInfo | None,
+) -> dict[str, object]:
+    """「사업 이해」 섹션 — 이 노트가 재무 기계학에서 벗어나는 자리.
+
+    **항상 렌더한다.** 원문 조회가 실패해도 섹션은 남기고 그 사실을 적는다.
+    섹션이 통째로 사라지면 독자는 "이 회사는 사업 설명이 없구나"로 읽는다.
+    """
+    out: dict[str, object] = {
+        "overview": "",
+        "signals": [],
+        "segment_table": [],
+        "ownership": "",
+        "affiliates": [],
+        "note": "",
+    }
+
+    if profile is not None and profile.usable:
+        # 원문을 그대로 싣지 않는다 — 공시 문체가 리포트에 섞이면 장르가 깨진다.
+        # LLM이 논지로 받아 다시 쓰고, 여기에는 확인된 축만 남긴다.
+        out["signals"] = profile.signals
+    elif profile is not None:
+        out["note"] = profile.note
+    else:
+        out["note"] = "사업보고서 원문을 조회하지 못해 사업 구조를 확인하지 못했다."
+
+    if seg is not None and seg.usable:
+        rows = []
+        for i, line in enumerate(seg.lines):
+            amount = p(f"segment{i + 1}_revenue_{y}a")
+            if amount is None:
+                continue
+            rows.append(
+                {
+                    "label": line.name,
+                    "amount": amount,
+                    "share": p(f"segment{i + 1}_share_{y}a") or "—",
+                    "yoy": p(f"segment{i + 1}_yoy_{y}a") or "—",
+                }
+            )
+        out["segment_table"] = rows
+
+    own = info.ownership if info else None
+    if own is not None and own.principal:
+        stake = p(f"owner_stake_{y}a")
+        total = p(f"owner_total_stake_{y}a")
+        bits = [f"최대주주는 {own.principal}이다."]
+        if stake and total:
+            bits.append(f"본인 지분은 {stake}, 특수관계인을 포함하면 {total}이다.")
+        if own.is_owner_controlled:
+            bits.append("지배주주가 의사결정을 좌우할 수 있는 수준이다.")
+        out["ownership"] = " ".join(bits)
+
+    aff = info.affiliates if info else None
+    if aff is not None:
+        rows = []
+        for i, e in enumerate(x for x in aff.top(5) if x.is_operating):
+            rows.append(
+                {
+                    "name": e.name,
+                    "purpose": e.purpose,
+                    "stake": p(f"affiliate{i + 1}_stake_{y}a") or "—",
+                }
+            )
+        out["affiliates"] = rows
     return out
 
 
@@ -673,16 +761,37 @@ def build_report(
             valuation = build_valuation(ms, info)
             registry.register_all(build_valuation_entries(valuation, info, stmt.provenance))
 
-    # 부문별 매출 — 사업보고서 **원문**에서 뽑고 매출액으로 검산한다.
-    # 원문이 5~8MB라 느리고, 실패해도 노트 생성을 막지 않는다.
+    # 사업보고서 **원문** — 한 번만 받아 여러 섹션에 쓴다 (5~8MB).
+    # 실패해도 노트 생성을 막지 않는다.
     segments: SegmentBreakdown | None = None
+    business: BusinessProfile | None = None
     if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
-        section, doc_error = fetch_section(provider, stmt.rcept_no, "매출")
+        text, doc_error = fetch_document(provider, stmt.rcept_no)
         if doc_error and info_error is None:
             info_error = doc_error
-        segments = build_segments(section, ms, stmt.rcept_no)
-        if segments.usable:
+
+        if text:
+            # 「2. 주요 제품 및 서비스」를 먼저 본다 — 「4. 매출 및 수주상황」보다
+            # 표가 단순하고(내수/수출 중첩 없음) 3개년이 나란히 있다.
+            for keyword in ("주요 제품", "매출"):
+                candidate = build_segments(find_section(text, keyword), ms, stmt.rcept_no)
+                if candidate.usable:
+                    segments = candidate
+                    break
+                segments = segments or candidate
+
+            business = build_business_profile(
+                find_section(text, "사업의 개요"),
+                fiscal_year,
+                ownership=info.ownership if info else None,
+                affiliates=info.affiliates if info else None,
+                total_assets=ms.get("total_assets"),
+            )
+
+        if segments is not None and segments.usable:
             registry.register_all(build_segment_entries(segments, stmt.provenance))
+        if business is not None:
+            registry.register_all(build_business_entries(business, stmt.provenance))
 
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
     estimates = build_estimates(ms, assumptions)
@@ -706,6 +815,7 @@ def build_report(
         estimates=estimates,
         revisions=revisions,
         segments=segments,
+        business=business,
     )
 
     narration = None
@@ -717,6 +827,8 @@ def build_report(
         if valuation is not None and info is not None:
             obs += build_valuation_observations(valuation, info)
         obs += build_estimate_observations(estimates, revisions)
+        if business is not None:
+            obs += build_business_observations(business)
         if segments is not None:
             obs += build_segment_observations(segments)
         narration = narrate(
@@ -737,6 +849,8 @@ def build_report(
             )
             sections["risks"] = merge_risks(list(n["risks"]), valuation, info)
             sections["watchpoints"] = list(n.get("watchpoints") or [])
+            if n.get("business_narrative"):
+                sections["business_narrative"] = n["business_narrative"]
     assembled = assemble(
         company,
         ms,
@@ -762,6 +876,7 @@ def build_report(
         bindings=bindings,
         narration=narration,
         segments=segments,
+        business=business,
         report_info=info,
         valuation=valuation,
         info_error=info_error,

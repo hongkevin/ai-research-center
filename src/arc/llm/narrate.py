@@ -90,6 +90,7 @@ SYSTEM_PROMPT = """\
 아래 JSON만 출력하십시오. 코드펜스나 설명을 덧붙이지 마십시오.
 
 {
+  "business_narrative": "이 회사가 무엇을 파는 회사인지 3~5문장",
   "summary": "요약 3~5문장",
   "investment_points": [
     {"title": "제목", "body": "본문 3~5문장"}
@@ -100,6 +101,12 @@ SYSTEM_PROMPT = """\
 }
 
 investment_points는 2~3개, risks는 2~4개, watchpoints는 2~3개.
+
+`business_narrative`는 「확인된 관찰」에 실린 **회사의 사업 서술**을 리서치
+문체로 다시 쓴 것입니다. 공시 문체("당사는 ~하고 있습니다")를 그대로 옮기지
+말고, 무엇을 만들어 누구에게 파는지가 드러나게 씁니다. 관찰에 없는 산업
+정보·경쟁사·시장 규모를 지어내면 안 됩니다. 관찰에 사업 서술이 없으면
+빈 문자열로 두십시오.
 
 `risks`는 **회사의 리스크**입니다 — 자료의 한계나 방법론을 쓰지 마십시오.
 
@@ -166,6 +173,7 @@ def validate(payload: dict, registry: NumberRegistry) -> list[str]:
     """스키마 + 카탈로그 위반 확인. G0 앞단의 1차 방어선."""
     problems: list[str] = []
 
+    # business_narrative는 선택 — 원문 조회가 실패하면 만들 수 없다
     for key in ("summary", "investment_points", "earnings_narrative", "risks"):
         if key not in payload:
             problems.append(f"필드 누락: {key}")
@@ -235,6 +243,7 @@ def narrate(
                     "earnings_narrative": payload["earnings_narrative"],
                     "risks": payload["risks"],
                     "watchpoints": payload.get("watchpoints") or [],
+                    "business_narrative": payload.get("business_narrative") or "",
                 },
                 used_llm=True,
                 attempts=attempt,

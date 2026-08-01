@@ -62,11 +62,20 @@ def _norm(s: str) -> str:
 
 @dataclass(frozen=True)
 class SegmentLine:
-    """부문 1개의 매출."""
+    """부문 1개의 매출. 전기·전전기가 있으면 **부문별 성장률**이 나온다."""
 
     name: str
     amount: int  # 원 단위
     share: float | None  # 매출 비중 (%)
+    prior: int | None = None
+    prior2: int | None = None
+
+    @property
+    def yoy(self) -> float | None:
+        """전년 대비 증감률(%). 어느 부문이 성장을 주도했는지 가른다."""
+        if self.prior is None or self.prior == 0:
+            return None
+        return (self.amount - self.prior) / abs(self.prior) * 100.0
 
 
 @dataclass
@@ -182,9 +191,18 @@ def _is_subtotal_label(value: str) -> bool:
     return (not v) or v in {_norm(x) for x in _SUBTOTAL} or "소계" in v
 
 
+def _year_stride(label_width: int, share_col: int | None) -> int:
+    """연도 열 간격. 비율 열이 끼면 2칸, 아니면 1칸이다.
+
+    구분 | 금액 | 비율 | 금액 | 비율 | 금액 | 비율   → stride 2
+    사업부문 | 매출유형 | 품목 | 제26기 | 제25기 | 제24기 → stride 1
+    """
+    return 2 if share_col == label_width + 1 else 1
+
+
 def parse_segment_rows(
     grid: list[list[str]], *, subtotal_only: bool = False, level: int | None = None
-) -> list[tuple[str, float, float | None]]:
+) -> list[tuple[str, float, float | None, float | None, float | None]]:
     """격자 → (부문명, 금액, 비율) 목록. **첫 라벨 열 기준으로 합산한다.**
 
     셀트리온제약처럼 품목 단위로 잘게 쪼개진 표는 품목이 아니라 **사업부문**이
@@ -199,8 +217,11 @@ def parse_segment_rows(
     if label_width == 0:
         return []
 
+    stride = _year_stride(label_width, share_col)
     totals: dict[str, float] = {}
     shares: dict[str, float] = {}
+    priors: dict[str, float] = {}
+    priors2: dict[str, float] = {}
     order: list[str] = []
     for row in grid:
         if len(row) <= label_width:
@@ -245,8 +266,13 @@ def parse_segment_rows(
             sv = _num(row[share_col])
             if sv is not None:
                 shares[name] = shares.get(name, 0.0) + sv
+        for offset, bucket in ((stride, priors), (stride * 2, priors2)):
+            col = label_width + offset
+            pv = _num(row[col]) if col < len(row) else None
+            if pv is not None:
+                bucket[name] = bucket.get(name, 0.0) + pv
 
-    return [(n, totals[n], shares.get(n)) for n in order]
+    return [(n, totals[n], shares.get(n), priors.get(n), priors2.get(n)) for n in order]
 
 
 def build_segments(
@@ -275,10 +301,19 @@ def build_segments(
         candidates.extend((grid, lvl) for lvl in range(4))
     for grid, level in candidates:
         rows = parse_segment_rows(grid, level=level)
-        rows = [(n, a, s) for n, a, s in rows if n and a > 0]
+        rows = [r for r in rows if r[0] and r[1] > 0]
         if not rows:
             continue
-        lines = [SegmentLine(name=n, amount=round(a * scale), share=s) for n, a, s in rows]
+        lines = [
+            SegmentLine(
+                name=n,
+                amount=round(a * scale),
+                share=sh,
+                prior=round(p1 * scale) if p1 else None,
+                prior2=round(p2 * scale) if p2 else None,
+            )
+            for n, a, sh, p1, p2 in rows
+        ]
         total = sum(x.amount for x in lines)
         shares = [x.share for x in lines if x.share is not None]
         share_sum = sum(shares) if shares else None
@@ -339,6 +374,19 @@ def build_segment_entries(seg: SegmentBreakdown, prov: Provenance) -> list[Numbe
                 label=f"{line.name} 매출 ({y}A)",
             )
         )
+        if line.yoy is not None:
+            out.append(
+                NumberEntry(
+                    key=f"{base}_yoy_{y}a",
+                    value=line.yoy,
+                    unit="%",
+                    display=fmt_pct(line.yoy),
+                    provenance=prov,
+                    label=f"{line.name} 매출 YoY ({y}A)",
+                    formula=f"({line.name} 당기 - 전기) / |전기|",
+                    inputs=[f"{base}_revenue_{y}a"],
+                )
+            )
         share = line.share if line.share is not None else line.amount / (seg.total or 1) * 100
         out.append(
             NumberEntry(
@@ -387,6 +435,27 @@ def build_segment_observations(seg: SegmentBreakdown) -> list[str]:
             "매출액과 일치함을 확인했다."
         )
     ]
+    grown = [x for x in seg.lines if x.yoy is not None]
+    if grown:
+        fastest = max(grown, key=lambda x: x.yoy or 0)
+        slowest = min(grown, key=lambda x: x.yoy or 0)
+        # 성장을 **끌어올린** 부문은 성장률이 아니라 기여도로 가른다.
+        # 비중 1%짜리가 200% 늘어도 전사에는 거의 영향이 없다.
+        contrib = max(
+            grown,
+            key=lambda x: x.amount - (x.prior or 0),
+        )
+        obs.append(
+            f"부문별로 보면 {contrib.name}이 전사 매출 증가분의 가장 큰 몫을 차지했다. "
+            f"증가율만 놓고 보면 {fastest.name}이 가장 빨랐고 {slowest.name}이 가장 느렸다. "
+            "전사 지표만으로는 이 차이가 보이지 않는다."
+        )
+        if (slowest.yoy or 0) < 0 < (fastest.yoy or 0):
+            obs.append(
+                f"{slowest.name}은 역성장했다. 전사가 성장해도 축소되는 부문이 있으므로 "
+                "성장의 지속성은 부문별로 따로 봐야 한다."
+            )
+
     conc = seg.concentration
     if big is not None and conc is not None:
         if conc >= 60:
