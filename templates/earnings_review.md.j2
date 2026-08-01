@@ -22,6 +22,18 @@
 | 주가 ({{ header.price_date }}) | {{ header.close_price }} |
 | 작성일 | {{ report.published_at }} |
 
+{% if industry_context %}
+## 0. 산업 배경
+
+{# **미검증 레인.** 공시 밖 서술이라 출처로 되짚을 수 없다. 숫자가 하나라도
+   있으면 narrate_industry가 이 문단을 버리므로, 여기 도달한 문단에는
+   검증 불가능한 수치가 없다. #}
+> ⚠ **공시 밖 · AI 생성 · 검증 필요** — 이 문단은 사업보고서에 근거가 없습니다.
+> 다른 섹션과 달리 출처로 되짚을 수 없으므로 검토자가 직접 확인해야 합니다.
+
+{{ industry_context }}
+
+{% endif %}
 ## 1. 요약
 
 {{ summary }}
@@ -145,6 +157,9 @@
 {% for note in method_notes %}
 - {{ note }}
 {% endfor %}
+{% if industry_context %}
+- 「산업 배경」 섹션은 공시에 근거가 없는 AI 생성 서술입니다. 수치는 포함하지 않으며, 나머지 섹션과 달리 출처 추적이 불가능합니다.
+{% endif %}
 
 ## 10. 디스클레이머
 
