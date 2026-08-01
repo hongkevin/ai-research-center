@@ -287,5 +287,22 @@ def benchmark(
         typer.echo("\n원문 → bench_out/ (한국어 문장 품질은 직접 읽어 비교하십시오)")
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port", "-p"),
+    reload: bool = typer.Option(False, "--reload", help="개발 중 자동 재시작"),
+) -> None:
+    """웹 작업대를 띄운다 (실적 리뷰 노트 검토 화면)."""
+    try:
+        import uvicorn
+    except ImportError:  # pragma: no cover
+        typer.secho('웹 의존성이 없습니다: uv pip install -e ".[web]"', fg=typer.colors.RED)
+        raise typer.Exit(1) from None
+
+    typer.secho(f"\n  http://{host}:{port}  — Ctrl+C로 종료\n", fg=typer.colors.CYAN)
+    uvicorn.run("arc.web.app:app", host=host, port=port, reload=reload)
+
+
 if __name__ == "__main__":
     app()

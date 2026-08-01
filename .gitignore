@@ -42,3 +42,7 @@ drafts/
 
 # 벤치마크 산출물 (실행 결과, 코드 아님)
 bench_out/
+
+# 웹 실행 산출물
+.arc-store/
+drafts/

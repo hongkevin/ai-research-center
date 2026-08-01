@@ -1,0 +1,320 @@
+{# 실적 리뷰 노트 작업대 — 검토자가 발간 여부를 판단하는 화면.
+
+   구성 원칙: 왼쪽은 조작(입력·가정), 가운데는 결과(노트), 오른쪽은 근거(게이트·출처).
+   근거를 접어두지 않는 이유는, 이 제품이 파는 것이 "글"이 아니라 "검증된 글"이기 때문이다.
+#}
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if vm and vm.company %}{{ vm.company }} · {% endif %}AI Research Center</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --line: #2a2f3a;
+    --text: #e6e8ec; --muted: #9aa3b2; --accent: #5b9cff; --accent-dim: #24304a;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --est: #c084fc;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9; --panel: #fff; --panel-2: #f0f2f5; --line: #dde1e8;
+      --text: #16181d; --muted: #5c6675; --accent: #2563eb; --accent-dim: #dbe6ff;
+      --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --est: #7c3aed;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard",
+          "Malgun Gothic", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .layout { display: grid; grid-template-columns: 290px minmax(0,1fr) 340px; gap: 0; align-items: start; }
+  @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } }
+  .col { padding: 18px 20px; }
+  .col--left  { border-right: 1px solid var(--line); position: sticky; top: 49px; }
+  .col--right { border-left: 1px solid var(--line); position: sticky; top: 49px; max-height: calc(100vh - 49px); overflow-y: auto; }
+  @media (max-width: 1180px) { .col--left, .col--right { position: static; max-height: none; border: 0; border-top: 1px solid var(--line); } }
+
+  h2.sec { font-size: 11px; text-transform: uppercase; letter-spacing: .09em;
+           color: var(--muted); margin: 0 0 10px; font-weight: 650; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  input[type=text], input[type=number], textarea {
+    width: 100%; padding: 8px 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 7px; font: inherit; font-size: 14px;
+  }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; resize: vertical; }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; }
+  button {
+    width: 100%; margin-top: 16px; padding: 10px; border: 0; border-radius: 7px;
+    background: var(--accent); color: #fff; font: inherit; font-weight: 650; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.btn--publish { background: transparent; color: var(--text); border: 1px solid var(--line); margin-top: 8px; }
+  button.btn--publish:hover { border-color: var(--ok); color: var(--ok); filter: none; }
+  form.busy button { opacity: .55; pointer-events: none; }
+  form.busy .spin::after { content: " — 생성 중…"; color: var(--accent); }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+           border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge--ok  { background: color-mix(in srgb, var(--ok) 16%, transparent);  color: var(--ok); }
+  .badge--bad { background: color-mix(in srgb, var(--bad) 16%, transparent); color: var(--bad); }
+  .badge--warn{ background: color-mix(in srgb, var(--warn) 16%, transparent);color: var(--warn); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          padding: 12px 14px; margin-bottom: 12px; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 3px 0; }
+  .kv span:last-child { color: var(--muted); text-align: right; }
+
+  /* ── 노트 본문 ── */
+  .note { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 28px 34px; max-width: 860px; }
+  .note h1 { font-size: 22px; margin: 0 0 18px; letter-spacing: -0.02em; }
+  .note h2 { font-size: 16px; margin: 30px 0 10px; padding-top: 14px;
+             border-top: 1px solid var(--line); letter-spacing: -0.01em; }
+  .note h3 { font-size: 14.5px; margin: 18px 0 6px; color: var(--text); }
+  .note p, .note li { font-size: 14.5px; }
+  .note table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  .note th, .note td { border: 1px solid var(--line); padding: 7px 10px; text-align: right; }
+  .note th:first-child, .note td:first-child { text-align: left; }
+  .note th { background: var(--panel-2); font-weight: 600; color: var(--muted); }
+  .note ul { padding-left: 20px; }
+  .note strong { font-weight: 650; }
+
+  /* ── 수치 토큰: 이 제품의 핵심 ── */
+  .num {
+    background: var(--accent-dim); border-bottom: 1px dashed var(--accent);
+    padding: 0 3px; border-radius: 3px; cursor: help; white-space: nowrap;
+  }
+  .num:hover { background: var(--accent); color: #fff; }
+  .num--estimate { border-bottom-style: dotted; border-bottom-color: var(--est); }
+  .num--estimate:hover { background: var(--est); }
+
+  #pop {
+    position: fixed; z-index: 50; display: none; max-width: 380px;
+    background: var(--panel-2); border: 1px solid var(--accent); border-radius: 10px;
+    padding: 12px 14px; box-shadow: 0 12px 32px rgba(0,0,0,.35); font-size: 12.5px;
+  }
+  #pop .t { font-weight: 650; margin-bottom: 6px; font-size: 13.5px; }
+  #pop .r { display: grid; grid-template-columns: 62px 1fr; gap: 4px 10px; margin-top: 5px; }
+  #pop .r b { color: var(--muted); font-weight: 500; }
+  #pop code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; word-break: break-all; }
+  #pop a { color: var(--accent); }
+
+  .viol { font-size: 12.5px; padding: 7px 9px; border-radius: 7px;
+          background: color-mix(in srgb, var(--bad) 10%, transparent); margin-bottom: 6px; }
+  .viol b { color: var(--bad); }
+  .bind { font-size: 12px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .bind:last-child { border-bottom: 0; }
+  .bind .h { display: flex; justify-content: space-between; gap: 8px; }
+  .bind .h b { font-weight: 600; }
+  .bind .m { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .rev { display: flex; justify-content: space-between; font-size: 12.5px; padding: 4px 0; }
+  .rev .up { color: var(--ok); } .rev .down { color: var(--bad); }
+  .empty { color: var(--muted); font-size: 13px; padding: 40px 0; text-align: center; }
+  .err { background: color-mix(in srgb, var(--bad) 12%, transparent); border: 1px solid var(--bad);
+         border-radius: 10px; padding: 14px; font-size: 13.5px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI Research Center</h1>
+  <span class="sub">코스닥 미커버 종목 실적 리뷰 노트 · 사람이 검토 후 발간</span>
+  {% if vm and vm.company %}
+    <span class="sub">— {{ vm.company }} ({{ vm.symbol }}) · {{ vm.market }} · FY{{ vm.year }} · {{ vm.basis }}재무제표</span>
+  {% endif %}
+</header>
+
+<div class="layout">
+
+  {# ── 왼쪽: 조작 ── #}
+  <div class="col col--left">
+    <form method="post">
+      <h2 class="sec spin">생성</h2>
+      <label for="symbol">종목코드</label>
+      <input id="symbol" name="symbol" type="text" value="{{ symbol }}" placeholder="214450" required>
+      <label for="year">사업연도</label>
+      <input id="year" name="year" type="number" value="{{ year }}" min="2015" max="2030">
+
+      <label for="assume">추정 가정 덮어쓰기</label>
+      <textarea id="assume" name="assume" rows="3"
+                placeholder="revenue_growth=15&#10;operating_margin=38">{{ assume }}</textarea>
+      <div class="hint">비우면 과거 실적의 기계적 연장을 기준선으로 씁니다. 지정한 가정은 노트에 <b>사용자 입력</b>으로 표시됩니다.</div>
+
+      <div class="check">
+        <input id="llm" name="llm" type="checkbox" value="true">
+        <label for="llm" style="margin:0">LLM 서술 사용</label>
+      </div>
+      <div class="hint">끄면 결정론 문장으로 생성합니다. 수치는 어느 쪽이든 동일합니다.</div>
+
+      <button type="submit" name="action" value="generate">노트 생성</button>
+      <button type="submit" name="action" value="publish" class="btn--publish">검토 완료 · 발간</button>
+      <div class="hint"><b>생성</b>은 미리보기라 이력에 남지 않습니다. <b>발간</b>해야 추정이 저장되고 다음 발간의 변화 추적 기준이 됩니다.</div>
+    </form>
+
+    {% if vm and not vm.error %}
+      <h2 class="sec" style="margin-top:24px">커버리지</h2>
+      <div class="card">
+        <div class="kv"><span>매핑된 지표</span><span>{{ vm.metrics_found }}개</span></div>
+        <div class="kv"><span>레지스트리</span><span>{{ vm.registry_size }}건</span></div>
+        {% if vm.metrics_missing %}
+          <div class="kv"><span>미확인 계정</span><span>{{ vm.metrics_missing | join(', ') }}</span></div>
+        {% endif %}
+        {% if vm.llm_used %}
+          <div class="kv"><span>서술</span><span>{{ vm.llm_model }}</span></div>
+          {% if vm.llm_cost %}<div class="kv"><span>건당 비용</span><span>${{ '%.4f' % vm.llm_cost }}</span></div>{% endif %}
+        {% else %}
+          <div class="kv"><span>서술</span><span>결정론 문장</span></div>
+        {% endif %}
+      </div>
+    {% endif %}
+  </div>
+
+  {# ── 가운데: 노트 ── #}
+  <div class="col">
+    {% if vm and vm.published_path %}
+      <div class="card" style="border-color: var(--ok); max-width: 860px">
+        <span class="badge badge--ok">● 발간 완료</span>
+        <div class="hint" style="margin-top:6px">{{ vm.published_path }}<br>추정이 이력에 저장됐습니다. 다음 발간에서 이 값 대비 변화가 표시됩니다.</div>
+      </div>
+    {% endif %}
+    {% if vm and vm.error %}
+      <div class="err"><b>생성 실패</b><br>{{ vm.error }}</div>
+    {% elif vm and vm.gate_passed %}
+      <div class="note">{{ vm.body_html | safe }}</div>
+    {% elif vm %}
+      <div class="err">
+        <b>G0 게이트 차단 — 발간할 수 없습니다.</b><br>
+        {{ vm.gate_summary }}<br><br>
+        차단된 초안은 표시하지 않습니다. 검토자가 결과로 착각할 수 있기 때문입니다.
+        오른쪽 위반 내역을 확인하세요.
+      </div>
+    {% else %}
+      <div class="empty">
+        종목코드를 입력하면 DART 공시에서 실적 리뷰 노트를 생성합니다.<br>
+        생성된 <span class="num" style="cursor:default">모든 수치</span>는 클릭하면 출처와 산식을 보여줍니다.
+      </div>
+    {% endif %}
+  </div>
+
+  {# ── 오른쪽: 근거 ── #}
+  <div class="col col--right">
+    {% if vm and not vm.error %}
+      <h2 class="sec">발간 게이트</h2>
+      <div class="card">
+        {% if vm.gate_passed %}
+          <span class="badge badge--ok">● G0 통과</span>
+          <div class="hint" style="margin-top:8px">수치 정합성 · 컴플라이언스 · 필수 섹션 · 3중 디스클레이머를 모두 만족합니다.</div>
+        {% else %}
+          <span class="badge badge--bad">● 차단 {{ vm.violations|length }}건</span>
+          <div style="margin-top:10px">
+            {% for v in vm.violations %}
+              <div class="viol"><b>{{ v.rule }}</b>{% if v.line %} · line {{ v.line }}{% endif %}<br>{{ v.detail }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      </div>
+
+      {% if vm.assumptions %}
+        <h2 class="sec">추정 가정</h2>
+        <div class="card">
+          {% for a in vm.assumptions %}
+            <div class="kv">
+              <span>{{ a.label }}{% if a.override %} <span class="badge badge--warn" style="font-size:10px;padding:1px 6px">입력</span>{% endif %}</span>
+              <span>{{ a.value }}{{ a.unit }}</span>
+            </div>
+            <div class="hint" style="margin:0 0 6px">{{ a.basis }}</div>
+          {% endfor %}
+          {% for w in vm.estimate_warnings %}
+            <div class="viol" style="background:color-mix(in srgb,var(--warn) 10%,transparent)">{{ w }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      {% if vm.revisions %}
+        <h2 class="sec">추정 변화</h2>
+        <div class="card">
+          {% for r in vm.revisions %}
+            <div class="rev">
+              <span>{{ r.label }}</span>
+              <span class="{{ 'down' if r.direction == '하향' else ('up' if r.direction == '상향' else '') }}">
+                {{ r.direction }} {{ r.change }}%
+              </span>
+            </div>
+          {% endfor %}
+          <div class="hint">직전 발간 대비. 조정 방향과 시점은 추정치 자체만큼 중요한 기록입니다.</div>
+        </div>
+      {% endif %}
+
+      {% if vm.bindings %}
+        <h2 class="sec">수치 출처 {{ vm.bindings|length }}건</h2>
+        <div class="card">
+          {% for b in vm.bindings %}
+            <div class="bind">
+              <div class="h"><b>{{ b.label }}</b><span>{{ b.value }}</span></div>
+              {% if b.formula %}<div class="m">{{ b.formula }}</div>{% endif %}
+              {% if b.document %}<div class="m">{{ b.source }} · {{ b.document }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+
+<div id="pop"></div>
+
+<script>
+// LLM 서술은 20초쯤 걸린다. 아무 반응이 없으면 사용자가 다시 누른다.
+document.querySelector('form')?.addEventListener('submit', (e) => {
+  e.currentTarget.classList.add('busy');
+});
+</script>
+
+<script>
+// 수치 토큰 → 출처 팝오버. 이 상호작용이 제품의 논증 자체다:
+// 화면의 모든 숫자는 레지스트리에서 왔고 공시까지 되짚을 수 있다.
+(function () {
+  const pop = document.getElementById('pop');
+  const esc = (s) => (s || '').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+  function show(el) {
+    const d = el.dataset;
+    let html = `<div class="t">${esc(d.label)}</div><div style="font-size:15px;font-weight:650">${esc(el.textContent)}</div><div class="r">`;
+    html += `<b>키</b><code>${esc(d.key)}</code>`;
+    if (d.formula) html += `<b>산식</b><code>${esc(d.formula)}</code>`;
+    if (d.inputs)  html += `<b>입력</b><code>${esc(d.inputs)}</code>`;
+    if (d.source)  html += `<b>출처</b><span>${esc(d.source)}</span>`;
+    if (d.doc)     html += `<b>공시</b><code>${esc(d.doc)}</code>`;
+    if (d.retrieved) html += `<b>조회</b><span>${esc(d.retrieved)}</span>`;
+    html += '</div>';
+    if (d.url) html += `<div style="margin-top:8px"><a href="${esc(d.url)}" target="_blank" rel="noopener">원문 공시 열기 →</a></div>`;
+    pop.innerHTML = html;
+    pop.style.display = 'block';
+
+    const r = el.getBoundingClientRect(), p = pop.getBoundingClientRect();
+    let top = r.bottom + 8;
+    if (top + p.height > window.innerHeight - 8) top = Math.max(8, r.top - p.height - 8);
+    pop.style.top = top + 'px';
+    pop.style.left = Math.min(Math.max(8, r.left), window.innerWidth - p.width - 8) + 'px';
+  }
+
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest('.num');
+    if (el) { show(el); e.stopPropagation(); }
+    else if (!e.target.closest('#pop')) pop.style.display = 'none';
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') pop.style.display = 'none'; });
+})();
+</script>
+</body>
+</html>
