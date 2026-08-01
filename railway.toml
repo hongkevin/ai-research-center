@@ -1,0 +1,15 @@
+# Railway 배포 설정.
+#
+# 볼륨은 대시보드에서 /data 에 마운트한다 (ARC_STORE_DIR=/data/arc-store).
+# 볼륨이 없으면 컨테이너 재시작마다 추정 이력이 사라져 revision 추적이 죽는다.
+
+[build]
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/api/health"
+healthcheckTimeout = 60
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+# 워커 1개 이유는 Dockerfile 주석 참조 (캐시·예산이 프로세스 메모리에 있다)
+numReplicas = 1
