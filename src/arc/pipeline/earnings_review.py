@@ -29,6 +29,17 @@ from arc.data.base import (
 )
 from arc.data.kr.dart import DartProvider
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
+from arc.finmodel.estimates import (
+    ESTIMATE_DATASET,
+    EstimateSet,
+    Revision,
+    build_estimate_entries,
+    build_estimate_observations,
+    build_estimates,
+    compare_estimates,
+    from_rows,
+    to_rows,
+)
 from arc.finmodel.metrics import (
     INCOME_STATEMENT_METRICS,
     MetricSet,
@@ -39,6 +50,7 @@ from arc.finmodel.metrics import (
 )
 from arc.finmodel.valuation import (
     ValuationSet,
+    build_forward_entries,
     build_valuation,
     build_valuation_entries,
     build_valuation_observations,
@@ -67,6 +79,8 @@ class ReportResult:
     narration: object | None = None  # NarrationResult (LLM 사용 시)
     report_info: PeriodicReportInfo | None = None  # 주식수·배당·감사의견·인력
     valuation: ValuationSet | None = None
+    estimates: EstimateSet | None = None
+    revisions: list[Revision] = field(default_factory=list)
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
 
     @property
@@ -86,6 +100,8 @@ def compose_sections(
     consolidation: ConsolidationType = ConsolidationType.CONSOLIDATED,
     valuation: ValuationSet | None = None,
     info: PeriodicReportInfo | None = None,
+    estimates: EstimateSet | None = None,
+    revisions: list[Revision] | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
 
@@ -196,28 +212,94 @@ def compose_sections(
             "table": rows,
             "narrative": narrative,
         },
-        "estimates": {
-            "period_label": f"{y + 1}년",
-            "assumptions": [
-                "추정 모델은 아직 구현되지 않았다 (finmodel 추정 레이어 미착수).",
-                "추정치를 임의로 만들지 않는다 — 확인되지 않은 값은 비워 둔다.",
-            ],
-            "table": [],
-            "revision_narrative": (
-                "직전 보고서가 없어 추정 변화 추적을 표시하지 않는다. "
-                "추정 레이어가 붙으면 이 자리에 전 보고서 대비 변동이 들어간다."
-            ),
-        },
-        "valuation": _valuation_section(y, p, valuation),
+        "estimates": _estimates_section(y, p, estimates, revisions or []),
+        "valuation": _valuation_section(y, p, valuation, estimates),
         "risks": _risk_lines(valuation, info)
         or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."],
         # 결정론 v0에는 관전 포인트가 없다 — 이건 해석이라 LLM이 채운다.
         "watchpoints": [],
-        "method_notes": _method_notes(ms, valuation, info),
+        "method_notes": _method_notes(ms, valuation, info, estimates),
     }
 
 
-def _valuation_section(y: int, p, valuation: ValuationSet | None) -> dict[str, object]:
+def _estimates_section(
+    y: int, p, est: EstimateSet | None, revisions: list[Revision]
+) -> dict[str, object]:
+    """추정 섹션.
+
+    **모든 추정치는 가정의 함수다.** 가정을 먼저 보여주고 값을 뒤에 둔다 —
+    순서가 반대면 독자가 숫자를 전망으로 읽는다.
+    """
+    if est is None or not est.usable:
+        reasons = est.warnings if est else []
+        return {
+            "period_label": f"{y + 1}년",
+            "assumptions": reasons or ["추정에 필요한 지표를 확인하지 못해 산출하지 않았다."],
+            "table": [],
+            "revision_narrative": "추정을 산출하지 않아 변화 추적도 표시하지 않는다.",
+        }
+
+    ey = est.fiscal_year
+    # `Assumption.describe()`는 진단용이다 — 리터럴 숫자가 들어 있어 본문에
+    # 쓸 수 없다(G0가 잡는다). 가정도 수치이므로 플레이스홀더로 쓴다.
+    lines = []
+    for a in est.assumptions:
+        ph = p(f"assume_{a.key}_{ey}e")
+        if ph is None:
+            continue
+        tag = " (사용자 입력)" if a.is_override else ""
+        lines.append(f"{a.label}: {ph} — {a.basis}{tag}")
+    lines.append(
+        f"산출 방식: {est.method}. 과거 실적에 위 가정을 적용한 **기준선**이며 전망이 아니다."
+    )
+    lines.extend(est.warnings)
+
+    by_metric = {r.metric: r for r in revisions}
+    rows = []
+    for metric, label in (
+        ("revenue", "매출액"),
+        ("operating_income", "영업이익"),
+        ("net_income", "당기순이익"),
+    ):
+        if not p(f"{metric}_{ey}e"):
+            continue
+        r = by_metric.get(metric)
+        rows.append(
+            {
+                "label": label,
+                "current": p(f"{metric}_{ey}e") or "—",
+                "previous": p(f"{metric}_prev_{ey}e") or "—",
+                "delta": (p(f"{metric}_revision_{ey}e") or "—") if r else "—",
+            }
+        )
+
+    if not revisions:
+        narrative = (
+            "직전 보고서가 없어 추정 변화를 표시하지 않는다. "
+            "다음 발간부터 이 자리에 전 보고서 대비 변동과 방향이 들어간다."
+        )
+    else:
+        moved = [r for r in revisions if r.direction != "유지"]
+        if moved:
+            parts = [f"{r.label} {r.direction}" for r in moved]
+            narrative = (
+                f"직전 보고서 대비 {', '.join(parts)}. "
+                "조정 방향과 시점은 추정치 자체만큼 중요한 기록이다."
+            )
+        else:
+            narrative = "직전 보고서 대비 추정에 의미 있는 변화가 없다."
+
+    return {
+        "period_label": f"{ey}년",
+        "assumptions": lines,
+        "table": rows,
+        "revision_narrative": narrative,
+    }
+
+
+def _valuation_section(
+    y: int, p, valuation: ValuationSet | None, est: EstimateSet | None = None
+) -> dict[str, object]:
     """밸류에이션 섹션.
 
     **본문에서 rating·목표주가를 '언급'조차 하지 않는다.** G0는 부정문을
@@ -246,6 +328,12 @@ def _valuation_section(y: int, p, valuation: ValuationSet | None) -> dict[str, o
             f"자기자본이익률은 {p(f'roe_{y}a')}로, PBR과 함께 보면 "
             "시장이 이 수익성에 어느 정도 값을 매기고 있는지 가늠할 수 있다."
         )
+    ey = est.fiscal_year if est is not None else None
+    if ey and p(f"per_{ey}e"):
+        bits.append(
+            f"{ey}년 추정 이익 기준 선행 PER은 {p(f'per_{ey}e')}이다. "
+            "추정이 가정에 종속되므로 이 배수도 같은 가정 위에 있다."
+        )
     if p(f"dividend_yield_{y}a") and p(f"payout_ratio_{y}a"):
         bits.append(
             f"현금배당수익률은 {p(f'dividend_yield_{y}a')}, 배당성향은 "
@@ -264,9 +352,16 @@ def _valuation_section(y: int, p, valuation: ValuationSet | None) -> dict[str, o
             if valuation.is_implied
             else "PER = 주가 / 주당순이익 · PBR = 주가 / 주당순자산"
         ),
-        "bear": {"assumption": "시나리오 미구현 — 추정 레이어 연결 후 산출", "range": "—"},
-        "base": {"assumption": "당기 실적 기준 실측 배수", "range": p(f"price_{y}a") or "—"},
-        "bull": {"assumption": "시나리오 미구현 — 추정 레이어 연결 후 산출", "range": "—"},
+        # 시나리오는 **가정 범위**가 있어야 만들 수 있다. 지금은 단일 가정
+        # 집합뿐이므로 만들지 않는다 — 없는 시나리오를 지어내지 않는다.
+        "bear": {"assumption": "가정 범위 미지정 — 보수 시나리오를 만들지 않았다", "range": "—"},
+        "base": {
+            "assumption": (
+                f"{ey}년 추정 가정 기준" if ey and p(f"per_{ey}e") else "당기 실적 기준 실측 배수"
+            ),
+            "range": p(f"price_{y}a") or "—",
+        },
+        "bull": {"assumption": "가정 범위 미지정 — 낙관 시나리오를 만들지 않았다", "range": "—"},
         "sensitivity_table": "—",
         "narrative": " ".join(bits),
     }
@@ -322,7 +417,10 @@ def _risk_items(
 
 
 def _method_notes(
-    ms: MetricSet, valuation: ValuationSet | None, info: PeriodicReportInfo | None
+    ms: MetricSet,
+    valuation: ValuationSet | None,
+    info: PeriodicReportInfo | None,
+    estimates: EstimateSet | None = None,
 ) -> list[str]:
     """'작성 기준' 섹션 — **우리 자료의 한계.** 회사 리스크와 섞지 않는다."""
     notes = ["공시 기반 지표만 사용했다. 공시 밖 요인(수요·경쟁·정책)은 반영되지 않았다."]
@@ -343,7 +441,13 @@ def _method_notes(
             notes.append(
                 "공시된 발행·자기주식·유통 주식수가 서로 맞지 않아 주식수 기반 지표를 확정하지 못했다."
             )
-    notes.append("추정 레이어가 미구현 상태라 이 노트는 실적 확인 목적에 한정된다.")
+    if estimates is None or not estimates.usable:
+        notes.append("추정을 산출하지 못해 이 노트는 실적 확인 목적에 한정된다.")
+    else:
+        notes.append(
+            f"{estimates.fiscal_year}년 추정은 {estimates.base_year}년 실적에 명시된 가정을 "
+            "적용해 계산한 기준선이며, 산업·정책 등 공시 밖 요인은 반영되지 않았다."
+        )
     if info is not None and info.unavailable:
         notes.append(f"조회하지 못한 공시 항목: {', '.join(info.unavailable)}.")
     return notes
@@ -420,6 +524,45 @@ def assemble(
     )
 
 
+# ── 추정 이력 (point-in-time) ────────────────────────────────────────
+def _load_prior_estimates(
+    store: object | None, symbol: str, fiscal_year: int, published_at: dt.date | None
+) -> EstimateSet | None:
+    """직전 발간 시점의 추정을 읽는다.
+
+    `as_of`를 **이번 발간일 직전**으로 잡는다. 오늘 저장한 값을 다시 읽어
+    "변화 없음"이 되는 걸 막기 위해서다.
+
+    저장소가 없거나 이력이 없으면 None — 없는 걸 만들지 않는다.
+    """
+    if store is None:
+        return None
+    as_of = dt.datetime.combine(
+        published_at or dt.datetime.now(dt.UTC).date(), dt.time.min, tzinfo=dt.UTC
+    ) - dt.timedelta(microseconds=1)
+    try:
+        rows = store.read_as_of(ESTIMATE_DATASET, as_of)
+    except Exception:  # noqa: BLE001 — 이력이 없어도 발간은 막지 않는다
+        return None
+    return from_rows(rows, symbol, fiscal_year)
+
+
+def save_estimates(store: object, est: EstimateSet, symbol: str, published_at: dt.date) -> None:
+    """이번 추정을 스냅샷으로 남긴다 — 다음 발간의 revision 기준이 된다.
+
+    스냅샷 시각을 **발간일**로 찍는다. 실행 시각(wall clock)으로 찍으면
+    "그 시점에 무엇을 추정했는가"라는 point-in-time 질문에 답할 수 없고,
+    발간일 기준 as-of 조회가 어긋난다(실측으로 확인).
+    """
+    rows = to_rows(est, symbol, published_at)
+    if rows:
+        store.save_snapshot(
+            ESTIMATE_DATASET,
+            rows,
+            snapshot_at=dt.datetime.combine(published_at, dt.time.min, tzinfo=dt.UTC),
+        )
+
+
 # ── 전체 실행 ────────────────────────────────────────────────────────
 def fetch_statement(
     symbol: str,
@@ -461,6 +604,8 @@ def build_report(
     published_at: dt.date | None = None,
     llm: object | None = None,
     reports: DartReportProvider | None = None,
+    store: object | None = None,
+    assumptions: dict[str, float] | None = None,
 ) -> ReportResult:
     """S1 → S6b 관통.
 
@@ -494,8 +639,27 @@ def build_report(
             valuation = build_valuation(ms, info)
             registry.register_all(build_valuation_entries(valuation, info, stmt.provenance))
 
+    # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
+    estimates = build_estimates(ms, assumptions)
+    previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
+    revisions = compare_estimates(previous, estimates)
+    if estimates.usable:
+        registry.register_all(build_estimate_entries(estimates, revisions, stmt.provenance))
+        if valuation is not None:
+            registry.register_all(
+                build_forward_entries(
+                    valuation, estimates.values, estimates.fiscal_year, stmt.provenance
+                )
+            )
+
     sections = compose_sections(
-        ms, registry, consolidation=stmt.consolidation, valuation=valuation, info=info
+        ms,
+        registry,
+        consolidation=stmt.consolidation,
+        valuation=valuation,
+        info=info,
+        estimates=estimates,
+        revisions=revisions,
     )
 
     narration = None
@@ -506,6 +670,7 @@ def build_report(
         obs = build_observations(ms, build_margin_bridge(ms))
         if valuation is not None and info is not None:
             obs += build_valuation_observations(valuation, info)
+        obs += build_estimate_observations(estimates, revisions)
         narration = narrate(
             llm,
             company_name=company.name,
@@ -551,4 +716,6 @@ def build_report(
         report_info=info,
         valuation=valuation,
         info_error=info_error,
+        estimates=estimates,
+        revisions=revisions,
     )

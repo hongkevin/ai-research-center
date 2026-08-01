@@ -68,6 +68,20 @@ def inspect(
     typer.secho(f"\n  커버리지: {status}", fg=color)
 
 
+def _parse_assumptions(pairs: list[str]) -> dict[str, float]:
+    """`key=value` 목록 → 가정 덮어쓰기. 잘못된 형식은 조용히 넘기지 않는다."""
+    out: dict[str, float] = {}
+    for raw in pairs:
+        if "=" not in raw:
+            raise typer.BadParameter(f"--assume 형식은 key=value 입니다: {raw!r}")
+        key, _, value = raw.partition("=")
+        try:
+            out[key.strip()] = float(value)
+        except ValueError:
+            raise typer.BadParameter(f"가정 값이 숫자가 아닙니다: {raw!r}") from None
+    return out
+
+
 @app.command()
 def generate(
     symbol: str,
@@ -75,9 +89,26 @@ def generate(
     separate: bool = typer.Option(False, "--separate", help="별도재무제표 사용"),
     out: Path | None = typer.Option(None, "--out", "-o", help="출력 경로"),
     llm: bool = typer.Option(False, "--llm", help="S4 서술을 LLM으로 생성"),
+    assume: list[str] = typer.Option(
+        None, "--assume", "-a", help="추정 가정 덮어쓰기 (예: -a revenue_growth=12.5)"
+    ),
+    store_dir: Path | None = typer.Option(
+        None, "--store", help="추정 이력 저장소 (지정 시 직전 추정 대비 revision을 표시하고 저장)"
+    ),
+    published: str | None = typer.Option(
+        None, "--published", help="발간일 YYYY-MM-DD (기본 오늘). 추정 이력의 기준 시각이다"
+    ),
 ) -> None:
     """실적 리뷰 노트 초안을 생성한다. G0 통과 시에만 파일로 저장한다."""
     p = _provider()
+    overrides = _parse_assumptions(assume or [])
+    published_at = dt.date.fromisoformat(published) if published else dt.datetime.now(dt.UTC).date()
+
+    store = None
+    if store_dir is not None:
+        from arc.store.snapshot import SnapshotStore
+
+        store = SnapshotStore(store_dir)
     # 기본은 연결→별도 자동 폴백 (소형주는 별도만 제출하는 경우가 많다)
     cons = ConsolidationType.SEPARATE if separate else None
 
@@ -88,7 +119,14 @@ def generate(
         client = get_client()
 
     r = build_report(
-        symbol, year, p, consolidation=cons, published_at=dt.datetime.now(dt.UTC).date(), llm=client
+        symbol,
+        year,
+        p,
+        consolidation=cons,
+        published_at=published_at,
+        llm=client,
+        store=store,
+        assumptions=overrides,
     )
 
     typer.echo(f"\n{r.company.name} ({symbol}) · FY{year}")
@@ -97,7 +135,23 @@ def generate(
         f"플레이스홀더 {len(r.registry.extract_keys(r.assembled))}개"
     )
     if r.metrics.missing:
-        typer.secho(f"  미매핑: {', '.join(r.metrics.missing)}", fg=typer.colors.YELLOW)
+        typer.secho(f"  미매핑: {', '.join(r.metrics.missing_labels)}", fg=typer.colors.YELLOW)
+
+    est = r.estimates
+    if est is not None and est.usable:
+        tag = " (사용자 가정)" if any(a.is_override for a in est.assumptions) else ""
+        typer.echo(f"  {est.fiscal_year}년 추정 산출{tag}")
+        for w in est.warnings:
+            typer.secho(f"    ⚠ {w}", fg=typer.colors.YELLOW)
+        for rev in r.revisions:
+            if rev.direction == "유지":
+                continue
+            color = typer.colors.RED if rev.direction == "하향" else typer.colors.GREEN
+            typer.secho(
+                f"    {rev.label} {rev.direction} {rev.change_pct:+.1f}% (직전 추정 대비)", fg=color
+            )
+    elif est is not None and est.warnings:
+        typer.secho(f"  추정 미산출: {est.warnings[0]}", fg=typer.colors.YELLOW)
 
     n = r.narration
     if n is not None:
@@ -125,6 +179,14 @@ def generate(
         raise typer.Exit(1)
 
     typer.secho(f"\n  {r.gate.summary()}", fg=typer.colors.GREEN)
+
+    # 게이트를 통과한 초안의 추정만 이력에 남긴다 — 차단된 초안이 다음
+    # 발간의 revision 기준이 되면 이력이 오염된다.
+    if store is not None and r.estimates is not None and r.estimates.usable:
+        from arc.pipeline.earnings_review import save_estimates
+
+        save_estimates(store, r.estimates, symbol, published_at)
+        typer.echo(f"  추정 이력 저장 ({published_at})")
 
     DRAFTS_DIR.mkdir(exist_ok=True)
     path = out or DRAFTS_DIR / f"{symbol}-FY{year}.md"

@@ -350,3 +350,49 @@ def build_valuation_observations(v: ValuationSet, info: PeriodicReportInfo) -> l
         )
 
     return obs
+
+
+# ── 선행 배수 (추정 연결) ────────────────────────────────────────────
+def build_forward_entries(
+    v: ValuationSet, est_values: dict[str, int], est_year: int, prov: Provenance
+) -> list[NumberEntry]:
+    """추정 순이익 + 주식수 → 선행 EPS·PER.
+
+    당기 실적 배수(PER)는 이미 지나간 이익에 값을 매긴 것이라 시장이 실제로
+    보는 숫자와 다르다. 추정이 생겼으니 **선행 배수**를 낼 수 있다.
+
+    주가가 역산 앵커라면 선행 배수도 그 한계를 그대로 물려받는다 — 라벨에
+    표시한다.
+    """
+    ni = est_values.get("net_income")
+    if ni is None or not v.shares_issued or v.price is None:
+        return []
+
+    eps_fwd = ni / v.shares_issued
+    per_fwd = v.price / eps_fwd if eps_fwd else None
+    if per_fwd is None or per_fwd <= 0:
+        return []
+
+    tag = "역산 " if v.is_implied else ""
+    return [
+        NumberEntry(
+            key=f"eps_{est_year}e",
+            value=eps_fwd,
+            unit="원",
+            display=fmt_per_share(eps_fwd),
+            provenance=prov,
+            label=f"주당순이익 추정 ({est_year}E)",
+            formula="추정 당기순이익 / 발행주식총수",
+            inputs=[f"net_income_{est_year}e", f"shares_issued_{v.fiscal_year}a"],
+        ),
+        NumberEntry(
+            key=f"per_{est_year}e",
+            value=per_fwd,
+            unit="배",
+            display=f"{per_fwd:.1f}배",
+            provenance=prov,
+            label=f"{tag}선행 PER ({est_year}E)",
+            formula="주가 / 추정 주당순이익",
+            inputs=[f"price_{v.fiscal_year}a", f"eps_{est_year}e"],
+        ),
+    ]

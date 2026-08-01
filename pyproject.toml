@@ -38,3 +38,13 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Typer는 기본값으로 typer.Option()을 받는 것이 정상 사용법이다 — B008은 오탐.
+"src/arc/cli.py" = ["B008"]
+# DART·금융위 응답의 날짜는 YYYYMMDD 문자열이라 타임존이 없다. 날짜(date)로만
+# 쓰고 시각 계산에 넣지 않으므로 DTZ007은 여기서 의미가 없다.
+"src/arc/data/kr/dart.py" = ["DTZ007"]
+"src/arc/data/kr/krx_price.py" = ["DTZ007"]
+# 테스트의 클래스 변수는 픽스처 목록이라 변경되지 않는다.
+"tests/*" = ["RUF012"]
