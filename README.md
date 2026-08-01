@@ -43,6 +43,11 @@ src/arc/
 └── render/     # Jinja2 → HTML/PDF (TODO)
 ```
 
+## 이어서 작업하려면
+
+[docs/HANDOFF.md](docs/HANDOFF.md) — 현재 상태·불변식·남은 과제.
+결정의 이유는 [docs/decisions.md](docs/decisions.md)(D1~D32)에 있습니다.
+
 ## 배포
 
 동료가 브라우저로 접속해 테스트하는 절차는 [docs/DEPLOY.md](docs/DEPLOY.md)를 보십시오.
