@@ -87,6 +87,20 @@ SAMSUNG_CURRENT = [
         "43,605,740",
     ],
     [
+        "무형자산상각비",
+        "1,815,140",
+        "827,043",
+        "233,739",
+        "205,660",
+        "3,081,582",
+        "",
+        "",
+        "",
+        "",
+        "0",
+        "3,320,852",
+    ],
+    [
         "영업이익",
         "12,852,650",
         "24,858,075",
@@ -193,6 +207,51 @@ LG_CURRENT = [
         "78,680",
         "2,478,392",
     ],
+    [
+        "감가상각비 및 무형자산상각비",
+        "889,660",
+        "449,462",
+        "652,546",
+        "216,185",
+        "1,150,301",
+        "245,709",
+        "3,603,863",
+    ],
+]
+
+# LG전자 부문별 자산 — **손익과 다른 표**다. 총계는 재무상태표 자산총계와 맞는다.
+LG_ASSETS = [
+    ["", "기업 전체 총계", "", "", "", "", "", "기업 전체 총계 합계"],
+    [
+        "",
+        "Home Appliance Solution",
+        "Media Entertainment Solution",
+        "Vehicle Solution",
+        "Eco Solution",
+        "엘지이노텍㈜와 그 종속기업",
+        "기타부문 및 내부거래",
+        "기업 전체 총계 합계",
+    ],
+    [
+        "자산",
+        "25,455,949",
+        "23,300,959",
+        "10,452,461",
+        "10,015,587",
+        "11,930,883",
+        "(12,535,672)",
+        "68,620,167",
+    ],
+    [
+        "부채",
+        "14,376,287",
+        "16,691,545",
+        "11,092,592",
+        "4,167,901",
+        "6,167,829",
+        "(12,428,012)",
+        "40,068,142",
+    ],
 ]
 
 # 롯데케미칼 「3. 부문정보 (연결)」. 단위 **천원**, 라벨은 「매출」, 적자 부문.
@@ -275,18 +334,32 @@ def _section(*grids: list[list[str]], unit: str = "백만원") -> Section:
 
 # ── 격자 읽기 ────────────────────────────────────────────────────────
 def test_reads_transposed_grid_and_picks_segment_name_row():
-    names, revenue, profit = read_segment_grid(SAMSUNG_CURRENT)
-    assert names[1:5] == ["DX 부문", "DS 부문", "SDC", "Harman"]
-    assert revenue[1] == 187_967_346
-    assert profit[11] == 43_601_051
+    g = read_segment_grid(SAMSUNG_CURRENT)
+    assert g.names[1:5] == ["DX 부문", "DS 부문", "SDC", "Harman"]
+    assert g.revenue[1] == 187_967_346
+    assert g.profit[11] == 43_601_051
 
 
 def test_header_row_is_the_last_one_with_empty_first_column():
     """LG전자는 부문명 행 아래에 「각 보고부문의 약칭」 행이 더 있다.
     0열에 라벨이 있으므로 머리 행이 아니고, 약칭이 부문명을 덮으면 안 된다."""
-    names, _, _ = read_segment_grid(LG_CURRENT)
-    assert names[1] == "Home Appliance Solution"
-    assert "HS" not in names
+    g = read_segment_grid(LG_CURRENT)
+    assert g.names[1] == "Home Appliance Solution"
+    assert "HS" not in g.names
+
+
+def test_split_depreciation_rows_are_summed():
+    """삼성전자는 「감가상각비」와 「무형자산상각비」를 따로 쓴다. 하나만 읽으면
+    EBITDA가 틀린다."""
+    g = read_segment_grid(SAMSUNG_CURRENT)
+    assert g.depreciation[1] == 2_670_815 + 1_815_140  # DX
+
+
+def test_combined_depreciation_row_is_not_double_counted():
+    """LG전자는 「감가상각비 및 무형자산상각비」로 합쳐 쓴다. 합산 행과 개별
+    행을 함께 더하면 이중 계상된다."""
+    g = read_segment_grid(LG_CURRENT)
+    assert g.depreciation[1] == 889_660
 
 
 def test_table_without_operating_income_is_not_a_segment_profit_table():
@@ -499,6 +572,78 @@ def test_loss_making_segment_is_called_out():
 
 def test_unusable_set_yields_no_observations():
     assert build_segment_profit_observations(SegmentProfitSet(fiscal_year=2025)) == []
+
+
+# ── 감가상각·EBITDA ──────────────────────────────────────────────────
+def test_ebitda_separates_segments_with_different_capital_intensity():
+    """삼성전자 DS의 영업이익률은 19.1%지만 상각 전으로는 48.9%다. 영업이익률만
+    비교하면 DX(9.2%)와 같은 종류의 수익성으로 읽힌다."""
+    sp = _built()
+    ds = next(x for x in sp.lines if x.name == "DS 부문")
+    dx = next(x for x in sp.lines if x.name == "DX 부문")
+    assert ds.op_margin == pytest.approx(19.1, abs=0.1)
+    assert ds.ebitda_margin == pytest.approx(48.9, abs=0.1)
+    assert dx.ebitda_margin == pytest.approx(9.2, abs=0.1)
+
+
+def test_capital_intensity_claim_skips_a_residual_bucket():
+    """LG전자 「기타부문」은 매출 비중 2.4%인데 상각 부담이 가장 무겁다.
+    회사의 사업을 말하는 문장이 잔여 버킷으로 시작하면 안 된다."""
+    ms = _metrics(2025, 89_200_882_000_000, 2_478_392_000_000)
+    sp = build_segment_profit([_section(LG_CURRENT)], ms)
+    obs = " ".join(build_segment_profit_observations(sp))
+    assert "감가상각 부담이 가장 무거운 부문은 기타부문" not in obs
+    assert "감가상각 부담이 가장 무거운 부문은 Vehicle Solution" in obs
+
+
+def test_no_depreciation_row_leaves_ebitda_empty():
+    """상각비가 없으면 EBITDA를 만들지 않는다 — 영업이익을 EBITDA로 쓰면
+    자본집약도가 0인 것처럼 보인다."""
+    grid = [r for r in LOTTE_CURRENT]
+    ms = _metrics(2025, 18_483_005_314_922, -943_115_729_953)
+    sp = build_segment_profit([_section(grid)], ms)
+    assert all(x.ebitda is None for x in sp.lines)
+    keys = {e.key for e in build_segment_profit_entries(sp, PROV)}
+    assert not any("_ebitda" in k for k in keys)
+
+
+# ── 부문 자산 ────────────────────────────────────────────────────────
+def _lg_with_assets(total_assets: int = 68_620_167_000_000) -> SegmentProfitSet:
+    ms = _metrics(2025, 89_200_882_000_000, 2_478_392_000_000)
+    ms.values["total_assets"] = MetricValue(
+        key="total_assets", label="자산총계", current=total_assets, prior=None
+    )
+    return build_segment_profit([_section(LG_CURRENT, LG_ASSETS)], ms)
+
+
+def test_assets_are_matched_through_the_disclosed_abbreviation_row():
+    """LG전자의 자산 표는 부문을 약칭(HS·MS)으로 부른다. 위치로 짜맞추지 않고
+    손익 표의 「각 보고부문의 약칭」 행이 준 대응을 쓴다."""
+    sp = _lg_with_assets()
+    hs = next(x for x in sp.lines if x.name == "Home Appliance Solution")
+    assert hs.assets == 25_455_949_000_000
+    assert hs.asset_return == pytest.approx(5.0, abs=0.1)
+
+
+def test_a_segment_without_a_counterpart_in_the_asset_table_stays_empty():
+    """LG전자 자산 표는 「기타부문 및 내부거래」로 묶여 있어 손익 표의
+    「기타부문」과 짝이 없다. 전부 버리면 나머지 다섯의 자산까지 잃는다."""
+    sp = _lg_with_assets()
+    other = next(x for x in sp.lines if x.name == "기타부문")
+    assert other.assets is None
+    assert sum(1 for x in sp.lines if x.assets is not None) == 5
+
+
+def test_assets_are_rejected_when_the_total_misses_the_balance_sheet():
+    sp = _lg_with_assets(total_assets=10_000_000_000_000)
+    assert all(x.assets is None for x in sp.lines)
+
+
+def test_assets_are_not_read_without_a_balance_sheet_total():
+    """자산총계가 없으면 검산할 근거가 없다. 검산 없이 쓰지 않는다."""
+    ms = _metrics(2025, 89_200_882_000_000, 2_478_392_000_000)
+    sp = build_segment_profit([_section(LG_CURRENT, LG_ASSETS)], ms)
+    assert all(x.assets is None for x in sp.lines)
 
 
 # ── 부문 구분은 한 리포트에 하나만 ───────────────────────────────────

@@ -108,17 +108,27 @@
 
 {# IFRS 8 「영업부문」 주석. 총계가 손익계산서의 매출액·영업이익과 맞는 것만
    싣는다 — 어긋나면 표를 통째로 내리고 사유만 남긴다 (D33). #}
-| 부문 | {{ earnings.period_label }} 매출 | 비중(부문 합계 대비) | 영업이익 | 영업이익률 | 이익률 증감 |
-|---|---|---|---|---|---|
+| 부문 | {{ earnings.period_label }} 매출 | 비중(부문 합계 대비) | 영업이익 | 영업이익률 | EBITDA 마진 | 이익률 증감 |
+|---|---|---|---|---|---|---|
 {% for row in earnings.segment_profit.table %}
-| {{ row.label }} | {{ row.revenue }} | {{ row.rev_share }} | {{ row.op }} | {{ row.margin }} | {{ row.margin_chg }} |
+| {{ row.label }} | {{ row.revenue }} | {{ row.rev_share }} | {{ row.op }} | {{ row.margin }} | {{ row.ebitda_margin }} | {{ row.margin_chg }} |
 {% endfor %}
 
-부문 매출·영업이익은 사업보고서 영업부문 주석에서 확인했으며, 주석의 총계가 손익계산서의 매출액·영업이익과 일치함을 검산했습니다. 부문 매출에는 부문 간 내부거래가 남아 있어 부문 합계는 연결 매출액과 다를 수 있습니다.
+부문 매출·영업이익은 사업보고서 영업부문 주석에서 확인했으며, 주석의 총계가 손익계산서의 매출액·영업이익과 일치함을 검산했습니다. 부문 매출에는 부문 간 내부거래가 남아 있어 부문 합계는 연결 매출액과 다를 수 있습니다. EBITDA 마진은 영업이익에 같은 주석의 감가상각비를 더해 산출했으며, 상각 부담이 다른 사업을 같은 잣대로 비교하기 위한 보조 지표입니다.
 {% if not earnings.segment_profit.has_prior %}
 전기 비교치를 확인하지 못해 이익률 증감은 비워 두었습니다.
 {% endif %}
 
+{% if earnings.segment_profit.assets %}
+| 부문 | 부문 자산 | 자산 대비 영업이익 |
+|---|---|---|
+{% for row in earnings.segment_profit.assets %}
+| {{ row.label }} | {{ row.assets }} | {{ row.asset_return }} |
+{% endfor %}
+
+부문 자산은 주석의 총계가 재무상태표 자산총계와 일치함을 검산했습니다. 기말 자산 기준이며 평균 자산이 아닙니다. 자산이 손익 표의 부문 구분과 짝지어지지 않는 부문은 표에서 제외했습니다.
+
+{% endif %}
 {% elif earnings.segment_profit.note %}
 ### 4.1 부문별 수익성
 
