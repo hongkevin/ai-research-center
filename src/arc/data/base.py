@@ -49,16 +49,33 @@ class Provenance(BaseModel):
 
     - source: 원천 식별자 (예: "opendart", "krx_price", "naver_news", "edgar")
     - retrieved_at: 조회 시각 (UTC 권장)
-    - source_url: 원문 URL (있는 경우)
+    - dataset: **사람이 읽는 데이터셋 이름** — "배당에 관한 사항", "재무제표(전체계정)",
+      "사업보고서 원문 · 4. 매출 및 수주상황"
+    - source_url: 우리가 호출한 곳 (재현·감사용). API 엔드포인트일 수 있다
+    - verify_url: **사람이 열어서 확인할 링크** (DART 뷰어 등)
     - source_ref: 원문 참조 번호 — DART 접수번호(rcept_no) 등
+
+    `source_url`과 `verify_url`을 나눈 이유
+    --------------------------------------
+    `https://opendart.fss.or.kr/api/alotMatter.json`은 API 키가 필요한 JSON
+    엔드포인트라 **검토자가 클릭해도 아무것도 안 나온다.** 재현에는 그 주소가
+    필요하고 검증에는 DART 뷰어가 필요하다. 한 필드에 뭉쳐 두면 둘 중 하나는
+    반드시 쓸모없어진다.
     """
 
     model_config = ConfigDict(frozen=True)
 
     source: str
     retrieved_at: dt.datetime
+    dataset: str | None = None
     source_url: str | None = None
+    verify_url: str | None = None  # 사람이 확인할 링크
     source_ref: str | None = None  # 공시번호(rcept_no) 등
+
+    @property
+    def describe(self) -> str:
+        """팝오버·출처표에 쓸 한 줄. 데이터셋이 없으면 원천 식별자로 물러난다."""
+        return self.dataset or self.source
 
 
 class Company(BaseModel):

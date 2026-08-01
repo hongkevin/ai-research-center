@@ -448,6 +448,7 @@ document.querySelector('form')?.addEventListener('submit', (e) => {
     if (d.inputs)  html += `<b>입력</b><code>${esc(d.inputs)}</code>`;
     if (d.source)  html += `<b>출처</b><span>${esc(d.source)}</span>`;
     if (d.doc)     html += `<b>공시</b><code>${esc(d.doc)}</code>`;
+    if (d.api)     html += `<b>조회</b><code>${esc(d.api)}</code>`;
     if (d.retrieved) html += `<b>조회</b><span>${esc(d.retrieved)}</span>`;
     html += '</div>';
     if (d.url) html += `<div style="margin-top:8px"><a href="${esc(d.url)}" target="_blank" rel="noopener">원문 공시 열기 →</a></div>`;

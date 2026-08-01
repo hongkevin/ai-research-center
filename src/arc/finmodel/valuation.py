@@ -180,7 +180,15 @@ def build_valuation_entries(
     y = v.fiscal_year
     out: list[NumberEntry] = []
 
-    def add(key, value, unit, display, label, formula=None, inputs=None, internal=False):
+    # **항목마다 출처가 다르다.** 주식수는 `stockTotqySttus`, 배당은 `alotMatter`,
+    # BPS·ROE는 재무제표에서 온다. 하나로 뭉뚱그리면 "이 배당성향 어디서
+    # 나왔죠?"라는 검토자의 질문에 틀린 답을 하게 된다.
+    share_prov = info.shares.provenance if info and info.shares else prov
+    div_prov = info.dividend.provenance if info and info.dividend else prov
+
+    def add(
+        key, value, unit, display, label, formula=None, inputs=None, internal=False, source=None
+    ):
         if value is None or display is None:
             return
         out.append(
@@ -189,7 +197,7 @@ def build_valuation_entries(
                 value=value,
                 unit=unit,
                 display=display,
-                provenance=prov,
+                provenance=source or prov,
                 label=f"{label} ({y}A)",
                 formula=formula,
                 inputs=inputs or [],
@@ -203,6 +211,7 @@ def build_valuation_entries(
         "주",
         f"{v.shares_issued:,}주" if v.shares_issued else None,
         "발행주식총수",
+        source=share_prov,
     )
     add(
         "shares_outstanding",
@@ -210,6 +219,7 @@ def build_valuation_entries(
         "주",
         f"{v.shares_outstanding:,}주" if v.shares_outstanding else None,
         "유통주식수",
+        source=share_prov,
     )
 
     add(
@@ -249,9 +259,23 @@ def build_valuation_entries(
         inputs=[f"total_liabilities_{y}a", f"total_equity_{y}a"],
     )
 
-    add("dps", v.dps, "원", fmt_per_share(v.dps), "주당 현금배당금(DPS)")
-    add("dividend_yield", v.dividend_yield, "%", fmt_pct(v.dividend_yield, 2), "현금배당수익률")
-    add("payout_ratio", v.payout_ratio, "%", fmt_pct(v.payout_ratio), "현금배당성향")
+    add("dps", v.dps, "원", fmt_per_share(v.dps), "주당 현금배당금(DPS)", source=div_prov)
+    add(
+        "dividend_yield",
+        v.dividend_yield,
+        "%",
+        fmt_pct(v.dividend_yield, 2),
+        "현금배당수익률",
+        source=div_prov,
+    )
+    add(
+        "payout_ratio",
+        v.payout_ratio,
+        "%",
+        fmt_pct(v.payout_ratio),
+        "현금배당성향",
+        source=div_prov,
+    )
 
     # 가격 기반 — 역산 앵커임을 라벨에 명시한다. 독자가 종가로 오인하면 안 된다.
     tag = "역산 " if v.is_implied else ""
@@ -262,6 +286,9 @@ def build_valuation_entries(
         fmt_per_share(v.price),
         f"{tag}주가",
         formula="주당현금배당금 / 현금배당수익률" if v.is_implied else None,
+        # 역산 주가는 배당공시에서 나온다. 재무제표로 표시하면 검토자가
+        # 종가로 오인할 여지가 커진다 (D19).
+        source=div_prov if v.is_implied else None,
     )
     add(
         "market_cap",
@@ -271,6 +298,7 @@ def build_valuation_entries(
         f"{tag}시가총액",
         formula="주가 × 발행주식총수",
         inputs=[f"price_{y}a", f"shares_issued_{y}a"],
+        source=div_prov if v.is_implied else None,
     )
     add(
         "per",
@@ -280,6 +308,7 @@ def build_valuation_entries(
         f"{tag}PER",
         formula="주가 / 주당순이익",
         inputs=[f"price_{y}a"],
+        source=div_prov if v.is_implied else None,
     )
     add(
         "pbr",
@@ -289,6 +318,7 @@ def build_valuation_entries(
         f"{tag}PBR",
         formula="주가 / 주당순자산",
         inputs=[f"price_{y}a", f"bps_{y}a"],
+        source=div_prov if v.is_implied else None,
     )
 
     # 검산값 — 감사용이지 독자용이 아니다
