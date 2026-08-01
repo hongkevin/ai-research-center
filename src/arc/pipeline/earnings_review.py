@@ -27,7 +27,13 @@ from arc.data.base import (
     FinancialStatement,
     PeriodType,
 )
-from arc.finmodel.metrics import MetricSet, build_entries, extract_metrics
+from arc.finmodel.metrics import (
+    MetricSet,
+    build_entries,
+    build_margin_bridge,
+    build_observations,
+    extract_metrics,
+)
 from arc.llm.number_registry import NumberRegistry
 from arc.verify.g0 import G0Gate, GateResult
 
@@ -92,7 +98,23 @@ def compose_sections(
 
     # 투자포인트 — 확인된 지표에서만 만든다
     points: list[dict[str, str]] = []
-    if p(f"operating_margin_chg_{y}a") and p(f"cost_ratio_chg_{y}a"):
+    bridge = build_margin_bridge(ms)
+    if bridge is not None and bridge.reconciled and p(f"bridge_cost_contrib_{y}a"):
+        # 브리지가 닫히면 기여도를 직접 말할 수 있다. 추측이 아니라 항등식이다.
+        points.append(
+            {
+                "title": f"이익률 변화는 {bridge.dominant}이 주도했다",
+                "body": (
+                    f"영업이익률이 {p(f'operating_margin_chg_{y}a')} 움직이는 동안 "
+                    f"원가율은 {p(f'bridge_cost_contrib_{y}a')}, "
+                    f"판관비율은 {p(f'bridge_sga_contrib_{y}a')}만큼 이익률에 기여했다. "
+                    f"두 기여의 합은 이익률 변화와 일치하므로 이번 마진 변화는 "
+                    f"{bridge.dominant}에서 설명된다. "
+                    "가격 정책·수요·경쟁 강도는 공시 숫자만으로 단정할 수 없어 별도 확인이 필요하다."
+                ),
+            }
+        )
+    elif p(f"operating_margin_chg_{y}a") and p(f"cost_ratio_chg_{y}a"):
         points.append(
             {
                 "title": "이익률 변화가 원가율에서 왔는지 확인",
@@ -290,12 +312,14 @@ def build_report(
         from arc.llm.narrate import narrate
 
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
+        obs = build_observations(ms, build_margin_bridge(ms))
         narration = narrate(
             llm,
             company_name=company.name,
             fiscal_year=fiscal_year,
             basis=basis,
             registry=registry,
+            thesis="\n".join(f"- {o}" for o in obs) if obs else None,
         )
         if narration.used_llm:
             # 결정론 골격 위에 LLM 문장만 덮는다. 표·가정·디스클레이머는 그대로.

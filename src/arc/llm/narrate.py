@@ -91,16 +91,27 @@ class NarrationResult:
 
 
 def build_user_prompt(
-    company_name: str, fiscal_year: int, basis: str, registry: NumberRegistry
+    company_name: str,
+    fiscal_year: int,
+    basis: str,
+    registry: NumberRegistry,
+    thesis: str | None = None,
 ) -> str:
-    """카탈로그(값 없음) + 과업 지시."""
+    """카탈로그(크기 없음) + 논지 + 과업 지시.
+
+    `thesis`는 결정적 코드가 뽑아낸 관찰이다. 이게 없으면 LLM이 쓸 수 있는
+    것이 재무 기계학뿐이라 지표를 하나씩 읊는 글이 된다.
+    """
     lines = []
     for e in registry.catalog():
         d = f", 방향: {e['direction']}" if e["direction"] != "-" else ""
         lines.append(f"- {{{{num:{e['key']}}}}} — {e['label']} (단위: {e['unit']}{d})")
+    head = f"# 대상\n{company_name} · {fiscal_year}년 연간 실적 ({basis}재무제표)\n\n"
+    if thesis:
+        head += f"# 확인된 관찰 (결정적 계산 결과 — 이것을 논지의 축으로 삼으십시오)\n{thesis}\n\n"
     return (
-        f"# 대상\n{company_name} · {fiscal_year}년 연간 실적 ({basis}재무제표)\n\n"
-        f"# 수치 카탈로그 (크기는 제공하지 않습니다. 키와 방향만 쓰십시오)\n"
+        head
+        + "# 수치 카탈로그 (크기는 제공하지 않습니다. 키와 방향만 쓰십시오)\n"
         + "\n".join(lines)
         + "\n\n# 과업\n위 카탈로그의 플레이스홀더만 사용해 실적 리뷰 노트의 "
         "요약·투자포인트·실적 설명·리스크를 작성하십시오. JSON만 출력합니다."
@@ -155,10 +166,11 @@ def narrate(
     fiscal_year: int,
     basis: str,
     registry: NumberRegistry,
+    thesis: str | None = None,
     max_attempts: int = 2,
 ) -> NarrationResult:
     """LLM으로 섹션 본문을 만든다. 실패 시 problems를 채워 반환한다."""
-    user = build_user_prompt(company_name, fiscal_year, basis, registry)
+    user = build_user_prompt(company_name, fiscal_year, basis, registry, thesis)
     problems: list[str] = []
     last: Completion | None = None
 
