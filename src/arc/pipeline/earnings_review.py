@@ -244,6 +244,8 @@ def compose_sections(
         or ["공시에서 확인된 범위 안에서는 별도로 짚을 회사 리스크가 없다."],
         # 결정론 v0에는 관전 포인트가 없다 — 이건 해석이라 LLM이 채운다.
         "watchpoints": [],
+        # 산업 배경도 LLM 전용 레인이다 (미검증). 없으면 섹션이 통째로 빠진다.
+        "industry_context": "",
         "method_notes": _method_notes(ms, valuation, info, estimates),
     }
 
@@ -820,7 +822,7 @@ def build_report(
 
     narration = None
     if llm is not None:
-        from arc.llm.narrate import narrate
+        from arc.llm.narrate import narrate, narrate_industry
 
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
         obs = build_observations(ms, build_margin_bridge(ms))
@@ -851,6 +853,20 @@ def build_report(
             sections["watchpoints"] = list(n.get("watchpoints") or [])
             if n.get("business_narrative"):
                 sections["business_narrative"] = n["business_narrative"]
+
+        # 산업 배경 — **별도 호출, 별도 규칙.** 수치 카탈로그를 주지 않고
+        # 숫자를 아예 금지한다. 숫자가 섞이면 이 문단만 버리고 리포트는 낸다.
+        if business is not None and business.usable:
+            industry_text, industry_problems = narrate_industry(
+                llm,
+                company_name=company.name,
+                profile_text=business.overview,
+                segments=[x.name for x in segments.lines] if segments and segments.usable else [],
+                registry=registry,
+            )
+            sections["industry_context"] = industry_text
+            if industry_problems and narration is not None:
+                narration.problems.extend(industry_problems)
     assembled = assemble(
         company,
         ms,
