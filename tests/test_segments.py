@@ -87,6 +87,21 @@ class TestExpandTable:
         xml = '<TABLE><TR><TD COLSPAN="2">머리</TD><TD>값</TD></TR></TABLE>'
         assert expand_table(xml)[0] == ["머리", "", "값"]
 
+    def test_note_tables_use_te_cells(self):
+        """주석의 표는 셀을 `<TE>`로 쓴다. TD만 보면 본문이 통째로 비어 나온다."""
+        xml = (
+            "<TABLE><TR><TH>구분</TH><TH>국내</TH></TR>"
+            "<TR><TE>제품매출액</TE><TE>289,725,221,349</TE></TR></TABLE>"
+        )
+        grid = expand_table(xml)
+        assert grid[0] == ["구분", "국내"]
+        assert grid[1] == ["제품매출액", "289,725,221,349"]
+
+    def test_nested_te_inside_td_not_split(self):
+        """TD 안에 TE가 중첩된 표에서 둘 다 매칭하면 셀이 쪼개진다."""
+        xml = "<TABLE><TR><TD><TE>값</TE></TD><TD>다음</TD></TR></TABLE>"
+        assert expand_table(xml)[0] == ["값", "다음"]
+
     def test_entities_cleaned(self):
         xml = "<TABLE><TR><TD>가&cr;나</TD></TR></TABLE>"
         assert expand_table(xml)[0] == ["가 나"]
