@@ -1,0 +1,23 @@
+{
+  "summary": "2025년 매출은 {{num:revenue_2025a}}으로 전년 대비 {{num:revenue_yoy_2025a}} 증가했다. 매출총이익과 영업이익도 각각 {{num:gross_profit_yoy_2025a}}, {{num:operating_income_yoy_2025a}} 증가하며 외형과 이익이 같은 방향으로 개선됐다. 원가율은 {{num:cost_ratio_chg_2025a}}하고 매출총이익률은 {{num:gross_margin_chg_2025a}}하면서 비용 구조 개선이 확인됐다. 순이익률도 {{num:net_margin_chg_2025a}}해 영업단과 순이익단의 수익성 흐름이 함께 나아졌다.",
+  "investment_points": [
+    {
+      "title": "외형 성장과 이익 개선의 동반",
+      "body": "매출은 {{num:revenue_2025a}}으로 전년 대비 {{num:revenue_yoy_2025a}} 증가했고, 영업이익은 {{num:operating_income_yoy_2025a}} 증가했다. 매출총이익도 {{num:gross_profit_yoy_2025a}} 증가해 외형 확대가 총이익 개선으로 이어졌다. 매출과 영업이익이 같은 방향으로 움직였다는 점에서 실적 개선의 질을 확인할 수 있다."
+    },
+    {
+      "title": "원가 부담 완화가 총이익률 개선으로 연결",
+      "body": "원가율은 {{num:cost_ratio_2024a}}에서 {{num:cost_ratio_2025a}}로 낮아졌고, 전년 대비 {{num:cost_ratio_chg_2025a}}했다. 이에 따라 매출총이익률은 {{num:gross_margin_2024a}}에서 {{num:gross_margin_2025a}}로 높아지며 {{num:gross_margin_chg_2025a}}했다. 공시상 원가 부담 완화와 총이익률 개선의 연결은 확인되지만, 세부 사업별 기여도는 추가 확인이 필요하다."
+    },
+    {
+      "title": "순이익단까지 이어진 수익성 개선",
+      "body": "영업이익률은 {{num:operating_margin_2024a}}에서 {{num:operating_margin_2025a}}로 높아져 {{num:operating_margin_chg_2025a}}했다. 순이익도 {{num:net_income_yoy_2025a}} 증가했고 순이익률은 {{num:net_margin_chg_2025a}}했다. 영업단의 개선이 순이익단까지 이어졌으나, 영업외손익의 세부 변동 요인은 추가 확인이 필요하다."
+    }
+  ],
+  "earnings_narrative": "2025년 매출은 {{num:revenue_2025a}}으로 전년 대비 {{num:revenue_yoy_2025a}} 증가했다. 매출원가는 {{num:cost_of_sales_yoy_2025a}} 증가했지만 원가율은 {{num:cost_ratio_chg_2025a}}해 매출총이익률과 영업이익률이 각각 {{num:gross_margin_chg_2025a}}, {{num:operating_margin_chg_2025a}}했다. 순이익률도 {{num:net_margin_chg_2025a}}해 전반적인 수익성 개선 흐름을 보였다.",
+  "risks": [
+    "제품별 매출 구성과 가격 정책이 수익성에 미친 영향은 공시 수치만으로 제한적으로 판단되므로 추가 확인이 필요하다.",
+    "원가율 개선의 지속 여부는 원재료 가격과 사업별 비용 변동에 따라 달라질 수 있어 추가 확인이 필요하다.",
+    "순이익 개선에는 영업외손익이 영향을 줄 수 있으므로 세부 변동 요인에 대한 추가 확인이 필요하다."
+  ]
+}

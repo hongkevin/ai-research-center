@@ -100,6 +100,16 @@ class NumberEntry(BaseModel):
     formula: str | None = None  # 계산식. 원시 수치는 None
     inputs: list[str] = Field(default_factory=list)  # 계산 입력이 된 다른 key들
 
+    def direction(self) -> str:
+        """부호에서 뽑은 방향. 증감률·변화폭에만 의미가 있다."""
+        if not any(k in self.key for k in ("_yoy_", "_chg_")):
+            return "-"
+        if self.value > 0:
+            return "증가"
+        if self.value < 0:
+            return "감소"
+        return "보합"
+
     def rendered(self) -> str:
         """치환에 쓰일 문자열."""
         if self.display is not None:
@@ -145,13 +155,22 @@ class NumberRegistry:
         return key in self._entries
 
     def catalog(self) -> list[dict[str, str | None]]:
-        """LLM 프롬프트에 넣을 카탈로그. **값은 포함하지 않는다.**
+        """LLM 프롬프트에 넣을 카탈로그. **값(크기)은 포함하지 않는다.**
 
         값을 주면 LLM이 그 값을 복사해 리터럴로 쓸 수 있다. 키·라벨·단위만
         주면 플레이스홀더 외에는 쓸 방법이 없다.
+
+        다만 **방향(부호)은 준다.** 방향은 결정적 코드가 부호에서 뽑은 사실이라
+        환각이 아니고, 이것이 없으면 LLM이 모든 문장을 "변동했다"로 쓸 수밖에
+        없어 읽히지 않는 글이 된다. 크기는 여전히 알 수 없다.
         """
         return [
-            {"key": e.key, "label": e.label or e.key, "unit": e.unit}
+            {
+                "key": e.key,
+                "label": e.label or e.key,
+                "unit": e.unit,
+                "direction": e.direction(),
+            }
             for e in self._entries.values()
         ]
 

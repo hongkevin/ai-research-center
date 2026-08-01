@@ -69,10 +69,23 @@ class TestRegister:
             reg().get("nope")
 
     def test_catalog_omits_values(self):
-        """카탈로그에 값이 들어가면 LLM이 복사해 리터럴로 쓸 수 있다."""
+        """카탈로그에 **크기**가 들어가면 LLM이 복사해 리터럴로 쓸 수 있다.
+
+        방향(부호)은 예외 — 결정적 코드가 뽑은 사실이고, 없으면 LLM이 모든
+        문장을 "변동했다"로 쓸 수밖에 없어 읽히지 않는 글이 된다.
+        """
         for row in reg().catalog():
-            assert set(row) == {"key", "label", "unit"}
+            assert set(row) == {"key", "label", "unit", "direction"}
             assert "value" not in row and "display" not in row
+            # 방향은 크기를 노출하지 않는 어휘여야 한다
+            assert row["direction"] in {"증가", "감소", "보합", "-"}
+
+    def test_direction_from_sign(self):
+        r = reg()
+        assert r.get("rev_yoy_2025a").direction() == "증가"  # +12.3
+        assert r.get("op_margin_2025a").direction() == "-"  # 증감률이 아님
+        neg = NumberEntry(key="x_chg_2025a", value=-2.7, unit="pp", provenance=PROV)
+        assert neg.direction() == "감소"
 
     def test_rendered_fallback_format(self):
         e = NumberEntry(key="x", value=1234.5, unit="억원", provenance=PROV)
