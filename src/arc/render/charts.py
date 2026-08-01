@@ -54,8 +54,10 @@ def segment_bar(slices: list[Slice], *, width: int = 640, height: int = 46) -> s
 
     bar_h, gap, label_y = 22, 2, 40
     parts = [
-        f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
-        f'role="img" aria-label="부문별 매출 구성" xmlns="http://www.w3.org/2000/svg">'
+        (
+            f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+            f'role="img" aria-label="부문별 매출 구성" xmlns="http://www.w3.org/2000/svg">'
+        )
     ]
     x = 0.0
     for i, s in enumerate(items):
@@ -98,8 +100,10 @@ def trend_bars(
     bar_w = min(28.0, (group_w - 14) / len(series))
 
     parts = [
-        f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
-        f'role="img" aria-label="연도별 추이" xmlns="http://www.w3.org/2000/svg">'
+        (
+            f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+            f'role="img" aria-label="연도별 추이" xmlns="http://www.w3.org/2000/svg">'
+        )
     ]
     for gi, label in enumerate(labels):
         base_x = gi * group_w + (group_w - bar_w * len(series)) / 2
