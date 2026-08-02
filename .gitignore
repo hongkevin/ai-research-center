@@ -46,3 +46,8 @@ bench_out/
 # 웹 실행 산출물
 .arc-store/
 drafts/
+
+# 리포트 코퍼스 — 외부 PDF 원본과 캐시는 제외, 색인/노트/README는 추적
+corpus/**/*.pdf
+corpus/**/text/
+corpus/**/prices/
