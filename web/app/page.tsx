@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
+import { ThemeToggle } from "@/components/workbench/theme-toggle";
 import { useGeneration, type Phase } from "@/lib/use-generation";
 import type { ViewModel } from "@/lib/api";
 
@@ -52,6 +53,9 @@ export default function Workbench() {
             — {vm.company} ({vm.symbol}) · {vm.market} · FY{vm.year} · {vm.basis}재무제표
           </span>
         )}
+        <div className="ml-auto">
+          <ThemeToggle />
+        </div>
       </header>
 
       <div className="grid items-start xl:grid-cols-[320px_minmax(0,1fr)_360px]">

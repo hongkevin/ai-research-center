@@ -61,6 +61,16 @@ def _registry():
 
 
 class TestNumbersCarryProvenance:
+    def test_number_is_keyboard_reachable(self):
+        """마우스로만 열리면 키보드 검토자에게는 출처가 **아예 없다.**
+
+        "숫자를 누르면 출처가 나온다"가 이 제품의 논증이므로, 그 상호작용에
+        닿는 경로가 하나뿐이면 안 된다.
+        """
+        out = substitute_with_spans("매출은 {{num:revenue_2025a}}이다.", _registry())
+        assert 'role="button"' in out
+        assert 'tabindex="0"' in out
+
     def test_value_wrapped_with_source_attributes(self):
         out = substitute_with_spans("매출은 {{num:revenue_2025a}}이다.", _registry())
         assert 'class="num"' in out

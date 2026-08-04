@@ -65,7 +65,14 @@ def substitute_with_spans(text: str, registry: NumberRegistry) -> str:
             continue
         value = entry.rendered()
         cls = "num num--estimate" if m.group(1).endswith("e") else "num"
-        out.append(f'<span class="{cls}" {_attrs(entry)}>{_html.escape(value)}</span>')
+        # 키보드로도 출처에 닿아야 한다. "숫자를 누르면 출처가 나온다"가 이
+        # 제품의 논증인데, 마우스로만 열리면 키보드 검토자에게는 그 논증이
+        # 아예 없는 것과 같다. 마크다운 안의 인라인 요소라 <button>을 쓰면
+        # 문단·표 셀 레이아웃이 흔들리므로 span에 역할만 부여한다.
+        out.append(
+            f'<span class="{cls}" role="button" tabindex="0" '
+            f"{_attrs(entry)}>{_html.escape(value)}</span>"
+        )
         particle, consumed = replace_particle(value, text[m.end() : m.end() + 3])
         out.append(particle)
         pos = m.end() + consumed
