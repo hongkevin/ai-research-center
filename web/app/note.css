@@ -84,7 +84,8 @@
   border-bottom: 1px dashed var(--num);
   padding: 0 3px;
   border-radius: 3px;
-  cursor: help;
+  /* 호버 힌트가 아니라 눌러서 여는 것이다 (서버가 role="button"을 붙인다) */
+  cursor: pointer;
   white-space: nowrap;
 }
 .num:hover {
