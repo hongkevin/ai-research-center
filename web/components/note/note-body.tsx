@@ -65,12 +65,7 @@ export function NoteBody({
   }, [html, onHeadings]);
 
   // 위임으로 붙인다 — 본문이 통째로 바뀌어도 핸들러를 다시 달 필요가 없다.
-  const onClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>(".num");
-    if (!el) {
-      setInfo(null);
-      return;
-    }
+  const open = useCallback((el: HTMLElement) => {
     const d = el.dataset;
     setAnchor(el);
     setInfo({
@@ -92,11 +87,33 @@ export function NoteBody({
       <div
         ref={ref}
         className="note"
-        onClick={onClick}
+        onClick={(e) => {
+          const el = (e.target as HTMLElement).closest<HTMLElement>(".num");
+          if (el) open(el);
+          else setInfo(null);
+        }}
+        // 서버가 `.num`에 role="button" tabindex="0"을 붙여 보낸다. 버튼의
+        // 관례대로 Enter·Space 둘 다 받는다 — Space는 스크롤을 막아야 한다.
+        onKeyDown={(e) => {
+          if (e.key !== "Enter" && e.key !== " ") return;
+          const el = (e.target as HTMLElement).closest<HTMLElement>(".num");
+          if (!el) return;
+          e.preventDefault();
+          open(el);
+        }}
         dangerouslySetInnerHTML={{ __html: html }}
       />
 
-      <Popover open={info !== null} onOpenChange={(o) => !o && setInfo(null)}>
+      <Popover
+        open={info !== null}
+        onOpenChange={(o) => {
+          if (o) return;
+          setInfo(null);
+          // 닫으면 원래 숫자로 포커스를 돌려준다. 안 그러면 키보드 사용자가
+          // 본문 맨 앞에서 다시 Tab을 눌러 내려와야 한다.
+          anchor?.focus();
+        }}
+      >
         <PopoverContent
           anchor={anchor}
           align="start"

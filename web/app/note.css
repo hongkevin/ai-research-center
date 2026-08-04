@@ -92,6 +92,15 @@
   color: #fff;
 }
 
+/* 키보드로 옮겨다닐 때 지금 어디에 있는지 보여야 한다. 서버가 `.num`에
+   role="button" tabindex="0"을 붙이므로 Tab으로 숫자 사이를 건너다닌다. */
+.num:focus-visible {
+  outline: 2px solid var(--num);
+  outline-offset: 2px;
+  background: var(--num);
+  color: #fff;
+}
+
 /* 추정치는 공시값과 **반드시 달라 보여야 한다** (D24).
  * 이걸 같게 만들면 검토자가 우리 계산을 공시로 착각한다. */
 .num--estimate {
