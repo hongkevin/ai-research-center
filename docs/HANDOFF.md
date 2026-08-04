@@ -104,6 +104,11 @@ React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
 서버가 내보내는 고정 클래스명(`.num`, `.num--estimate`, `.note blockquote`)과
 정확히 맞아야 합니다.
 
+**출처는 마우스와 키보드 양쪽으로 열립니다.** `render_html()`이 `.num`에
+`role="button" tabindex="0"`을 붙이고 화면이 Enter·Space를 받습니다. 리팩터링
+중에 이 속성을 떨어뜨리면 키보드 검토자에게는 **출처가 아예 사라집니다** —
+테스트로 고정돼 있습니다(`test_number_is_keyboard_reachable`).
+
 ---
 
 ## 지금 상태 (전부 실측 확인)
