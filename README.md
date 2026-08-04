@@ -28,7 +28,13 @@ pytest
 | `DART_API_KEY` | [OpenDART](https://opendart.fss.or.kr) | 재무제표·공시 (핵심 기둥) |
 | `KRX_API_KEY` | [공공데이터포털](https://www.data.go.kr) — 금융위 주식시세정보 | EOD 시세 |
 | `NAVER_CLIENT_ID/SECRET` | [네이버 개발자센터](https://developers.naver.com) | 뉴스 스니펫 |
-| `ANTHROPIC_API_KEY` | [Claude Platform](https://platform.claude.com) | 보고서 생성·검증 (5~6주차부터) |
+| `OPENAI_API_KEY` | [OpenAI Platform](https://platform.openai.com) | 서술 생성. 없으면 결정론 문장으로만 생성된다 |
+
+서술 provider는 `llm/client.py`의 `PROVIDERS`에서 **키가 있는 것 중 첫 번째**를
+씁니다. 지금 등록된 것은 `openai` · `deepseek` · `moonshot` · `zhipu`이고, 넷 다
+OpenAI 호환 `/chat/completions`라 base_url과 모델명만 다릅니다.
+`.env.example`의 `ANTHROPIC_API_KEY`는 **아직 배선되지 않았습니다** — Claude는
+Messages API라 어댑터가 따로 필요합니다.
 
 ## 구조
 
@@ -36,17 +42,22 @@ pytest
 src/arc/
 ├── data/       # DataProvider 인터페이스 + KR(dart, krx_price, naver_news) / US(edgar, v2) 어댑터
 ├── store/      # DuckDB+Parquet point-in-time 저장소
-├── finmodel/   # 결정적 계산: 추정·멀티플·시나리오·감도표 (TODO 3~4주차)
-├── pipeline/   # S1~S6 오케스트레이션 (TODO)
-├── llm/        # Claude 클라이언트, Number Registry (TODO 5~6주차)
-├── verify/     # 검증 게이트 G0/G1/G2 (TODO 5~6주차)
-└── render/     # Jinja2 → HTML/PDF (TODO)
+├── finmodel/   # 결정적 계산: 지표·부문·추정·밸류에이션·백테스트·렌즈
+├── pipeline/   # S1~S6 오케스트레이션
+├── llm/        # LLM 클라이언트(provider 추상화), Number Registry, 조사 교정
+├── verify/     # 발간 게이트 G0
+├── render/     # 수치에 출처를 달아 HTML로 · 차트
+└── web/        # API · 인증 · 작업 큐(SSE) · 정적 파일 서빙
+
+templates/      # 리포트 템플릿 (wheel 밖 — ARC_TEMPLATE_DIR로 지정)
+web/            # 화면: Next.js + Tailwind + shadcn/ui (정적 익스포트)
 ```
 
 ## 이어서 작업하려면
 
 [docs/HANDOFF.md](docs/HANDOFF.md) — 현재 상태·불변식·남은 과제.
-결정의 이유는 [docs/decisions.md](docs/decisions.md)(D1~D32)에 있습니다.
+결정의 이유는 [docs/decisions.md](docs/decisions.md)(D1~D37)에 있습니다.
+화면을 만질 거라면 [web/README.md](web/README.md)를 먼저 보십시오.
 
 ## 배포
 

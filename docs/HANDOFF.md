@@ -1,4 +1,4 @@
-# 핸드오프 — 2026-08-01
+# 핸드오프 — 2026-08-04
 
 다른 세션에서 이어받기 위한 문서입니다. **먼저 이걸 읽고, 그다음
 [decisions.md](decisions.md)를 읽으십시오.** 결정의 이유는 전부 거기 있습니다.
@@ -20,9 +20,9 @@
 
 ---
 
-## 절대 깨면 안 되는 불변식 여섯
+## 절대 깨면 안 되는 불변식 일곱
 
-새 기능을 넣을 때 이 넷을 먼저 확인하십시오. 개발 중 게이트가 **여섯 번** 잡았고
+새 기능을 넣을 때 이 일곱을 먼저 확인하십시오. 개발 중 게이트가 **여섯 번** 잡았고
 전부 진짜 결함이었습니다.
 
 ### 1. 숫자는 레지스트리를 거치고, **출처는 항목마다 다르다**
@@ -90,22 +90,38 @@ rating 어휘를 **부정문으로도** 쓰지 않습니다 — G0가 "제시하
 - **부정 판독이 없다는 것은 긍정이 아닙니다** — 삼성전자는 부문 자산을 아예
   공시하지 않는데 "자본은 버는 곳에 놓여 있다"가 나왔던 자리입니다.
 
+### 7. 노트 본문의 숫자는 서버가 만든다 — 프런트가 다시 만들지 않는다 (D37)
+
+화면은 `web/`의 Next.js지만 **본문 HTML은 여전히 `render/html.py`가 만듭니다.**
+React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
+`element.dataset`을 읽어 팝오버만 붙입니다.
+
+**React에서 숫자를 포맷하지 마십시오.** 레지스트리를 거치는 경로가 둘이 되는
+순간 불변식 1이 화면에서 무너집니다. 차트도 같습니다 — 서버가 만든 인라인 SVG를
+넣습니다.
+
+그래서 `web/app/note.css`의 선택자는 **Tailwind 유틸리티로 바꿀 수 없습니다.**
+서버가 내보내는 고정 클래스명(`.num`, `.num--estimate`, `.note blockquote`)과
+정확히 맞아야 합니다.
+
 ---
 
 ## 지금 상태 (전부 실측 확인)
 
 | | |
 |---|---|
-| 배포 | https://ai-research-center-production.up.railway.app |
+| 배포 | https://ai-research-center-production.up.railway.app · 리전 **Asia Southeast(싱가포르)** |
 | 인증 | HTTP Basic · 아이디 `arc` · 비밀번호는 Railway `ARC_PASSWORD` |
 | 저장소 | github.com/hongkevin/ai-research-center (**PUBLIC**) |
-| 커밋 | 37 · main == origin/main |
-| 테스트 | 530 통과 · ruff 클린 |
-| CI | 린트 · 테스트 · Docker 빌드+헬스체크 · **키 패턴 검사** |
-| 성능 | 결정론 3.0초 / LLM 30~35초 (배포 기준) |
-| 비용 | 건당 ~$0.005 |
+| 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) |
+| 테스트 | 534 통과 · ruff 클린 · eslint 클린 |
+| CI | 린트 · 테스트 · **프런트 빌드** · Docker 빌드+헬스체크+화면서빙 · **키 패턴 검사** |
+| 성능 | 결정론 3.0초 / LLM 30~35초 (US 리전 기준 실측 — 싱가포르 이전 후 미측정) |
+| 비용 | 건당 ~$0.005 (실측 $0.0055, `gpt-5.6-luna`) |
 
-로컬 실행: `arc web` (기본 8000) · 생성: `arc generate 214450 -y 2025 --llm`
+로컬 실행: `cd web && npm run build` 후 `arc web` (기본 8000)
+생성: `arc generate 214450 -y 2025 --llm`
+화면 개발(핫 리로드): `web/README.md` 참조
 
 ### 검증에 쓰는 4종목
 
@@ -148,17 +164,35 @@ llm/josa.py               조사 교정 (치환 시점, D23)
 verify/g0.py              발간 게이트 4종
 pipeline/earnings_review.py  S1~S6 관통 + 진행 콜백
 render/html.py            수치에 출처를 달아 HTML로
-web/                      화면 · 인증 · 작업 큐(SSE)
+web/                      API · 인증 · 작업 큐(SSE) · 정적 파일 서빙
+```
+
+화면은 저장소 루트의 `web/`에 따로 있습니다 (D37).
+
+```
+web/app/page.tsx          작업대 (왼쪽 조작 · 가운데 노트 · 오른쪽 근거)
+web/app/note.css          ★ 서버가 발행하는 고정 클래스. 이름을 바꾸면 깨진다
+web/components/note/      본문 주입 + 수치 출처 팝오버
+web/components/workbench/ 폼 · 회사 검색 · 근거 패널
+web/lib/api.ts            /api/* 클라이언트 (타입은 app.py의 ViewModel)
+web/lib/use-generation.ts 생성 → SSE 진행 → 결과
 ```
 
 ---
 
 ## 남은 고도화 (우선순위 순)
 
-### ① 리전을 싱가포르로 — 5분, 코드 변경 없음
+### ~~① 리전을 싱가포르로~~ — **완료** (2026-08-04)
 
-Railway **Settings → Region → `Asia Southeast`**. 남은 지연의 대부분이
-DART(한국) 왕복입니다. 한국 리전은 없습니다.
+`x-railway-edge: sin1`로 확인했습니다. **다만 이전 후 성능을 다시 재지
+않았습니다** — 위 표의 3.0초/30~35초는 US 리전 기준입니다.
+
+참고로 **LLM 쪽은 리전 이동의 수혜가 거의 없습니다.** OpenAI는
+`api.openai.com` 단일 엔드포인트이고 Cloudflare 애니캐스트라 TLS는 가까운
+PoP에서 끊기지만 추론은 미국에서 돕니다(실측: 한국에서 TLS 27ms, TTFB 188ms →
+엣지 뒤로 ~160ms). 리포트당 LLM 호출은 2건뿐이라 왕복은 30초 중 1% 수준이고,
+나머지는 토큰 생성 시간입니다. DART는 **작은 호출이 많아** 왕복이 지배적이라
+이득이 컸던 것이고, 둘은 성질이 다릅니다.
 
 ### ~~② 부문별 이익 (Q10)~~ — **완료** (D33)
 
@@ -221,9 +255,14 @@ DS 19.1%). 전사 지표에는 이 사실이 나타나지 않습니다.
 
 ### ⑥ 사람이 해야 하는 것
 
-- **동료 피드백** — 지금 가장 값진 입력. "RA 리포트 같지 않다"는 지점이
-  벤치마크 추론보다 정확합니다.
-- **Q1·Q2 (RA 인터뷰)** · **Q9 (시나리오 가정 범위)** — 코드로 못 푸는 질문들.
+- **RA 인터뷰 — 예정일(2026-08-03)이 지났습니다.** 진행했다면 답을
+  [interview-ra.md](interview-ra.md) 「인터뷰 후」 절차대로 반영하십시오.
+  D2·D4를 흔드는 답이 나왔다면 그게 최대 수확이고, decisions.md에 재검토
+  항목으로 기록해야 합니다. **이게 지금 가장 값진 입력입니다** —
+  [corpus/FINDINGS.md](../corpus/FINDINGS.md)가 결과 데이터로는 리포트 품질을
+  정의할 수 없다고 결론 냈고, 그래서 남은 길이 사람에게 묻는 것뿐입니다.
+- **동료 피드백** — "RA 리포트 같지 않다"는 지점이 벤치마크 추론보다 정확합니다.
+- **Q9 (시나리오 가정 범위)** — 코드로 못 푸는 질문.
 
 ---
 
@@ -235,7 +274,7 @@ DS 19.1%). 전사 지표에는 이 사실이 나타나지 않습니다.
 | Peer 비교표 | 다종목 처리 + 업종 분류가 별건 |
 | 3표 완전 모델 (BS·CF 추정) | 손익 추정을 먼저 실측 검증한 뒤 |
 | 카피라이팅 제목 | 품질 편차 + 컴플라이언스 위험 |
-| Vercel 배포 | 서버리스라 `.arc-store`가 사라져 revision 추적이 죽는다 |
+| Vercel 배포 · 프런트/백 분리 | 서버리스라 `.arc-store`가 사라져 revision 추적이 죽는다. 화면이 Next.js가 된 뒤에도 **정적 익스포트를 FastAPI가 서빙**해 컨테이너 하나를 유지한다 (D37) — corpCode 캐시·LLM 예산도 같은 프로세스에 있다 |
 
 ---
 
@@ -259,6 +298,17 @@ DS 19.1%). 전사 지표에는 이 사실이 나타나지 않습니다.
 - **같은 함정을 세 번 밟았습니다**: 「가장 크게 움직인 것」을 고를 때 비율이 아니라
   **기여도(크기)**로 골라야 합니다. 매출 비중 2%짜리가 10pp 흔들려도 전사에는
   영향이 없습니다 (D28·D33·D33 보강).
+- **정적 파일 마운트는 반드시 `/api/*` 뒤에 등록하십시오.** `/`에 붙기 때문에
+  먼저 걸리면 API 요청을 정적 파일 조회가 가로챕니다 (`web/app.py` 맨 끝).
+- **shadcn은 Radix가 아니라 Base UI를 씁니다** (`base-nova` 스타일). 컴포넌트
+  API가 다릅니다. `web/AGENTS.md`가 "이 버전은 네가 아는 Next.js가 아니다,
+  `node_modules/next/dist/docs/`를 읽어라"라고 경고하는데 **맞는 말이고 지우지
+  마십시오** — 이 사실을 거기서 확인했습니다.
+- **`--header-h`를 헤더 여백과 함께 고치십시오.** 좌우 열이 sticky로 이 값만큼
+  내려붙습니다. 어긋나면 스크롤할 때 열이 헤더 밑으로 파고듭니다.
+- **백그라운드 명령을 `| tail`로 파이프하면 실패가 숨습니다.** `docker build`가
+  `command not found`로 죽었는데 파이프라인 종료코드가 `tail` 것이라 0으로
+  보고됐습니다. 성공했다고 착각한 채 넘어갔던 자리입니다.
 
 ---
 
@@ -269,6 +319,10 @@ docs/HANDOFF.md 와 docs/decisions.md 읽고 이어가자.
 ```
 
 세부는 이 순서로 보면 됩니다:
-[decisions.md](decisions.md) D1~D35 →
+[decisions.md](decisions.md) D1~D37 →
+[corpus/FINDINGS.md](../corpus/FINDINGS.md)(왜 사람에게 묻는 쪽으로 돌았는가) →
 [research/01-benchmark-smic.md](research/01-benchmark-smic.md)(SMIC 갭 분석) →
 [DEPLOY.md](DEPLOY.md)(배포·제약)
+
+화면을 만질 거라면 [web/README.md](../web/README.md)를 먼저 보십시오 —
+`note.css`를 왜 Tailwind로 바꿀 수 없는지가 거기 있습니다.

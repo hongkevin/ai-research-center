@@ -1,11 +1,14 @@
-"""웹 표면 — 실적 리뷰 노트 작업대 (MVP).
+"""웹 표면 — 실적 리뷰 노트 작업대.
 
-왜 서버 렌더인가
-----------------
-장기 계획은 Next.js + FastAPI다(ARCHITECTURE.md). 다만 이 화면의 목적은
-**검토 흐름을 눈으로 확인하는 것**이지 프론트엔드 아키텍처 검증이 아니다.
-서버 렌더로 먼저 세우고, 아래 `/api/*`는 나중에 Next.js가 그대로 호출한다 —
-즉 버리는 코드가 아니다.
+구성
+----
+화면은 `web/`의 Next.js(App Router + shadcn/ui)이고, 여기서는 **API만** 낸다.
+빌드 산출물(`web/out`)을 이 앱이 정적 파일로 서빙하므로 컨테이너는 하나다 —
+`.arc-store`(추정 이력)가 볼륨에 있어야 하고 corpCode 캐시가 프로세스 메모리에
+있어서, 서비스를 둘로 쪼개면 둘 다 깨진다 (Dockerfile 주석 참조).
+
+서버 렌더 Jinja 화면이 먼저 있었고 `/api/*`는 그때부터 이 이관을 전제로 열어둔
+것이다. 옮기면서 버린 코드는 없다.
 
 화면이 증명해야 하는 것
 -----------------------
@@ -29,14 +32,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import (
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.templating import Jinja2Templates
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
@@ -51,7 +49,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 load_dotenv(REPO_ROOT / ".env")
 
 WEB_DIR = Path(__file__).resolve().parent
-TEMPLATES = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+
+# Next.js 정적 익스포트. 로컬은 `web/out`, 컨테이너는 `/app/static`(Dockerfile).
+STATIC_DIR = Path(os.environ.get("ARC_STATIC_DIR", REPO_ROOT / "web" / "out"))
 
 # 추정 이력 — revision을 보여주려면 직전 **발간**이 있어야 한다
 STORE_DIR = Path(os.environ.get("ARC_STORE_DIR", REPO_ROOT / ".arc-store"))
@@ -83,6 +83,21 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="AI Research Center", docs_url="/api/docs", lifespan=_lifespan)
 # 공개 주소에 올릴 때 서버의 LLM 키가 무방비가 되면 안 된다 (auth.py 참조)
 app.add_middleware(BasicAuthMiddleware)
+
+# 개발 전용. `next dev`(3000)와 이 서버(8000)를 따로 띄울 때만 필요하다 —
+# 배포는 정적 익스포트를 같은 출처에서 서빙하므로 CORS가 필요 없다.
+# **기본은 꺼져 있다.** 켜진 채로 배포되면 아무 사이트나 이 API를 부를 수 있다.
+if os.environ.get("ARC_DEV_ORIGIN"):
+    from fastapi.middleware.cors import CORSMiddleware
+
+    # BasicAuth보다 나중에 추가해야 바깥에 놓여 preflight가 인증에 막히지 않는다
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[os.environ["ARC_DEV_ORIGIN"]],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 LLM_BUDGET = LLMBudget()
 JOBS = JobStore()
 
@@ -351,39 +366,6 @@ def _parse_overrides(raw: str) -> dict[str, float]:
     return out
 
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return TEMPLATES.TemplateResponse(
-        request, "index.html", {"vm": None, "symbol": "", "year": 2025, "assume": ""}
-    )
-
-
-@app.post("/", response_class=HTMLResponse)
-def generate(
-    request: Request,
-    symbol: str = Form(...),
-    year: int = Form(2025),
-    llm: bool = Form(False),
-    assume: str = Form(""),
-    action: str = Form("generate"),
-):
-    symbol = symbol.strip()
-    try:
-        symbol = _resolve_symbol(symbol)
-        vm = _generate(
-            symbol,
-            year,
-            use_llm=llm,
-            overrides=_parse_overrides(assume),
-            publish=(action == "publish"),
-        )
-    except Exception as exc:  # noqa: BLE001 — 화면에 원인을 보여주는 게 목적이다
-        vm = ViewModel(symbol=symbol, year=year, error=f"{type(exc).__name__}: {exc}")
-    return TEMPLATES.TemplateResponse(
-        request, "index.html", {"vm": vm, "symbol": symbol, "year": year, "assume": assume}
-    )
-
-
 # ── 비동기 생성 (진행 표시) ──────────────────────────────────────────
 @app.post("/api/jobs")
 def api_start_job(payload: dict):
@@ -444,26 +426,31 @@ async def api_job_events(job_id: str):
     )
 
 
-@app.get("/report/{job_id}", response_class=HTMLResponse)
-def report_page(request: Request, job_id: str):
-    """완료된 작업의 결과 페이지. 렌더는 폼 POST와 **같은 템플릿**을 쓴다."""
+@app.get("/api/jobs/{job_id}/result")
+def api_job_result(job_id: str):
+    """완료된 작업의 ViewModel을 JSON으로.
+
+    SSE가 `done`을 알린 뒤 화면이 이걸 읽어 간다. `/api/reports`로는 대신할 수
+    없다 — 그쪽은 동기라 생성이 끝날 때까지 30~40초를 붙들고, 그러면 진행
+    표시를 붙인 이유가 사라진다.
+
+    아직 끝나지 않은 작업에 200을 주면 화면이 빈 결과를 결과로 받는다.
+    상태를 구분해서 알린다.
+    """
     job = JOBS.get(job_id)
-    if job is None or not job.done:
-        return RedirectResponse("/", status_code=303)
-    vm = job.result if not job.error else ViewModel(symbol="", year=0, error=job.error)
-    return TEMPLATES.TemplateResponse(
-        request,
-        "index.html",
-        {
-            "vm": vm,
-            "symbol": getattr(vm, "symbol", ""),
-            "year": getattr(vm, "year", 2025),
-            "assume": "",
-        },
-    )
+    if job is None:
+        # TTL(30분)이 지나 정리됐을 수도 있다 — 화면이 다시 생성하도록 안내한다
+        return JSONResponse({"error": "없는 작업입니다. 다시 생성해 주세요."}, status_code=404)
+    if not job.done:
+        return JSONResponse({"error": "아직 생성 중입니다."}, status_code=409)
+    if job.error:
+        return JSONResponse({"error": job.error}, status_code=400)
+    if job.result is None:
+        return JSONResponse({"error": "결과가 비어 있습니다."}, status_code=500)
+    return JSONResponse(job.result.__dict__)
 
 
-# ── API — Next.js가 그대로 쓸 자리 ───────────────────────────────────
+# ── API ──────────────────────────────────────────────────────────────
 @app.post("/api/reports")
 def api_reports(payload: dict):
     """리포트 생성. 화면과 **같은 경로**를 탄다."""
@@ -502,3 +489,22 @@ def api_health():
         # 볼륨이 붙었는지. false면 생성은 되지만 revision 추적이 죽는다.
         "store": _store_status(),
     }
+
+
+# ── 화면 (Next.js 정적 익스포트) ─────────────────────────────────────
+#
+# **반드시 마지막에 마운트한다.** `/`에 붙으므로 위의 `/api/*`보다 먼저
+# 등록되면 API 요청을 정적 파일 조회가 가로챈다.
+#
+# `html=True`는 디렉터리에서 `index.html`을 찾고 404를 그 파일로 돌려준다 —
+# 클라이언트 라우팅에서 새로고침이 깨지지 않게 하는 설정이다.
+if STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="ui")
+else:
+    # 프런트를 빌드하지 않고 API만 띄우는 경우가 있다(테스트·CLI 개발).
+    # 죽이지 않고 알린다 — API는 그대로 동작한다.
+    log.warning(
+        "화면 빌드를 찾지 못했습니다 (%s). API만 제공합니다. "
+        "`cd web && npm run build` 후 다시 띄우십시오.",
+        STATIC_DIR,
+    )

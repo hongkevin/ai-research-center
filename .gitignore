@@ -47,6 +47,12 @@ bench_out/
 .arc-store/
 drafts/
 
+# 프런트엔드 (web/) — 빌드 산출물과 의존성. 소스와 lockfile은 추적한다.
+web/node_modules/
+web/.next/
+web/out/
+web/next-env.d.ts
+
 # 리포트 코퍼스 — 외부 PDF 원본과 캐시는 제외, 색인/노트/README는 추적
 corpus/**/*.pdf
 corpus/**/text/

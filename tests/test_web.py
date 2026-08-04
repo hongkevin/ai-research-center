@@ -437,3 +437,54 @@ class TestProviderSharing:
         monkeypatch.setattr(web, "_PROVIDER", None)
         monkeypatch.setattr(web, "DartProvider", _Fake)
         assert web._search_provider() is web._shared_provider()
+
+
+class TestJobResultEndpoint:
+    """SSE가 `done`을 알린 뒤 화면이 결과를 읽어 가는 경로.
+
+    아직 끝나지 않은 작업에 200을 주면 화면이 **빈 결과를 결과로** 받는다.
+    상태를 구분해서 알려야 한다.
+    """
+
+    def _web(self, monkeypatch, job=None):
+        import arc.web.app as web
+        from arc.web.jobs import JobStore
+
+        store = JobStore()
+        if job is not None:
+            store._jobs[job.id] = job
+        monkeypatch.setattr(web, "JOBS", store)
+        return web
+
+    def test_unknown_job_is_404(self, monkeypatch):
+        """TTL이 지나 정리된 작업도 여기로 온다 — 화면이 다시 생성하도록."""
+        web = self._web(monkeypatch)
+        assert web.api_job_result("nope").status_code == 404
+
+    def test_unfinished_job_is_409_not_an_empty_result(self, monkeypatch):
+        from arc.web.jobs import Job
+
+        web = self._web(monkeypatch, Job(id="j1"))
+        assert web.api_job_result("j1").status_code == 409
+
+    def test_failed_job_reports_the_reason(self, monkeypatch):
+        from arc.web.jobs import Job
+
+        web = self._web(monkeypatch, Job(id="j2", done=True, error="ValueError: 없는 종목"))
+        r = web.api_job_result("j2")
+        assert r.status_code == 400
+        assert "없는 종목" in r.body.decode()
+
+    def test_finished_job_returns_the_view_model(self, monkeypatch):
+        import json
+
+        from arc.web.app import ViewModel
+        from arc.web.jobs import Job
+
+        vm = ViewModel(symbol="214450", year=2025, company="파마리서치", gate_passed=True)
+        web = self._web(monkeypatch, Job(id="j3", done=True, result=vm))
+        r = web.api_job_result("j3")
+        assert r.status_code == 200
+        body = json.loads(r.body)
+        assert body["symbol"] == "214450"
+        assert body["gate_passed"] is True
