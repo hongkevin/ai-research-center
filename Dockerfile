@@ -6,6 +6,20 @@
 #   2. corpCode.xml(상장사 3,981개, 1.5MB)을 프로세스 수명 동안 캐시한다.
 #      콜드스타트마다 다시 받으면 검색이 매번 1초 이상 느려진다.
 
+# ── 화면 빌드 ────────────────────────────────────────────────────────
+# Next.js를 **정적으로 익스포트**한다. Node는 이 스테이지에만 있고 최종
+# 이미지에는 남지 않는다 — 런타임은 파이썬 하나다.
+FROM node:22-slim AS ui
+WORKDIR /ui
+
+# lockfile을 먼저 넣어 레이어 캐시를 살린다 — 화면 코드만 바뀌면 재설치하지 않는다
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
+# ── 런타임 ───────────────────────────────────────────────────────────
 FROM python:3.12-slim
 
 # 로그가 버퍼에 갇히면 배포 플랫폼에서 아무것도 안 보인다
@@ -27,6 +41,10 @@ COPY templates/ ./templates/
 # 리포트 템플릿은 **wheel에 들어가지 않는다**(src/arc 밖에 있다). 설치된
 # 패키지는 저장소 루트를 못 찾으므로 경로를 명시한다 (pipeline/_template_dir).
 ENV ARC_TEMPLATE_DIR=/app/templates
+
+# 화면. 위 ui 스테이지의 정적 익스포트를 가져온다 (web/app.py의 STATIC_DIR).
+COPY --from=ui /ui/out ./static/
+ENV ARC_STATIC_DIR=/app/static
 
 # 추정 이력의 기본 위치. Railway 등에서 이 경로에 볼륨을 붙인다.
 ENV ARC_STORE_DIR=/data/arc-store

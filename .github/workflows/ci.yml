@@ -55,9 +55,31 @@ jobs:
           fi
           echo "비밀키 패턴 없음"
 
-  docker:
+  # 화면. Docker 빌드에도 포함되지만 따로 돌린다 — 타입 오류를 이미지
+  # 빌드 10분을 기다린 뒤가 아니라 1분 만에 알게 된다.
+  web:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: 린트
+        run: npm run lint
+      # `next build`가 타입 검사까지 한다 — 별도 tsc 단계가 필요 없다
+      - name: 빌드 (타입 검사 포함)
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: 이미지 빌드 (배포 전에 깨지는지 확인)
@@ -66,9 +88,17 @@ jobs:
         run: |
           docker run -d --name arc -p 8000:8000 -e PORT=8000 arc:ci
           for i in $(seq 1 30); do
-            if curl -fs http://127.0.0.1:8000/api/health; then echo; exit 0; fi
+            if curl -fs http://127.0.0.1:8000/api/health; then echo; break; fi
             sleep 2
+            if [ "$i" = "30" ]; then
+              echo "::error::헬스체크 실패"; docker logs arc; exit 1
+            fi
           done
-          echo "::error::헬스체크 실패"
-          docker logs arc
-          exit 1
+          # 화면이 이미지 안에 실제로 들어갔는지. 정적 익스포트를 빼먹으면
+          # API는 멀쩡하고 화면만 404가 되어 헬스체크로는 안 잡힌다.
+          if ! curl -fs http://127.0.0.1:8000/ | grep -q "AI Research Center"; then
+            echo "::error::화면이 서빙되지 않습니다 (정적 익스포트 확인)"
+            docker logs arc
+            exit 1
+          fi
+          echo "화면 서빙 확인"

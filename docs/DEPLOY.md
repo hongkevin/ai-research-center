@@ -86,6 +86,10 @@ git push origin main
 | `ARC_USERNAME` | `arc` | 기본값 |
 | `ARC_LLM_LIMIT` | `200` | 프로세스당 LLM 호출 상한 |
 | `ARC_STORE_DIR` | `/data/arc-store` | Dockerfile 기본값. 볼륨과 맞춘다 |
+| `ARC_STATIC_DIR` | `/app/static` | Dockerfile 기본값. 화면(Next.js 정적 익스포트) 위치. 건드릴 일 없다 |
+
+`ARC_DEV_ORIGIN`은 **설정하지 마십시오.** `next dev`를 따로 띄울 때만 쓰는
+개발용 CORS 스위치이고, 켜진 채로 배포되면 다른 사이트가 이 API를 부를 수 있습니다.
 
 `PORT`는 Railway가 주입하므로 설정하지 마십시오.
 
