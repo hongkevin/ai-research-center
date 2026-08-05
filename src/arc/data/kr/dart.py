@@ -372,21 +372,37 @@ class DartProvider(DataProvider):
 
     # ------------------------------------------------------------ list.json
 
-    def get_disclosures(self, symbol: str, start: dt.date, end: dt.date) -> list[Disclosure]:
+    def get_disclosures(
+        self,
+        symbol: str,
+        start: dt.date,
+        end: dt.date,
+        pblntf_ty: str | None = None,
+    ) -> list[Disclosure]:
+        """공시 목록. `pblntf_ty`로 종류를 좁힐 수 있다.
+
+        **좁히지 않으면 대형주에서 수십 페이지를 넘긴다** — 실측: 삼성전자
+        900일치가 3,808건 / 39페이지로 8초가 걸렸고, 대부분이
+        「임원·주요주주특정증권등소유상황보고서」였다. 정기공시(A)만 받으면
+        10건 / 1페이지다.
+
+        종류: A 정기공시 · B 주요사항보고 · C 발행 · D 지분 · E 기타 ·
+        F 외부감사 · I 거래소공시(잠정실적이 여기 있다) · J 공정위
+        """
         corp_code = self.corp_code_for(symbol)
         disclosures: list[Disclosure] = []
         page_no = 1
         while True:
-            payload = self._get_json(
-                "list.json",
-                {
-                    "corp_code": corp_code,
-                    "bgn_de": start.strftime("%Y%m%d"),
-                    "end_de": end.strftime("%Y%m%d"),
-                    "page_no": str(page_no),
-                    "page_count": "100",
-                },
-            )
+            params = {
+                "corp_code": corp_code,
+                "bgn_de": start.strftime("%Y%m%d"),
+                "end_de": end.strftime("%Y%m%d"),
+                "page_no": str(page_no),
+                "page_count": "100",
+            }
+            if pblntf_ty:
+                params["pblntf_ty"] = pblntf_ty
+            payload = self._get_json("list.json", params)
             disclosures.extend(
                 self.parse_disclosures(payload, symbol=symbol, retrieved_at=self._now())
             )

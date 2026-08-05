@@ -37,6 +37,7 @@ export function GenerateForm({
   elapsed,
   vm,
   filings,
+  loadingFilings,
   preliminary,
   collapsed = false,
   onExpand,
@@ -50,6 +51,8 @@ export function GenerateForm({
   vm: ViewModel | null;
   /** DART가 준 실제 정기보고서 목록. 회사를 고르기 전에는 비어 있다. */
   filings: Filing[];
+  /** DART 조회는 시간이 걸린다. 아무 말 없이 잠겨 있으면 고장으로 읽힌다. */
+  loadingFilings: boolean;
   preliminary: Preliminary | null;
   /** 카드를 보는 중에는 접는다 — 생성 폼은 보드에서만 필요하다. */
   collapsed?: boolean;
@@ -106,7 +109,7 @@ export function GenerateForm({
           className="mt-1 h-9 w-full rounded-md border bg-transparent px-2.5 text-[13px] disabled:opacity-50"
         >
           {filings.length === 0 ? (
-            <option>회사를 먼저 고르십시오</option>
+            <option>{loadingFilings ? "공시 목록을 읽는 중…" : "회사를 먼저 고르십시오"}</option>
           ) : (
             filings.map((f) => (
               <option key={f.rcept_no} value={`${f.year}:${f.period}`}>

@@ -54,6 +54,7 @@ export default function Workbench() {
     assume: "",
   });
   const [filings, setFilings] = useState<Filing[]>([]);
+  const [loadingFilings, setLoadingFilings] = useState(false);
   const [preliminary, setPreliminary] = useState<Preliminary | null>(null);
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [cards, setCards] = useState<CardSummary[]>([]);
@@ -107,8 +108,11 @@ export default function Workbench() {
       // effect 본문에서 바로 setState하면 연쇄 렌더가 생긴다. 두 갈래 모두
       // 마이크로태스크 뒤로 넘긴다.
       await Promise.resolve();
+      if (!alive) return;
+      setLoadingFilings(valid);
       const d = valid ? await getFilings(code) : { periodic: [], preliminary: [] };
       if (!alive) return;
+      setLoadingFilings(false);
       setFilings(d.periodic);
       setPreliminary(d.preliminary[0] ?? null);
       const top = d.periodic[0];
@@ -219,6 +223,7 @@ export default function Workbench() {
             elapsed={elapsed}
             vm={shown}
             filings={filings}
+            loadingFilings={loadingFilings}
             preliminary={preliminary}
             collapsed={open !== null}
             onExpand={() => setOpen(null)}
