@@ -118,8 +118,8 @@ React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
 | 배포 | https://ai-research-center-production.up.railway.app · 리전 **Asia Southeast(싱가포르)** |
 | 인증 | **Supabase(Google) 또는 HTTP Basic** — 설정된 쪽을 쓴다 (D42). Basic은 Supabase 확인 후 삭제 |
 | 저장소 | github.com/hongkevin/ai-research-center (**PUBLIC**) |
-| 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) · **단계 레일** (D39) · **보드** (D40) · **리뷰 루프** (D41) |
-| 테스트 | 575 통과 · ruff 클린 · eslint 클린 |
+| 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) · **단계 레일** (D39) · **보드** (D40) · **리뷰 루프** (D41) · **발간은 카드에서** (D43) |
+| 테스트 | 624 통과 · ruff 클린 · eslint 클린 |
 | CI | 린트 · 테스트 · **프런트 빌드** · Docker 빌드+헬스체크+화면서빙 · **키 패턴 검사** |
 | 성능 | 결정론 3.0초 / LLM 30~35초 (US 리전 기준 실측 — 싱가포르 이전 후 미측정) |
 | 비용 | 건당 ~$0.005 (실측 $0.0055, `gpt-5.6-luna`) |
@@ -155,6 +155,8 @@ React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
 data/kr/dart.py           재무제표 (전체계정 → 주요계정 폴백, D20)
 data/kr/dart_reports.py   정기보고서 주요정보 6종 (주식수·배당·감사·인력·지분·출자)
 data/kr/dart_document.py  사업보고서 원문 (ZIP·표 파싱·<TE> 셀)
+data/kr/dart_toc.py       공시 목차 → 수치마다 자기 절로 가는 뷰어 링크 (D44)
+data/kr/ksic.py           KSIC 코드 → 업종명 (중분류, 헤더의 「산업」)
 finmodel/metrics.py       지표 13종 · 마진 브리지 · 논지 생성
 finmodel/segments.py      부문별 매출 (원문에서 뽑고 매출액으로 검산, D28)
 finmodel/segment_profit.py 부문별 손익 (IFRS 8 주석, 총계 열로 검산, D33)
@@ -273,7 +275,28 @@ DS 19.1%). 전사 지표에는 이 사실이 나타나지 않습니다.
 다음 후보는 **자산가치**(자산 대비 싼가, 그 자산은 진짜인가)이고, 시세 연결(③)
 후에 붙이는 편이 낫습니다. 다만 **먼저 동료에게 보여주십시오.**
 
-### ⑥ 사람이 해야 하는 것
+### ⑥ 계속할 관점 — **엔진은 이미 아는데 화면이 버린다**
+
+D39·D40·D41·D43·D44가 전부 같은 모양이었습니다. 새로 계산한 게 아니라 **이미
+있는 것을 표면으로 끌어올린 것**입니다:
+
+| | 엔진이 알던 것 | 화면이 하던 것 |
+|---|---|---|
+| D39 | 산출물마다 `reconciled`·`note`·`unavailable` | 통째로 버림 |
+| D40 | 생성물이 30분 뒤 사라짐 | 한 번에 끝내야 하는 폼 |
+| D41 | `assembled` + 레지스트리를 들고 있음 | 읽기 전용 스냅샷 |
+| D43 | 카드의 현재 본문 | 생성 직후 원본을 발간 |
+| D44 | 공시가 전년 누적·목차 좌표·KSIC를 줌 | 안 읽음 |
+
+**다음에 볼 곳** (같은 냄새가 나는 자리):
+
+- `SegmentProfitSet.section_title` — 어느 주석에서 왔는지 아는데 화면에 없음
+- `ValuationSet.eps_stmt` vs `eps_disclosed` — 교차검증을 하고도 결과를 안 보여줌
+- `MetricSet.missing_labels` — 못 구한 지표를 아는데 「지표 13종」이라고만 씀
+- `BusinessProfile.signals` — 뽑아 놓고 렌즈에만 쓰고 본문엔 안 냄
+- 카드 목록에 **전 분기 대비 무엇이 달라졌는지** — 버전 이력은 있는데 비교가 없음
+
+### ⑦ 사람이 해야 하는 것
 
 - **RA 인터뷰 — 예정일(2026-08-03)이 지났습니다.** 진행했다면 답을
   [interview-ra.md](interview-ra.md) 「인터뷰 후」 절차대로 반영하십시오.
@@ -308,6 +331,13 @@ DS 19.1%). 전사 지표에는 이 사실이 나타나지 않습니다.
 - **한글 정규식에 `\b`를 쓰지 마십시오** — 한글은 유니코드 단어문자라 "25배를"에서
   경계가 없습니다. G0에 구멍이 났던 자리입니다.
 - **DART 소형주는 연결재무제표가 없습니다** — CFS→OFS→주요계정 폴백이 이미 있습니다.
+- **재무제표 컬럼 이름이 보고서 종류마다 다릅니다** (D44). 분기·반기 **손익**은
+  `thstrm_add_amount`/`frmtrm_add_amount`(누적)이고 `bfefrmtrm_amount`가 아예
+  없습니다. 사업보고서 컬럼만 읽으면 **분기 노트의 전년 대비가 통째로 빕니다** —
+  차트가 비어 있을 때 차트를 의심하기 전에 파서를 보십시오. 재무상태표는 분기에도
+  `frmtrm_amount`라 규칙이 반대입니다.
+- **`(("a", "b"))`는 튜플이 아니라 문자열입니다.** 쉼표를 빼먹어 목차 라우팅이
+  "주" 한 글자로 매칭됐습니다 (D44). 문자열 튜플을 순회하는 코드에서 조용히 틀립니다.
 - **출자처 법인명에 각주가 붙어 옵니다** (`… Berhad (*6)`). G0가 미등록 숫자로
   막았고 그건 옳은 판정입니다 — 게이트를 풀지 말고 이름을 고치십시오.
 - **「부정이 없다」를 「긍정」으로 세지 마십시오.** 삼성전자는 부문 자산을 아예
@@ -339,7 +369,7 @@ docs/HANDOFF.md 와 docs/decisions.md 읽고 이어가자.
 ```
 
 세부는 이 순서로 보면 됩니다:
-[decisions.md](decisions.md) D1~D42 →
+[decisions.md](decisions.md) D1~D44 →
 [corpus/FINDINGS.md](../corpus/FINDINGS.md)(왜 사람에게 묻는 쪽으로 돌았는가) →
 [research/01-benchmark-smic.md](research/01-benchmark-smic.md)(SMIC 갭 분석) →
 [DEPLOY.md](DEPLOY.md)(배포·제약)
