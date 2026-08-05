@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 
+import { Diff } from "@/components/note/diff";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -29,52 +30,6 @@ import { cn } from "@/lib/utils";
  * * **직접 편집** — 사람이 원문을 고친다. 숫자를 그냥 타이핑하면 **G0가 막고
  *   이유를 말한다.** 불변식이 처음으로 사람에게 보이는 자리다.
  */
-
-/** 낱말 단위 LCS diff. 무엇이 바뀌었는지가 이 루프의 산출물이다. */
-function diffWords(before: string, after: string) {
-  const a = before.split(/(\s+)/);
-  const b = after.split(/(\s+)/);
-  const n = a.length;
-  const m = b.length;
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
-    }
-  }
-  const out: { text: string; kind: "same" | "del" | "add" }[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      out.push({ text: a[i], kind: "same" });
-      i++;
-      j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) out.push({ text: a[i++], kind: "del" });
-    else out.push({ text: b[j++], kind: "add" });
-  }
-  while (i < n) out.push({ text: a[i++], kind: "del" });
-  while (j < m) out.push({ text: b[j++], kind: "add" });
-  return out;
-}
-
-function Diff({ before, after }: { before: string; after: string }) {
-  return (
-    <div className="max-h-[180px] overflow-y-auto rounded-md border bg-card p-3 text-[13px] leading-relaxed">
-      {diffWords(before, after).map((w, i) => (
-        <span
-          key={i}
-          className={cn(
-            w.kind === "del" && "bg-bad/15 text-bad line-through",
-            w.kind === "add" && "bg-ok/15 text-ok",
-          )}
-        >
-          {w.text}
-        </span>
-      ))}
-    </div>
-  );
-}
 
 type Mode = "comment" | "edit";
 
