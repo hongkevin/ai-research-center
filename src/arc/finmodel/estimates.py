@@ -55,15 +55,36 @@ class Assumption:
 
 
 @dataclass
-class EstimateSet:
-    """FY+1 추정. 값은 전부 `assumptions`에서 계산된다."""
+class YearProjection:
+    """추정 연도 1개. 값은 전부 그 해의 `assumptions`에서 계산된다."""
 
-    fiscal_year: int  # 추정 연도
+    fiscal_year: int
+    assumptions: list[Assumption] = field(default_factory=list)
+    values: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class EstimateSet:
+    """추정. 기본은 FY+1 한 해이고, 사람이 연차를 늘릴 수 있다.
+
+    **기계는 한 해만 세운다.** D34 실측에서 1년차 영업이익 오차가 이미 중앙값
+    55.9%였다 — 그 위에 2년차를 기계가 얹으면 그럴듯해 보이는 노이즈가 는다.
+
+    반면 **사람이 연차별 가정을 넣는 것은 다르다.** 55.9%는 우리 기준선의
+    성적이지 RA의 가정의 성적이 아니다. 그때 기계는 예측하지 않고 산술만
+    한다 — 그게 D24의 계산/판단 경계다.
+
+    `fiscal_year`·`assumptions`·`values`는 **첫 해**를 가리킨다. 기존 호출부가
+    그대로 동작하도록 남겨둔 별칭이다.
+    """
+
+    fiscal_year: int  # 추정 연도 (첫 해)
     base_year: int  # 기준 실적 연도
     assumptions: list[Assumption] = field(default_factory=list)
     values: dict[str, int] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     method: str = "과거 실적의 기계적 연장"
+    years: list[YearProjection] = field(default_factory=list)
 
     @property
     def usable(self) -> bool:
@@ -114,8 +135,29 @@ def build_baseline_assumptions(ms: MetricSet) -> list[Assumption]:
     return out
 
 
-def apply_assumptions(ms: MetricSet, assumptions: list[Assumption]) -> EstimateSet:
-    """가정 → 추정치. **모든 값이 가정에서 나온다.**"""
+def _project(base_revenue: int, assumptions: list[Assumption]) -> dict[str, int]:
+    """한 해치 산술. 매출에 성장률을 곱하고, 거기에 마진을 곱한다."""
+    by_key = {a.key: a for a in assumptions}
+    growth = by_key.get("revenue_growth")
+    if growth is None:
+        return {}
+    out = {"revenue": round(base_revenue * (1 + growth.value / 100))}
+    for metric, akey in (("operating_income", "operating_margin"), ("net_income", "net_margin")):
+        a = by_key.get(akey)
+        if a is not None:
+            out[metric] = round(out["revenue"] * a.value / 100)
+    return out
+
+
+def apply_assumptions(
+    ms: MetricSet,
+    assumptions: list[Assumption],
+    forward: list[list[Assumption]] | None = None,
+) -> EstimateSet:
+    """가정 → 추정치. **모든 값이 가정에서 나온다.**
+
+    `forward`는 2년차 이후의 연차별 가정이다. 비우면 지금까지처럼 한 해만 낸다.
+    """
     est = EstimateSet(fiscal_year=ms.fiscal_year + 1, base_year=ms.fiscal_year)
     est.assumptions = list(assumptions)
 
@@ -142,22 +184,61 @@ def apply_assumptions(ms: MetricSet, assumptions: list[Assumption]) -> EstimateS
             "이 추정은 참고용 기준선이다."
         )
 
-    est.values["revenue"] = round(revenue * (1 + growth.value / 100))
-
+    est.values = _project(revenue, assumptions)
     for metric, akey in (("operating_income", "operating_margin"), ("net_income", "net_margin")):
-        a = by_key.get(akey)
-        if a is None:
+        if metric not in est.values:
             est.warnings.append(f"{akey} 가정이 없어 {metric} 추정을 비웠다.")
-            continue
-        est.values[metric] = round(est.values["revenue"] * a.value / 100)
+    est.years = [
+        YearProjection(
+            fiscal_year=est.fiscal_year, assumptions=list(assumptions), values=est.values
+        )
+    ]
 
-    if any(a.is_override for a in assumptions):
+    # 2년차 이후 — **사람이 넣은 가정으로만 간다.** 기계가 알아서 늘리지 않는다.
+    for i, ay in enumerate(forward or [], start=2):
+        prev = est.years[-1].values.get("revenue")
+        if not prev:
+            est.warnings.append(f"{est.fiscal_year + i - 1}년 매출이 없어 그 뒤를 잇지 못했다.")
+            break
+        est.years.append(
+            YearProjection(
+                fiscal_year=est.fiscal_year + i - 1,
+                assumptions=list(ay),
+                values=_project(prev, ay),
+            )
+        )
+
+    if any(a.is_override for a in assumptions) or forward:
         est.method = "사용자 지정 가정"
     return est
 
 
-def build_estimates(ms: MetricSet, overrides: dict[str, float] | None = None) -> EstimateSet:
-    """기본 가정 + 사용자 덮어쓰기 → 추정. 덮어쓴 가정은 `is_override`로 남는다."""
+def _merge(base: list[Assumption], overrides: dict[str, float]) -> list[Assumption]:
+    known = {a.key for a in base}
+    out = [
+        Assumption(a.key, a.label, overrides[a.key], a.unit, "사용자 지정", True)
+        if a.key in overrides
+        else a
+        for a in base
+    ]
+    out += [
+        Assumption(k, k, v, "%", "사용자 지정", True)
+        for k, v in overrides.items()
+        if k not in known
+    ]
+    return out
+
+
+def build_estimates(
+    ms: MetricSet,
+    overrides: dict[str, float] | None = None,
+    forward: list[dict[str, float]] | None = None,
+) -> EstimateSet:
+    """기본 가정 + 사용자 덮어쓰기 → 추정. 덮어쓴 가정은 `is_override`로 남는다.
+
+    `forward`는 2년차 이후의 연차별 덮어쓰기다. 지정하지 않은 항목은 **직전
+    해의 가정을 그대로 이어받는다** — 마진을 바꾸지 않겠다는 것도 판단이다.
+    """
     assumptions = build_baseline_assumptions(ms)
     if overrides:
         merged: list[Assumption] = []
@@ -173,7 +254,14 @@ def build_estimates(ms: MetricSet, overrides: dict[str, float] | None = None) ->
             if key not in known:
                 merged.append(Assumption(key, key, value, "%", "사용자 지정", True))
         assumptions = merged
-    return apply_assumptions(ms, assumptions)
+
+    chain: list[list[Assumption]] = []
+    prev = assumptions
+    for ov in forward or []:
+        nxt = _merge(prev, ov or {})
+        chain.append(nxt)
+        prev = nxt
+    return apply_assumptions(ms, assumptions, chain)
 
 
 # ── revision 추적 ────────────────────────────────────────────────────
@@ -265,8 +353,13 @@ def from_rows(rows: list[dict], symbol: str, fiscal_year: int) -> EstimateSet | 
 def build_estimate_entries(
     est: EstimateSet, revisions: list[Revision], prov: Provenance
 ) -> list[NumberEntry]:
-    """추정치 → NumberEntry. 키 접미사는 `e`(estimate)로 실적(`a`)과 구분한다."""
-    y = est.fiscal_year
+    """추정치 → NumberEntry. 키 접미사는 `e`(estimate)로 실적(`a`)과 구분한다.
+
+    연차가 늘어나면 그만큼 낸다 — 키가 연도를 달고 있어(`revenue_2027e`) 해가
+    늘어도 충돌하지 않는다. **2년차부터는 산식이 기준 실적이 아니라 직전
+    추정을 가리킨다** — 실제로 그 위에 쌓았기 때문이고, 그 사실이 출처에
+    드러나야 검토자가 무엇에 기대고 있는지 안다.
+    """
     out: list[NumberEntry] = []
 
     def add(key, value, unit, display, label, formula=None, inputs=None):
@@ -285,43 +378,51 @@ def build_estimate_entries(
             )
         )
 
-    for metric, label in _REV_LABELS.items():
-        v = est.values.get(metric)
-        add(
-            f"{metric}_{y}e",
-            v,
-            "원",
-            fmt_krw(v),
-            f"{label} ({y}E)",
-            formula=f"{est.base_year}년 실적 × 가정",
-            inputs=[f"{metric}_{est.base_year}a"],
-        )
+    projections = est.years or [
+        YearProjection(fiscal_year=est.fiscal_year, assumptions=est.assumptions, values=est.values)
+    ]
+    for idx, yp in enumerate(projections):
+        y = yp.fiscal_year
+        base_year = est.base_year if idx == 0 else y - 1
+        base_kind, base_suffix = ("실적", "a") if idx == 0 else ("추정", "e")
+        for metric, label in _REV_LABELS.items():
+            v = yp.values.get(metric)
+            add(
+                f"{metric}_{y}e",
+                v,
+                "원",
+                fmt_krw(v),
+                f"{label} ({y}E)",
+                formula=f"{base_year}년 {base_kind} × 가정",
+                inputs=[f"{metric}_{base_year}{base_suffix}"],
+            )
+        for a in yp.assumptions:
+            add(
+                f"assume_{a.key}_{y}e",
+                a.value,
+                a.unit,
+                f"{a.value:+.1f}{a.unit}" if a.unit == "%" else f"{a.value}{a.unit}",
+                f"가정 · {a.label} ({y}E)",
+            )
 
-    for a in est.assumptions:
-        add(
-            f"assume_{a.key}_{y}e",
-            a.value,
-            a.unit,
-            f"{a.value:+.1f}{a.unit}" if a.unit == "%" else f"{a.value}{a.unit}",
-            f"가정 · {a.label} ({y}E)",
-        )
-
+    # revision은 **첫 해에만** 붙는다 — 직전 발간과 비교하는 축이 그것이다.
+    y1 = est.fiscal_year
     for r in revisions:
         add(
-            f"{r.metric}_prev_{y}e",
+            f"{r.metric}_prev_{y1}e",
             r.previous,
             "원",
             fmt_krw(r.previous),
-            f"{r.label} 직전 추정 ({y}E)",
+            f"{r.label} 직전 추정 ({y1}E)",
         )
         add(
-            f"{r.metric}_revision_{y}e",
+            f"{r.metric}_revision_{y1}e",
             r.change_pct,
             "%",
             fmt_pct(r.change_pct),
-            f"{r.label} 추정 변화 ({y}E)",
+            f"{r.label} 추정 변화 ({y1}E)",
             formula="(현재 추정 - 직전 추정) / |직전 추정|",
-            inputs=[f"{r.metric}_{y}e"],
+            inputs=[f"{r.metric}_{y1}e"],
         )
 
     return out

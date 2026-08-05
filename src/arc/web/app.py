@@ -131,6 +131,8 @@ class ViewModel:
     assumptions: list[dict] = field(default_factory=list)
     revisions: list[dict] = field(default_factory=list)
     estimate_warnings: list[str] = field(default_factory=list)
+    # 연차별 추정. 첫 해는 `assumptions`와 같다 — 화면이 표로 낸다.
+    estimate_years: list[dict] = field(default_factory=list)
     # 파이프라인 단계 기록 — 무엇을 검산했고 무엇을 못 구했는지.
     # 이게 없으면 화면은 종목코드를 넣으면 완성본이 나오는 블랙박스다.
     stages: list[dict] = field(default_factory=list)
@@ -224,6 +226,24 @@ def _to_view(r: ReportResult) -> ViewModel:
             for a in r.estimates.assumptions
         ]
         v.estimate_warnings = r.estimates.warnings
+        v.estimate_years = [
+            {
+                "fiscal_year": y.fiscal_year,
+                "values": y.values,
+                "assumptions": [
+                    {
+                        "key": a.key,
+                        "label": a.label,
+                        "value": round(a.value, 2),
+                        "unit": a.unit,
+                        "basis": a.basis,
+                        "override": a.is_override,
+                    }
+                    for a in y.assumptions
+                ],
+            }
+            for y in r.estimates.years
+        ]
     v.revisions = [
         {
             "label": x.label,
@@ -278,6 +298,7 @@ def _generate(
     period: str = "ANNUAL",
     use_llm: bool,
     overrides: dict[str, float],
+    forward: list[dict[str, float]] | None = None,
     publish: bool = False,
     on_progress=None,
 ) -> tuple[ViewModel, dict]:
@@ -320,6 +341,7 @@ def _generate(
         llm=client,
         store=store,
         assumptions=overrides or None,
+        forward=forward or None,
         on_progress=on_progress,
     )
     vm = _to_view(r)
@@ -871,10 +893,14 @@ def api_recompute(card_id: str, payload: dict):
         return err
 
     raw = payload.get("assumptions") or {}
+    raw_fwd = payload.get("forward") or []
     try:
         overrides = {str(k): float(v) for k, v in raw.items()}
+        forward = [{str(k): float(v) for k, v in (y or {}).items()} for y in raw_fwd]
     except (TypeError, ValueError):
         return JSONResponse({"error": "가정 값은 숫자여야 합니다."}, status_code=400)
+    if len(forward) > 4:
+        return JSONResponse({"error": "연차는 5년까지만 냅니다."}, status_code=400)
 
     try:
         vm, doc = _generate(
@@ -883,6 +909,7 @@ def api_recompute(card_id: str, payload: dict):
             period=card.period,
             use_llm=False,
             overrides=overrides,
+            forward=forward,
         )
     except Exception as exc:  # noqa: BLE001 — 화면에 원인을 보여주는 게 목적이다
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)

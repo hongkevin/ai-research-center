@@ -99,7 +99,13 @@ export function EvidenceRail({
       </RailSection>
 
       {/* 편집은 Assumptions가 맡는다 — 기준선과 근거를 보여준 다음에 고친다. */}
-      {cardId && <Assumptions cardId={cardId} assumptions={vm.assumptions} onRecomputed={onRecomputed ?? (() => {})} />}
+      {cardId && (
+        <Assumptions
+          cardId={cardId}
+          years={vm.estimate_years ?? []}
+          onRecomputed={onRecomputed ?? (() => {})}
+        />
+      )}
 
       {vm.revisions.length > 0 && (
         <RailSection title="추정 변화" count={vm.revisions.length}>

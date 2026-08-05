@@ -63,6 +63,13 @@ export interface Revision {
   direction: string;
 }
 
+/** 추정 연도 1개. **2년차부터는 사람이 넣은 가정으로만 간다.** */
+export interface EstimateYear {
+  fiscal_year: number;
+  values: Record<string, number>;
+  assumptions: Assumption[];
+}
+
 export interface StageCheck {
   label: string;
   value: string;
@@ -104,6 +111,8 @@ export interface ViewModel {
   assumptions: Assumption[];
   revisions: Revision[];
   estimate_warnings: string[];
+  /** 연차별 추정. 첫 해는 assumptions와 같다. */
+  estimate_years: EstimateYear[];
   segment_chart: string;
   segment_legend: string;
   trend_chart: string;
@@ -191,11 +200,12 @@ export async function confirmCard(id: string): Promise<CardSummary> {
 export async function recompute(
   id: string,
   assumptions: Record<string, number>,
+  forward: Record<string, number>[] = [],
 ): Promise<{ version: string } | { error: string }> {
   const r = await api(`/api/cards/${id}/recompute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ assumptions }),
+    body: JSON.stringify({ assumptions, forward }),
   });
   const body = await r.json().catch(() => ({}));
   return r.ok ? body : { error: body.error ?? `HTTP ${r.status}` };
