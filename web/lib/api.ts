@@ -93,6 +93,13 @@ export interface Stage {
   note: string;
 }
 
+export interface SegmentItem {
+  name: string;
+  color: string;
+  amount: string;
+  share: string;
+}
+
 export interface ViewModel {
   symbol: string;
   year: number;
@@ -115,8 +122,11 @@ export interface ViewModel {
   estimate_years: EstimateYear[];
   segment_chart: string;
   segment_legend: string;
+  /** 부문별 이름 · 금액 · 비중. 값은 레지스트리가 만든 표시 문자열이다. */
+  segment_items: SegmentItem[];
   trend_chart: string;
   trend_legend: string;
+  trend_note: string;
   industry_context: boolean;
   llm_used: boolean;
   llm_model: string;

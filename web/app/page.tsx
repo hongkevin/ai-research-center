@@ -443,15 +443,46 @@ function CenterColumn({
                   <h2 className="!mt-0 !border-0 !pt-0">부문 구성</h2>
                   <div
                     className="chart"
-                    dangerouslySetInnerHTML={{
-                      __html: vm.segment_chart + vm.segment_legend,
-                    }}
+                    dangerouslySetInnerHTML={{ __html: vm.segment_chart }}
                   />
+                  {/* 색 막대만 있으면 「감으로만 보인다」 — 금액과 비중을
+                      붙인다. 값은 서버가 레지스트리에서 꺼낸 문자열이라
+                      본문의 같은 숫자와 갈라질 수 없다. */}
+                  {vm.segment_items.length > 0 ? (
+                    <table className="seg-table">
+                      <thead>
+                        <tr>
+                          <th>부문</th>
+                          <th className="num">매출</th>
+                          <th className="num">비중</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {vm.segment_items.map((s) => (
+                          <tr key={s.name}>
+                            <td>
+                              <span
+                                className="seg-chip"
+                                style={{ background: s.color }}
+                              />
+                              {s.name}
+                            </td>
+                            <td className="num">{s.amount || "—"}</td>
+                            <td className="num">{s.share || "—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <div
+                      dangerouslySetInnerHTML={{ __html: vm.segment_legend }}
+                    />
+                  )}
                 </>
               )}
               {vm.trend_chart && (
                 <>
-                  <h2>3개년 추이</h2>
+                  <h2>매출·영업이익 추이</h2>
                   <div
                     className="chart"
                     dangerouslySetInnerHTML={{
@@ -459,7 +490,9 @@ function CenterColumn({
                     }}
                   />
                   <Hint>
-                    정확한 수치는 아래 표에 있습니다. 차트는 크기 비교용입니다.
+                    {vm.trend_note
+                      ? vm.trend_note
+                      : "정확한 수치는 아래 표에 있습니다. 차트는 크기 비교용입니다."}
                   </Hint>
                 </>
               )}

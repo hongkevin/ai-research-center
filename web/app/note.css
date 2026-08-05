@@ -172,3 +172,38 @@
   display: block;
   max-width: 100%;
 }
+
+/* 부문 구성표 — 차트 바로 밑에 숫자를 둔다.
+   막대만 있으면 비중이 감으로만 읽히고, 절대 금액은 아예 안 보인다. */
+.note .seg-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 4px;
+  font-size: 13px;
+}
+.note .seg-table th,
+.note .seg-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.note .seg-table th {
+  font-weight: 500;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.note .seg-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.note .seg-table td.num {
+  color: var(--num);
+}
+.note .seg-chip {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  margin-right: 7px;
+  vertical-align: baseline;
+}

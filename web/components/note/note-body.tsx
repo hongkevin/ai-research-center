@@ -65,7 +65,11 @@ export function NoteBody({
     root.querySelectorAll("h2, h3").forEach((h, i) => {
       const id = `sec-${i}`;
       h.id = id;
-      found.push({ id, text: h.textContent ?? "", level: h.tagName === "H3" ? 3 : 2 });
+      found.push({
+        id,
+        text: h.textContent ?? "",
+        level: h.tagName === "H3" ? 3 : 2,
+      });
     });
     onHeadings(found);
   }, [html, onHeadings]);
@@ -153,7 +157,13 @@ export function NoteBody({
   );
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <>
       <dt className="text-muted-foreground font-normal">{label}</dt>
@@ -205,7 +215,11 @@ function NumberDetail({ info }: { info: NumberInfo }) {
           rel="noopener"
           className="mt-2 inline-block text-num hover:underline"
         >
-          원문 공시 열기 →
+          {/* 접수번호만 알던 시절엔 8MB 보고서의 첫 장으로 갔다. 지금은
+              그 숫자가 실린 절로 바로 간다 (출처 줄의 「→」 뒤가 그 절이다). */}
+          {info.source.includes("→")
+            ? "원문에서 이 숫자 보기 →"
+            : "원문 공시 열기 →"}
         </a>
       )}
     </div>

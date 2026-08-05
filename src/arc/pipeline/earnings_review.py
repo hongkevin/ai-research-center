@@ -37,6 +37,8 @@ from arc.data.kr.dart_document import (
     section_provenance,
 )
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
+from arc.data.kr.dart_toc import fetch_toc, locate
+from arc.data.kr.ksic import industry_name
 from arc.finmodel.business import (
     BusinessProfile,
     build_business_entries,
@@ -910,6 +912,107 @@ def _env() -> Environment:
     )
 
 
+_PERIOD_LABEL = {
+    PeriodType.Q1: "1분기 누적",
+    PeriodType.Q2: "2분기",
+    PeriodType.HALF: "반기 누적",
+    PeriodType.Q3: "3분기 누적",
+    PeriodType.Q4: "4분기",
+    PeriodType.ANNUAL: "연간",
+}
+
+
+def _header_rows(
+    company: Company,
+    ms: MetricSet,
+    *,
+    published_at: dt.date,
+    period: PeriodType,
+    consolidation: ConsolidationType,
+    valuation: ValuationSet | None,
+    info: PeriodicReportInfo | None,
+    statement: FinancialStatement | None,
+) -> list[dict[str, str]]:
+    """헤더 표 — **못 채우는 줄은 만들지 않는다.**
+
+    한때 「산업 —」·「시가총액 —」·「주가 (—) —」가 나란히 서 있었다. 다섯 줄
+    중 셋이 대시면 표가 정보를 주는 게 아니라 없다는 사실만 알린다. 채울 수
+    있으면 채우고, 없으면 줄을 뺀다.
+
+    대신 **이미 갖고 있는데 안 쓰던 것**을 올린다 — 어느 보고서로 썼는지,
+    연결인지 별도인지, 감사의견이 무엇인지. RA가 노트를 열고 30초 안에 확인할
+    것들이다.
+    """
+    y = ms.fiscal_year
+    rows: list[dict[str, str]] = [{"label": "시장", "value": company.market.value}]
+
+    industry = industry_name(company.industry)
+    if industry:
+        rows.append({"label": "산업", "value": industry})
+
+    rows.append(
+        {
+            "label": "기준 보고서",
+            "value": f"{y}년 {_PERIOD_LABEL.get(period, period.value)}"
+            + (f" · {statement.rcept_no}" if statement is not None and statement.rcept_no else ""),
+        }
+    )
+    rows.append(
+        {
+            "label": "회계기준",
+            "value": "연결" if consolidation is ConsolidationType.CONSOLIDATED else "별도",
+        }
+    )
+
+    audit = info.audit if info is not None else None
+    if audit is not None and audit.opinion:
+        rows.append(
+            {
+                "label": "감사의견",
+                "value": audit.opinion + (f" · {audit.auditor}" if audit.auditor else ""),
+            }
+        )
+
+    # 주가는 **배당에서 역산한 값**이라 늘 있지는 않다 (D19). 없으면 두 줄이
+    # 통째로 빠진다 — 시세 피드가 붙기 전까지는 그게 정직하다.
+    if valuation is not None and valuation.has_price_anchor:
+        label = "역산 주가" if valuation.is_implied else "주가"
+        rows.append({"label": "시가총액", "value": _ph(f"market_cap_{y}a")})
+        rows.append({"label": label, "value": _ph(f"price_{y}a")})
+
+    rows.append({"label": "작성일", "value": published_at.isoformat()})
+    return rows
+
+
+def link_to_sections(registry: NumberRegistry) -> int:
+    """레지스트리의 `verify_url`을 **그 숫자가 실린 절**로 바꾼다. 바꾼 건수를 준다.
+
+    지금까지 「원문 공시 열기」는 접수번호만 알아 보고서 첫 장으로 갔다. 삼성물산
+    사업보고서는 8MB고 목차가 143절이라, 부문 매출 하나 확인하려면 사람이 다시
+    찾아야 했다 — 검증 경로가 있다는 말이 반만 참이었다.
+
+    **못 찾으면 그대로 둔다.** 첫 장으로 가는 링크는 불편할 뿐이지만, 엉뚱한
+    절로 가는 링크는 틀린 주장이다.
+    """
+    cache: dict[str, list] = {}
+    changed = 0
+    for entry in registry._entries.values():
+        prov = entry.provenance
+        rcept = prov.source_ref if prov else None
+        if not rcept or not rcept.isdigit():
+            continue
+        if rcept not in cache:
+            cache[rcept] = fetch_toc(rcept)
+        found = locate(cache[rcept], prov.dataset)
+        if found is None:
+            continue
+        entry.provenance = prov.model_copy(
+            update={"verify_url": found.url, "dataset": f"{prov.dataset} → {found.text}"}
+        )
+        changed += 1
+    return changed
+
+
 def assemble(
     company: Company,
     ms: MetricSet,
@@ -918,6 +1021,10 @@ def assemble(
     published_at: dt.date,
     valuation: ValuationSet | None = None,
     registry: NumberRegistry | None = None,
+    period: PeriodType = PeriodType.ANNUAL,
+    consolidation: ConsolidationType = ConsolidationType.CONSOLIDATED,
+    info: PeriodicReportInfo | None = None,
+    statement: FinancialStatement | None = None,
 ) -> str:
     """Jinja2 조립. 플레이스홀더는 변수 '값'이라 그대로 살아남는다.
 
@@ -926,9 +1033,18 @@ def assemble(
     등장 키를 뽑고, 2차에서 표를 채운다. 템플릿 렌더는 비용이 없다.
     """
     tpl = _env().get_template(TEMPLATE_NAME)
-    y = ms.fiscal_year
-    has_price = valuation is not None and valuation.has_price_anchor
-    price_label = "역산 주가" if (valuation and valuation.is_implied) else "주가"
+    # 헤더 수치도 플레이스홀더로 둔다 — 리터럴을 넣으면 게이트 밖에서 숫자가
+    # 새고, 감사 추적(bindings)에도 안 잡힌다.
+    rows = _header_rows(
+        company,
+        ms,
+        published_at=published_at,
+        period=period,
+        consolidation=consolidation,
+        valuation=valuation,
+        info=info,
+        statement=statement,
+    )
 
     def render(sources: list[dict[str, str]]) -> str:
         return tpl.render(
@@ -937,24 +1053,15 @@ def assemble(
                 "name": company.name,
                 "symbol": company.symbol,
                 "market": company.market.value,
-                # DART가 주는 industry는 KSIC 코드(예: "26")다. 코드만 보여주면
-                # 독자에게 의미가 없고, 게이트에는 근거 없는 맨 정수로 잡힌다.
-                # 코드→업종명 매핑을 붙이기 전까지는 표시하지 않는다.
-                "industry": "—",
             },
             report={
-                "period_label": f"{ms.fiscal_year}년 연간",
+                # 분기보고서로 만든 노트를 「연간」이라고 부르고 있었다.
+                "period_label": f"{ms.fiscal_year}년 {_PERIOD_LABEL.get(period, period.value)}",
                 "published_at": published_at.isoformat(),
                 "data_sources": "OpenDART (전자공시시스템)",
                 "retrieved_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
             },
-            header={
-                # 헤더도 플레이스홀더로 둔다 — 리터럴을 넣으면 게이트 밖에서
-                # 숫자가 새고, 감사 추적(bindings)에도 잡히지 않는다.
-                "market_cap": _ph(f"market_cap_{y}a") if has_price else "—",
-                "price_date": price_label if has_price else "—",
-                "close_price": _ph(f"price_{y}a") if has_price else "—",
-            },
+            header_rows=rows,
             **sections,
         )
 
@@ -1506,7 +1613,18 @@ def build_report(
         published_at=published_at or dt.datetime.now(dt.UTC).date(),
         valuation=valuation,
         registry=registry,
+        period=period,
+        consolidation=stmt.consolidation,
+        info=info,
+        statement=stmt,
     )
+
+    st_link = step("links", "출처 링크", label="출처 링크")
+    linked = link_to_sections(registry)
+    st_link.summary = f"수치 {linked}건이 원문 해당 절로 연결됨" if linked else "절 링크 없음"
+    if not linked:
+        st_link.status = "absent"
+        st_link.note = "공시 목차를 읽지 못해 링크가 보고서 첫 장을 가리킵니다."
 
     st = step("gate", "발간 전 점검", label="발간 전 점검")
     gate = G0Gate(registry).check(assembled)

@@ -14,13 +14,12 @@
    TemplateSyntaxError가 난다. #}
 # {{ company.name }} ({{ company.symbol }}) — {{ report.period_label }} 실적 리뷰
 
+{# 못 채우는 줄은 아예 만들지 않는다 — 대시만 늘어선 표는 정보가 아니다. #}
 | 항목 | 내용 |
 |---|---|
-| 시장 | {{ company.market }} |
-| 산업 | {{ company.industry }} |
-| 시가총액 | {{ header.market_cap }} |
-| 주가 ({{ header.price_date }}) | {{ header.close_price }} |
-| 작성일 | {{ report.published_at }} |
+{% for row in header_rows %}
+| {{ row.label }} | {{ row.value }} |
+{% endfor %}
 
 {% if industry_context %}
 ## 0. 산업 배경
