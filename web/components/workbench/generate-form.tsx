@@ -198,26 +198,16 @@ export function GenerateForm({
             disabled={busy}
           />
           <Label htmlFor="llm" className="text-sm">
-            LLM 서술 사용
+            문장까지 작성
           </Label>
         </div>
-        <Hint>끄면 결정론 문장으로 생성합니다. 수치는 어느 쪽이든 동일합니다.</Hint>
+        <Hint>끄면 표와 수치만 만듭니다. <b>수치는 어느 쪽이든 같습니다.</b></Hint>
 
         <Button type="submit" disabled={busy} className="w-full mt-6">
           {busy ? "작성 중…" : "초안 작성"}
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={busy}
-          onClick={() => onSubmit(true)}
-          className="w-full mt-2 hover:text-ok hover:border-ok"
-        >
-          검토 완료 · 발간
-        </Button>
         <Hint>
-          <b>초안 작성</b>은 미리보기라 이력에 남지 않습니다. <b>발간</b>해야 추정이 저장되고
-          다음 발간의 변화 추적 기준이 됩니다 (D27).
+          공시에서 수치를 읽어 초안을 만듭니다. 읽고 고친 뒤 카드에서 발간합니다.
         </Hint>
 
       </form>

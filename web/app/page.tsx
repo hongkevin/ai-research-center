@@ -14,7 +14,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { symbolOf } from "@/components/workbench/company-search";
 
-import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
+import {
+  GenerateForm,
+  type FormState,
+} from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
 import { Brand, BRAND_LINE } from "@/components/workbench/brand";
 import { ThemeToggle } from "@/components/workbench/theme-toggle";
@@ -27,6 +30,7 @@ import {
   listCards,
   getFilings,
   listSections,
+  publishCard,
   type DocSection,
   type Filing,
   type Preliminary,
@@ -64,7 +68,9 @@ export default function Workbench() {
   const { phase, steps, vm, error, elapsed, run } = useGeneration();
 
   const busy = phase === "running";
-  const [signedIn, setSignedIn] = useState<boolean | null>(authEnabled ? null : true);
+  const [signedIn, setSignedIn] = useState<boolean | null>(
+    authEnabled ? null : true,
+  );
 
   // 로그인이 켜져 있으면 세션이 있어야 화면을 연다. 껍데기는 공개지만
   // 데이터는 전부 `/api/*` 뒤에 있어서, 세션 없이는 빈 보드만 보인다.
@@ -73,7 +79,10 @@ export default function Workbench() {
     const client = supabase();
     void client.auth.getSession().then(({ data }) => {
       if (data.session) setSignedIn(true);
-      else location.replace(`/login/?next=${encodeURIComponent(location.pathname)}`);
+      else
+        location.replace(
+          `/login/?next=${encodeURIComponent(location.pathname)}`,
+        );
     });
     const { data: sub } = client.auth.onAuthStateChange((_e, session) => {
       setSignedIn(Boolean(session));
@@ -110,14 +119,20 @@ export default function Workbench() {
       await Promise.resolve();
       if (!alive) return;
       setLoadingFilings(valid);
-      const d = valid ? await getFilings(code) : { periodic: [], preliminary: [] };
+      const d = valid
+        ? await getFilings(code)
+        : { periodic: [], preliminary: [] };
       if (!alive) return;
       setLoadingFilings(false);
       setFilings(d.periodic);
       setPreliminary(d.preliminary[0] ?? null);
       const top = d.periodic[0];
       if (top) {
-        setForm((f) => ({ ...f, year: top.year, period: top.period as FormState["period"] }));
+        setForm((f) => ({
+          ...f,
+          year: top.year,
+          period: top.period as FormState["period"],
+        }));
       }
     })();
     return () => {
@@ -162,6 +177,18 @@ export default function Workbench() {
     setCards(await listCards());
   }
 
+  const [publishing, setPublishing] = useState<string>("");
+
+  async function publish(id: string) {
+    setPublishing("");
+    const r = await publishCard(id);
+    setPublishing(
+      "error" in r ? r.error : `발간했습니다 — ${r.published_path}`,
+    );
+    await openCard(id);
+    setCards(await listCards());
+  }
+
   async function remove(id: string) {
     await deleteCard(id);
     setOpen((cur) => (cur?.id === id ? null : cur));
@@ -178,7 +205,11 @@ export default function Workbench() {
   return (
     <>
       <header className="sticky top-0 z-10 flex flex-wrap items-baseline gap-3 border-b bg-card px-8 py-5">
-        <button type="button" onClick={() => setOpen(null)} className="shrink-0">
+        <button
+          type="button"
+          onClick={() => setOpen(null)}
+          className="shrink-0"
+        >
           <Brand className="text-[15px]" />
         </button>
 
@@ -190,12 +221,15 @@ export default function Workbench() {
             <span className="font-medium">{open.company || open.symbol}</span>
             <span className="text-muted-foreground">
               {" "}
-              ({open.symbol}) · {open.vm.market} · FY{open.year} · {open.vm.basis} ·{" "}
+              ({open.symbol}) · {open.vm.market} · FY{open.year} ·{" "}
+              {open.vm.basis} ·{" "}
               <span className="font-mono">{open.version}</span>
             </span>
           </span>
         ) : (
-          <span className="text-[13px] text-muted-foreground">{BRAND_LINE}</span>
+          <span className="text-[13px] text-muted-foreground">
+            {BRAND_LINE}
+          </span>
         )}
         <div className="ml-auto flex items-center gap-1">
           <ThemeToggle />
@@ -203,7 +237,9 @@ export default function Workbench() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => void signOut().then(() => location.replace("/login/"))}
+              onClick={() =>
+                void signOut().then(() => location.replace("/login/"))
+              }
               className="h-7 text-[12px] text-muted-foreground"
             >
               로그아웃
@@ -246,23 +282,44 @@ export default function Workbench() {
                   <Button
                     size="sm"
                     variant={editing ? "secondary" : "default"}
-                    onClick={() => startEditing(editing ? null : editable[0].title)}
+                    onClick={() =>
+                      startEditing(editing ? null : editable[0].title)
+                    }
                     className="h-7 text-[12px]"
                   >
                     {editing ? "편집기 닫기" : "문서 수정"}
+                  </Button>
+                )}
+                {/* **발간은 읽고 고친 뒤에 하는 일이다.** 한때 이 버튼이 초안
+                    작성 폼에 있어서, 아무것도 안 만든 채로 「검토 완료」를 누를
+                    수 있었다. */}
+                {open.vm.gate_passed && !open.published_path && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void publish(open.id)}
+                    className="h-7 text-[12px] hover:border-ok hover:text-ok"
+                  >
+                    검토 완료 · 발간
                   </Button>
                 )}
                 <span className="text-[11.5px] text-muted-foreground">
                   제목 옆 「수정」으로도 열 수 있습니다
                 </span>
               </div>
+              {publishing && (
+                <p className="mb-3 text-[12px] text-muted-foreground">
+                  {publishing}
+                </p>
+              )}
               {open.vm.gate_passed && editable.length === 0 && (
                 <Alert className="mb-4 max-w-[860px] border-warn">
                   <AlertTitle>이 카드는 편집할 수 없습니다</AlertTitle>
                   <AlertDescription>
-                    편집기가 붙기 전에 만들어진 카드라 <b>원문이 저장돼 있지 않습니다.</b>{" "}
-                    수정하려면 같은 종목으로 다시 생성해 주십시오 — 새로 만든 카드에는
-                    제목 옆에 「수정」이 나타납니다.
+                    편집기가 붙기 전에 만들어진 카드라{" "}
+                    <b>원문이 저장돼 있지 않습니다.</b> 수정하려면 같은 종목으로
+                    다시 생성해 주십시오 — 새로 만든 카드에는 제목 옆에
+                    「수정」이 나타납니다.
                   </AlertDescription>
                 </Alert>
               )}
@@ -281,7 +338,12 @@ export default function Workbench() {
             </Alert>
           ) : (
             <>
-              <Board cards={cards} onOpen={openCard} onConfirm={confirm} onDelete={remove} />
+              <Board
+                cards={cards}
+                onOpen={openCard}
+                onConfirm={confirm}
+                onDelete={remove}
+              />
               <BoardHint />
             </>
           )}
@@ -343,7 +405,9 @@ function CenterColumn({
       {vm.notice && (
         <Card className="max-w-[860px] border-warn">
           <CardContent className="py-4">
-            <Badge className="bg-warn/15 text-warn border-transparent">● 안내</Badge>
+            <Badge className="bg-warn/15 text-warn border-transparent">
+              ● 안내
+            </Badge>
             <Hint>{vm.notice}</Hint>
           </CardContent>
         </Card>
@@ -352,11 +416,14 @@ function CenterColumn({
       {vm.published_path && (
         <Card className="max-w-[860px] border-ok">
           <CardContent className="py-4">
-            <Badge className="bg-ok/15 text-ok border-transparent">● 발간 완료</Badge>
+            <Badge className="bg-ok/15 text-ok border-transparent">
+              ● 발간 완료
+            </Badge>
             <Hint>
               {vm.published_path}
               <br />
-              추정이 이력에 저장됐습니다. 다음 발간에서 이 값 대비 변화가 표시됩니다.
+              추정이 이력에 저장됐습니다. 다음 발간에서 이 값 대비 변화가
+              표시됩니다.
             </Hint>
           </CardContent>
         </Card>
@@ -376,7 +443,9 @@ function CenterColumn({
                   <h2 className="!mt-0 !border-0 !pt-0">부문 구성</h2>
                   <div
                     className="chart"
-                    dangerouslySetInnerHTML={{ __html: vm.segment_chart + vm.segment_legend }}
+                    dangerouslySetInnerHTML={{
+                      __html: vm.segment_chart + vm.segment_legend,
+                    }}
                   />
                 </>
               )}
@@ -385,9 +454,13 @@ function CenterColumn({
                   <h2>3개년 추이</h2>
                   <div
                     className="chart"
-                    dangerouslySetInnerHTML={{ __html: vm.trend_chart + vm.trend_legend }}
+                    dangerouslySetInnerHTML={{
+                      __html: vm.trend_chart + vm.trend_legend,
+                    }}
                   />
-                  <Hint>정확한 수치는 아래 표에 있습니다. 차트는 크기 비교용입니다.</Hint>
+                  <Hint>
+                    정확한 수치는 아래 표에 있습니다. 차트는 크기 비교용입니다.
+                  </Hint>
                 </>
               )}
             </div>
@@ -407,8 +480,8 @@ function CenterColumn({
             {vm.gate_summary}
             <br />
             <br />
-            차단된 초안은 표시하지 않습니다. 검토자가 결과로 착각할 수 있기 때문입니다. 오른쪽
-            위반 내역을 확인하세요.
+            차단된 초안은 표시하지 않습니다. 검토자가 결과로 착각할 수 있기
+            때문입니다. 오른쪽 위반 내역을 확인하세요.
           </AlertDescription>
         </Alert>
       )}

@@ -73,6 +73,11 @@ class Card:
     version: str = "v0.1"
     versions: list[dict] = field(default_factory=list)
 
+    # 발간할 때 추정 이력으로 남길 재료 (D27). 발간은 읽고 고친 뒤에 하는
+    # 일이라 카드에 있어야 하고, 그러려면 그때까지 들고 있어야 한다.
+    estimate_snapshot: dict = field(default_factory=dict)
+    published_path: str = ""
+
     def summary(self) -> dict:
         """목록용 — 본문을 뺀다. 카드 하나에 60KB가 붙어 있다."""
         return {
@@ -91,6 +96,7 @@ class Card:
             "stage_count": len(self.vm.get("stages") or []),
             "version": self.version,
             "revision_count": len(self.versions),
+            "published_path": self.published_path,
         }
 
 
