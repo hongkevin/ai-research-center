@@ -145,6 +145,16 @@ export default function Workbench() {
               >
                 ← 보드로
               </Button>
+              {open.vm.gate_passed && editable.length === 0 && (
+                <Alert className="mb-4 max-w-[860px] border-warn">
+                  <AlertTitle>이 카드는 편집할 수 없습니다</AlertTitle>
+                  <AlertDescription>
+                    편집기가 붙기 전에 만들어진 카드라 <b>원문이 저장돼 있지 않습니다.</b>{" "}
+                    수정하려면 같은 종목으로 다시 생성해 주십시오 — 새로 만든 카드에는
+                    제목 옆에 「수정」이 나타납니다.
+                  </AlertDescription>
+                </Alert>
+              )}
               <CenterColumn
                 vm={open.vm}
                 error=""
