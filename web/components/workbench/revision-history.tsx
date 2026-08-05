@@ -5,7 +5,8 @@ import { ChevronRight } from "lucide-react";
 
 import { Diff } from "@/components/note/diff";
 import { Card, CardContent } from "@/components/ui/card";
-import { Hint, SectionLabel } from "@/components/workbench/section-label";
+import { RailSection } from "@/components/workbench/rail-section";
+import { Hint } from "@/components/workbench/section-label";
 import type { Revision } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -22,16 +23,14 @@ export function RevisionHistory({ versions }: { versions: Revision[] }) {
 
   if (versions.length === 0) {
     return (
-      <section>
-        <SectionLabel>수정 이력</SectionLabel>
+      <RailSection title="수정 이력" count={0}>
         <Hint>아직 수정이 없습니다. 「문서 수정」으로 코멘트를 남기면 여기에 쌓입니다.</Hint>
-      </section>
+      </RailSection>
     );
   }
 
   return (
-    <section>
-      <SectionLabel>수정 이력 {versions.length}건</SectionLabel>
+    <RailSection title="수정 이력" count={versions.length}>
       <Card>
         <CardContent className="py-3">
           {/* 최신이 위로 — 되짚을 때는 방금 한 것부터 본다 */}
@@ -68,6 +67,6 @@ export function RevisionHistory({ versions }: { versions: Revision[] }) {
           })}
         </CardContent>
       </Card>
-    </section>
+    </RailSection>
   );
 }

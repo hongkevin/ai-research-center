@@ -4,7 +4,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Heading } from "@/components/note/note-body";
-import { Hint, KeyValue, SectionLabel } from "@/components/workbench/section-label";
+import { RailSection } from "@/components/workbench/rail-section";
+import { Hint, KeyValue } from "@/components/workbench/section-label";
 import { RevisionHistory } from "@/components/workbench/revision-history";
 import type { Revision, ViewModel } from "@/lib/api";
 
@@ -24,13 +25,13 @@ export function EvidenceRail({
   headings: Heading[];
   versions?: Revision[];
 }) {
+  const blocked = !vm.gate_passed;
   return (
-    <div className="space-y-8">
+    <div className="space-y-1">
       {vm.gate_passed && headings.length > 0 && (
-        <section>
-          <SectionLabel>목차</SectionLabel>
+        <RailSection title="목차" count={headings.length}>
           <Card>
-            <CardContent className="py-4">
+            <CardContent className="py-3">
               <nav className="text-[12.5px] leading-[1.9]">
                 {headings.map((h) => (
                   <a
@@ -52,15 +53,19 @@ export function EvidenceRail({
               </nav>
             </CardContent>
           </Card>
-        </section>
+        </RailSection>
       )}
 
       {versions !== undefined && <RevisionHistory versions={versions} />}
 
-      <section>
-        <SectionLabel>발간 게이트</SectionLabel>
+      <RailSection
+        title="발간 게이트"
+        count={blocked ? `차단 ${vm.violations.length}` : "통과"}
+        defaultOpen={blocked}
+        tone={blocked ? "text-bad" : "text-ok"}
+      >
         <Card>
-          <CardContent className="py-4">
+          <CardContent className="py-3">
             {vm.gate_passed ? (
               <>
                 <Badge className="bg-ok/15 text-ok border-transparent">● G0 통과</Badge>
@@ -87,13 +92,12 @@ export function EvidenceRail({
             )}
           </CardContent>
         </Card>
-      </section>
+      </RailSection>
 
       {vm.assumptions.length > 0 && (
-        <section>
-          <SectionLabel>추정 가정</SectionLabel>
+        <RailSection title="추정 가정" count={vm.assumptions.length}>
           <Card>
-            <CardContent className="py-4">
+            <CardContent className="py-3">
               {vm.assumptions.map((a) => (
                 <div key={a.key} className="mb-1.5">
                   <KeyValue
@@ -121,14 +125,13 @@ export function EvidenceRail({
               ))}
             </CardContent>
           </Card>
-        </section>
+        </RailSection>
       )}
 
       {vm.revisions.length > 0 && (
-        <section>
-          <SectionLabel>추정 변화</SectionLabel>
+        <RailSection title="추정 변화" count={vm.revisions.length}>
           <Card>
-            <CardContent className="py-4">
+            <CardContent className="py-3">
               {vm.revisions.map((r, i) => (
                 <div key={i} className="flex justify-between text-[12.5px] py-1">
                   <span>{r.label}</span>
@@ -146,14 +149,13 @@ export function EvidenceRail({
               </Hint>
             </CardContent>
           </Card>
-        </section>
+        </RailSection>
       )}
 
       {vm.bindings.length > 0 && (
-        <section>
-          <SectionLabel>수치 출처 {vm.bindings.length}건</SectionLabel>
+        <RailSection title="수치 출처" count={vm.bindings.length}>
           <Card>
-            <CardContent className="py-4">
+            <CardContent className="py-3">
               {vm.bindings.map((b) => (
                 <div key={b.key} className="border-b py-1.5 text-[12px] last:border-b-0">
                   <div className="flex justify-between gap-2">
@@ -172,7 +174,7 @@ export function EvidenceRail({
               ))}
             </CardContent>
           </Card>
-        </section>
+        </RailSection>
       )}
     </div>
   );
