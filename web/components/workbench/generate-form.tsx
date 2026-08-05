@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CompanySearch } from "@/components/workbench/company-search";
 import { Hint, KeyValue, SectionLabel } from "@/components/workbench/section-label";
+import { StageRail } from "@/components/workbench/stage-rail";
 import type { ViewModel } from "@/lib/api";
 import type { Step } from "@/lib/use-generation";
 
@@ -127,28 +128,15 @@ export function GenerateForm({
           발간의 변화 추적 기준이 됩니다.
         </Hint>
 
-        {steps.length > 0 && (
-          <div className="mt-6">
-            {steps.map((s, i) => {
-              const last = i === steps.length - 1;
-              return (
-                <div
-                  key={i}
-                  className={`flex items-baseline gap-2 py-0.5 text-[12.5px] ${
-                    busy && last ? "text-primary font-semibold" : "text-ok"
-                  }`}
-                >
-                  <span className="w-3.5 flex-none text-center">
-                    {busy && last ? "▸" : "✓"}
-                  </span>
-                  <span>{s.message}</span>
-                </div>
-              );
-            })}
-            {busy && <div className="text-[11.5px] text-muted-foreground mt-2">{elapsed}초</div>}
-          </div>
-        )}
       </form>
+
+      {/* 진행 표시와 단계 기록은 같은 것의 두 상태다 — 흘러가다가 그 자리에 남는다 */}
+      <StageRail
+        stages={vm && !vm.error ? vm.stages : []}
+        steps={steps}
+        running={busy}
+        elapsed={elapsed}
+      />
 
       {vm && !vm.error && (
         <section>

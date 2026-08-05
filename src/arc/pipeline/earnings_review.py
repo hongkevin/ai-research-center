@@ -122,6 +122,129 @@ TEMPLATE_DIR = _template_dir()
 
 
 @dataclass
+class StageReport:
+    """단계 하나가 무엇을 했는지.
+
+    파이프라인을 **열기 위한** 기록이다. 지금까지 이 시스템은 종목코드를 넣으면
+    30초 뒤 완성본을 뱉는 블랙박스였고, 중간에 무엇을 검산했고 무엇을 못 구했는지
+    화면에 나오지 않았다. 산출물마다 자기 진단 필드(`reconciled`, `unavailable`,
+    `note` …)를 이미 들고 있었는데 쓰이지 않았다.
+
+    **`absent`와 `failed`를 반드시 구분한다.** SK하이닉스에 부문 손익이 없는 것은
+    정상이고(단일 부문 — D33이 정확히 거부한다), DART 조회 실패는 결함이다. 둘을
+    같은 색으로 칠하면 검토자가 정상을 결함으로 읽는다.
+    """
+
+    key: str
+    label: str
+    status: str = "ok"  # "ok" | "partial" | "absent" | "failed"
+    summary: str = ""
+    checks: list[dict] = field(default_factory=list)  # {"label", "value", "ok"}
+    registered: int = 0  # 이 단계가 레지스트리에 넣은 건수
+    note: str = ""  # 비었다면 왜
+
+
+def _pct(v: float | None) -> str:
+    return "—" if v is None else f"{v:+.4f}%"
+
+
+def _fill_segment_profit_stage(st: StageReport, sp: SegmentProfitSet | None) -> None:
+    """부문별 손익 (D33).
+
+    **없는 것이 정상인 경우를 결함으로 표시하지 않는다.** `usable`은
+    `reconciled and len(lines) >= 2`이므로 단일 부문 회사는 정상적으로 못 쓴다 —
+    SK하이닉스가 그 자리다(HANDOFF 검증 표).
+    """
+    if sp is None or not sp.lines:
+        st.status = "absent"
+        st.summary = "부문 손익 없음"
+        st.note = (sp.note if sp else "") or "영업부문 주석이 없습니다 — 단일 부문이면 정상입니다."
+        return
+    st.checks = [
+        {
+            "label": "주석 총계 vs 손익계산서 매출액",
+            "value": _pct(sp.revenue_gap_pct),
+            "ok": sp.reconciled,
+        },
+        {
+            "label": "주석 총계 vs 손익계산서 영업이익",
+            "value": _pct(sp.op_gap_pct),
+            "ok": sp.reconciled,
+        },
+    ]
+    if sp.section_title:
+        st.checks.append({"label": "출처 섹션", "value": sp.section_title, "ok": True})
+    if sp.usable:
+        st.summary = f"부문 {len(sp.lines)}개" + ("" if sp.has_prior else " · 전기 없음")
+        if not sp.has_prior:
+            st.status = "partial"
+            st.note = "전기 비교표가 없어 증감을 낼 수 없습니다."
+    elif sp.reconciled:
+        # 검산은 닫혔는데 부문이 하나 — 전사 손익과 같은 말이라 싣지 않는다
+        st.status = "absent"
+        st.summary = "단일 부문"
+        st.note = "부문이 하나라 전사 손익과 같습니다. 표를 더 싣지 않습니다."
+    else:
+        st.status = "partial"
+        st.summary = f"부문 {len(sp.lines)}개 · 검산 불일치"
+        st.note = sp.note or "총계 열이 손익계산서와 맞지 않아 쓰지 않습니다."
+
+
+def _fill_segments_stage(
+    st: StageReport, seg: SegmentBreakdown | None, section: str | None
+) -> None:
+    """부문별 매출 (D28) — 원문 표에서 뽑고 매출액으로 검산한다."""
+    if seg is None or not seg.lines:
+        st.status = "absent"
+        st.summary = "부문 매출 없음"
+        st.note = (seg.note if seg else "") or "매출 현황 표를 찾지 못했습니다."
+        return
+    st.checks = [
+        {
+            "label": "부문 합계 vs 손익계산서 매출액",
+            "value": _pct(seg.gap_pct),
+            "ok": seg.reconciled,
+        },
+        {
+            "label": "비중 합",
+            "value": "—" if seg.share_sum is None else f"{seg.share_sum:.1f}%",
+            "ok": seg.share_sum is None or abs(seg.share_sum - 100) < 1.0,
+        },
+    ]
+    if section:
+        st.checks.append({"label": "출처 섹션", "value": section, "ok": True})
+    if seg.usable:
+        st.summary = f"부문 {len(seg.lines)}개"
+    else:
+        st.status = "partial"
+        st.summary = f"부문 {len(seg.lines)}개 · 검산 불일치"
+        st.note = seg.note or "합계가 매출액과 맞지 않아 쓰지 않습니다."
+
+
+def _fill_business_stage(st: StageReport, biz: BusinessProfile | None) -> None:
+    """사업 이해 (D29) — 리포트가 손익계산서에서 출발하지 않게 하는 자리."""
+    if biz is None:
+        st.status = "absent"
+        st.summary = "사업 개요 없음"
+        return
+    if biz.note:
+        st.status = "absent"
+        st.summary = "사업 개요 없음"
+        st.note = biz.note
+        return
+    bits = []
+    if biz.signals:
+        bits.append(f"축 {len(biz.signals)}개")
+    if biz.ownership is not None:
+        bits.append("지분")
+    if biz.affiliates is not None:
+        bits.append("출자")
+    st.summary = " · ".join(bits) or "사업 개요"
+    if biz.source_title:
+        st.checks = [{"label": "출처 섹션", "value": biz.source_title, "ok": True}]
+
+
+@dataclass
 class ReportResult:
     """파이프라인 산출물 전체. 감사에 필요한 중간물을 모두 보관한다."""
 
@@ -145,6 +268,7 @@ class ReportResult:
     lenses: LensSet | None = None
     business: BusinessProfile | None = None
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
+    stages: list[StageReport] = field(default_factory=list)  # 단계별 기록
 
     @property
     def publishable(self) -> bool:
@@ -967,21 +1091,50 @@ def build_report(
     쓰는 쪽(웹)이 이걸 스트리밍한다.
     """
 
-    def step(key: str, message: str) -> None:
+    stages: list[StageReport] = []
+
+    def step(key: str, message: str, label: str | None = None) -> StageReport:
+        """진행 상황을 알리고 이 단계의 기록을 연다.
+
+        `on_progress`는 **작업 전에** 쏜다 — 기다리는 동안 보여야 하기 때문이다.
+        `StageReport`는 작업 **후에** 채운다. 결과를 알아야 상태를 정할 수 있다.
+        기록은 읽기만 한다 — 기존 계산 순서에 개입하지 않는다.
+        """
         if on_progress is not None:
             on_progress(key, message)
+        s = StageReport(key=key, label=label or message)
+        stages.append(s)
+        return s
 
-    step("company", "회사 정보 조회")
+    st = step("company", "회사 정보 조회")
     company = provider.get_company(symbol)
-    step("statement", "재무제표 수집")
+    st.summary = f"{company.name} · {company.market.value}"
+
+    st = step("statement", "재무제표 수집")
     stmt = fetch_statement(
         symbol, fiscal_year, provider, period=period, consolidation=consolidation
     )
+    basis_label = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
+    st.summary = f"{basis_label}재무제표 · {stmt.fiscal_year}"
+    # 커버리지가 다르면 낮은 쪽으로 폴백한다(D20). 폴백했다는 사실 자체가
+    # 검토자에게 필요한 정보다 — 소형주는 연결이 아예 없다.
+    st.checks = [
+        {"label": "연결/별도", "value": basis_label, "ok": True},
+        {"label": "접수번호", "value": stmt.rcept_no or "없음", "ok": bool(stmt.rcept_no)},
+    ]
+    if not stmt.rcept_no:
+        st.status = "partial"
+        st.note = "접수번호가 없어 사업보고서 원문을 열 수 없습니다."
 
-    step("metrics", "지표 추출·계산")
+    st = step("metrics", "지표 추출·계산")
     ms = extract_metrics(stmt)
     registry = NumberRegistry()
     registry.register_all(build_entries(ms, stmt.provenance))
+    st.registered = len(registry)
+    st.summary = f"지표 {len(ms.values)}종"
+    if ms.missing_labels:
+        st.status = "partial"
+        st.note = f"미확인 계정: {', '.join(ms.missing_labels)}"
 
     # 정기보고서 주요정보 — 없어도 실적 노트는 낸다. 다만 조용히 넘기지 않고
     # 실패 사유를 남긴다(커버리지 문제를 숨기면 진단이 불가능해진다).
@@ -991,14 +1144,53 @@ def build_report(
     info_error: str | None = None
     valuation: ValuationSet | None = None
     if reports is not None:
-        step("reports", "정기보고서 주요정보 (주식수·배당·감사의견)")
+        st = step("reports", "정기보고서 주요정보 (주식수·배당·감사의견)")
+        before = len(registry)
         try:
             info = reports.fetch(symbol, fiscal_year)
         except Exception as exc:  # noqa: BLE001 — 어댑터별 예외 타입이 다르다
             info_error = f"{type(exc).__name__}: {exc}"
+            st.status = "failed"
+            st.note = info_error
         else:
             valuation = build_valuation(ms, info)
             registry.register_all(build_valuation_entries(valuation, info, stmt.provenance))
+            st.registered = len(registry) - before
+            got = [
+                name
+                for name, val in (
+                    ("주식수", info.shares),
+                    ("배당", info.dividend),
+                    ("감사의견", info.audit),
+                    ("인력", info.workforce),
+                    ("지분", info.ownership),
+                    ("출자", info.affiliates),
+                )
+                if val is not None
+            ]
+            st.summary = f"{len(got)}/6종 · {', '.join(got)}"
+            # **무엇을 못 받았는지는 이미 알고 있다.** 조용히 넘기면 커버리지
+            # 문제가 숨는다 — 어댑터가 `unavailable`에 남긴 것을 그대로 낸다.
+            if info.unavailable:
+                st.status = "partial"
+                st.note = f"받지 못한 것: {', '.join(info.unavailable)}"
+            st.checks = [
+                {
+                    "label": "발행 − 자기주식 = 유통",
+                    "value": "일치" if valuation.shares_reconciled else "불일치",
+                    "ok": valuation.shares_reconciled,
+                },
+            ]
+            # EPS 교차검증 — 재무제표 희석EPS vs 배당공시 주당순이익
+            if valuation.eps_stmt is not None and valuation.eps_disclosed is not None:
+                same = valuation.eps_stmt == valuation.eps_disclosed
+                st.checks.append(
+                    {
+                        "label": "EPS 교차검증 (재무제표 vs 배당공시)",
+                        "value": f"{valuation.eps_stmt:,} vs {valuation.eps_disclosed:,}",
+                        "ok": same,
+                    }
+                )
 
     # 사업보고서 **원문** — 한 번만 받아 여러 섹션에 쓴다 (5~8MB).
     # 실패해도 노트 생성을 막지 않는다.
@@ -1006,13 +1198,22 @@ def build_report(
     segment_section: str | None = None
     segment_profit: SegmentProfitSet | None = None
     business: BusinessProfile | None = None
+    st_doc = st_sp = st_seg = st_biz = None
     if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
-        step("document", "사업보고서 원문 (5~8MB)")
+        st_doc = step("document", "사업보고서 원문 (5~8MB)")
         text, doc_error = fetch_document(provider, stmt.rcept_no)
         if doc_error and info_error is None:
             info_error = doc_error
+        if doc_error:
+            st_doc.status = "failed"
+            st_doc.note = doc_error
+        else:
+            st_doc.summary = f"{len(text or ''):,}자"
 
         if text:
+            st_sp = step("segment_profit", "부문별 손익 (IFRS 8 주석)")
+            st_seg = step("segments", "부문별 매출")
+            st_biz = step("business", "사업 이해")
             # 부문별 **손익** — IFRS 8 주석. 제목이 회사마다 다르고 연결·별도가
             # 함께 실려 있어 후보를 전부 넘기고 검산이 고르게 한다.
             # 당기·전기 표가 한 섹션에 있어 40,000자로는 전기가 잘린다(실측).
@@ -1041,6 +1242,7 @@ def build_report(
 
         # **원문에서 뽑은 값은 어느 섹션인지까지 남긴다.** 접수번호만 있으면
         # 검토자가 300쪽 사업보고서 첫 장에서 표를 직접 찾아야 한다.
+        before = len(registry)
         if segments is not None and segments.usable:
             registry.register_all(
                 build_segment_entries(
@@ -1048,6 +1250,11 @@ def build_report(
                     section_provenance(stmt.provenance, segment_section, stmt.rcept_no),
                 )
             )
+        if st_seg is not None:
+            st_seg.registered = len(registry) - before
+            _fill_segments_stage(st_seg, segments, segment_section)
+
+        before = len(registry)
         if segment_profit is not None and segment_profit.usable:
             registry.register_all(
                 build_segment_profit_entries(
@@ -1057,6 +1264,11 @@ def build_report(
                     ),
                 )
             )
+        if st_sp is not None:
+            st_sp.registered = len(registry) - before
+            _fill_segment_profit_stage(st_sp, segment_profit)
+
+        before = len(registry)
         if business is not None:
             registry.register_all(
                 build_business_entries(
@@ -1064,9 +1276,13 @@ def build_report(
                     section_provenance(stmt.provenance, "사업의 개요", stmt.rcept_no),
                 )
             )
+        if st_biz is not None:
+            st_biz.registered = len(registry) - before
+            _fill_business_stage(st_biz, business)
 
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
-    step("estimates", "추정·밸류에이션 산출")
+    st = step("estimates", "추정·밸류에이션 산출")
+    before = len(registry)
     estimates = build_estimates(ms, assumptions)
     previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
     revisions = compare_estimates(previous, estimates)
@@ -1086,6 +1302,30 @@ def build_report(
 
     # 렌즈 — 같은 숫자에 다른 질문을 던진다 (D35). 앞선 레이어가 모두 끝난 뒤에
     # 돌아야 부문 자산·마진 브리지를 함께 볼 수 있다.
+    st.registered = len(registry) - before
+    if estimates.usable:
+        overridden = [a.label for a in estimates.assumptions if a.is_override]
+        st.summary = f"가정 {len(estimates.assumptions)}개 · {estimates.fiscal_year} 추정"
+        # **여기가 계산과 판단의 경계다.** 가정은 사람이 바꿀 수 있는 유일한
+        # 입력이고, 나머지는 전부 그 함수다 (D24).
+        st.checks = [
+            {"label": a.label, "value": f"{a.value:+.1f}{a.unit}", "ok": True}
+            for a in estimates.assumptions
+        ]
+        if overridden:
+            st.note = f"사용자가 덮어쓴 가정: {', '.join(overridden)}"
+        elif estimates.warnings:
+            st.status = "partial"
+            st.note = " · ".join(estimates.warnings)
+        if revisions:
+            st.summary += f" · 직전 대비 {len(revisions)}건 변화"
+    else:
+        st.status = "absent"
+        st.summary = "추정 불가"
+        st.note = " · ".join(estimates.warnings) or "기준선을 세울 과거 실적이 부족합니다."
+
+    st = step("lenses", "분석 렌즈 (같은 숫자에 다른 질문)")
+    before = len(registry)
     lenses = build_lenses(
         ms,
         valuation=valuation,
@@ -1108,6 +1348,34 @@ def build_report(
         )
     )
 
+    st.registered = len(registry) - before
+    spoke = [v for v in lenses.views] if lenses is not None else []
+    answered = [v for v in spoke if v.usable]
+    if answered:
+        st.summary = f"판독 {len(answered)}/{len(spoke)}" + (
+            f" · 관점 충돌 {len(lenses.tensions)}건" if lenses.tensions else ""
+        )
+        # 렌즈는 **1순위에 답하지 못하면 결론을 내지 않는다** (D35). 침묵은
+        # 결함이 아니라 그 렌즈가 요구한 데이터가 없다는 뜻이고, 이유가
+        # `silent_reason`에 남아 있다.
+        st.checks = [
+            {
+                "label": v.label,
+                "value": f"{len(v.readings)}단계 판독" if v.usable else (v.silent_reason or "침묵"),
+                "ok": v.usable,
+            }
+            for v in spoke
+        ]
+        if len(answered) < len(spoke):
+            st.status = "partial"
+            st.note = "일부 렌즈는 요구한 데이터가 없어 결론을 내지 않았습니다."
+    else:
+        st.status = "absent"
+        st.summary = "렌즈 판독 없음"
+        st.note = "; ".join(v.silent_reason for v in spoke if v.silent_reason) or (
+            "렌즈가 요구한 데이터(부문 자산·마진 브리지 등)가 없습니다."
+        )
+
     sections = compose_sections(
         ms,
         registry,
@@ -1126,7 +1394,7 @@ def build_report(
     if llm is not None:
         from arc.llm.narrate import narrate, narrate_industry
 
-        step("llm", "LLM 서술 생성 (가장 오래 걸립니다)")
+        st_llm = step("llm", "LLM 서술 생성 (가장 오래 걸립니다)")
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
         obs = build_observations(ms, build_margin_bridge(ms))
         if valuation is not None and info is not None:
@@ -1168,8 +1436,26 @@ def build_report(
 
         # 산업 배경 — **별도 호출, 별도 규칙.** 수치 카탈로그를 주지 않고
         # 숫자를 아예 금지한다. 숫자가 섞이면 이 문단만 버리고 리포트는 낸다.
+        # LLM이 쓴 것과 결정론이 쓴 것을 구분해 남긴다 — **숫자는 어느 쪽이든
+        # 레지스트리에서 온다**(불변식 1). 여기서 갈리는 건 문장뿐이다.
+        if narration is not None and narration.used_llm:
+            c = narration.completion
+            st_llm.summary = (c.model if c is not None else "LLM") + " · 문장만 교체"
+            st_llm.checks = [{"label": "수치 출처", "value": "레지스트리 (불변식 1)", "ok": True}]
+            if c is not None and c.cost_usd is not None:
+                st_llm.checks.append(
+                    {"label": "건당 비용", "value": f"${c.cost_usd:.4f}", "ok": True}
+                )
+            if narration.problems:
+                st_llm.status = "partial"
+                st_llm.note = " · ".join(narration.problems[:3])
+        else:
+            st_llm.status = "absent"
+            st_llm.summary = "결정론 문장"
+            st_llm.note = "LLM이 응답하지 않아 결정론 문장으로 냈습니다. 수치는 동일합니다."
+
         if business is not None and business.usable:
-            step("industry", "산업 배경 생성 (미검증 레인)")
+            st_ind = step("industry", "산업 배경 생성 (미검증 레인)")
             industry_text, industry_problems = narrate_industry(
                 llm,
                 company_name=company.name,
@@ -1180,6 +1466,20 @@ def build_report(
             sections["industry_context"] = industry_text
             if industry_problems and narration is not None:
                 narration.problems.extend(industry_problems)
+            # **미검증 레인은 숫자가 하나라도 있으면 문단을 버린다** (D31).
+            # 버려진 것도 기록에 남긴다 — 조용히 사라지면 왜 없는지 모른다.
+            if industry_text:
+                st_ind.summary = f"{len(industry_text)}자"
+                st_ind.checks = [
+                    {"label": "출처로 되짚을 수 있는가", "value": "아니오 (공시 밖)", "ok": False},
+                    {"label": "숫자 없음", "value": "확인", "ok": True},
+                ]
+            else:
+                st_ind.status = "absent"
+                st_ind.summary = "문단 버림"
+                st_ind.note = " · ".join(industry_problems) or (
+                    "숫자가 섞여 D31 규칙으로 버렸습니다. 리포트는 그대로 냅니다."
+                )
     assembled = assemble(
         company,
         ms,
@@ -1189,10 +1489,22 @@ def build_report(
         registry=registry,
     )
 
-    step("gate", "G0 게이트 검증")
+    st = step("gate", "G0 게이트 검증", label="발간 게이트 G0")
     gate = G0Gate(registry).check(assembled)
     rendered = registry.render_text(assembled) if gate.passed else None
     bindings = registry.bindings(assembled) if gate.passed else []
+    st.summary = gate.summary()
+    if not gate.passed:
+        st.status = "failed"
+        st.note = f"차단 {len(gate.violations)}건 — 발간할 수 없습니다."
+        st.checks = [
+            {"label": v.rule, "value": v.detail[:80], "ok": False} for v in gate.violations[:8]
+        ]
+    else:
+        st.checks = [
+            {"label": "레지스트리 등록 수치", "value": f"{len(registry)}건", "ok": True},
+            {"label": "본문에 등장한 수치", "value": f"{len(bindings)}건", "ok": True},
+        ]
 
     return ReportResult(
         symbol=symbol,
@@ -1215,4 +1527,5 @@ def build_report(
         info_error=info_error,
         estimates=estimates,
         revisions=revisions,
+        stages=stages,
     )

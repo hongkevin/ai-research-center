@@ -118,8 +118,8 @@ React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
 | 배포 | https://ai-research-center-production.up.railway.app · 리전 **Asia Southeast(싱가포르)** |
 | 인증 | HTTP Basic · 아이디 `arc` · 비밀번호는 Railway `ARC_PASSWORD` |
 | 저장소 | github.com/hongkevin/ai-research-center (**PUBLIC**) |
-| 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) |
-| 테스트 | 534 통과 · ruff 클린 · eslint 클린 |
+| 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) · **단계 레일** (D39) |
+| 테스트 | 543 통과 · ruff 클린 · eslint 클린 |
 | CI | 린트 · 테스트 · **프런트 빌드** · Docker 빌드+헬스체크+화면서빙 · **키 패턴 검사** |
 | 성능 | 결정론 3.0초 / LLM 30~35초 (US 리전 기준 실측 — 싱가포르 이전 후 미측정) |
 | 비용 | 건당 ~$0.005 (실측 $0.0055, `gpt-5.6-luna`) |
@@ -179,9 +179,15 @@ web/app/page.tsx          작업대 (왼쪽 조작 · 가운데 노트 · 오른
 web/app/note.css          ★ 서버가 발행하는 고정 클래스. 이름을 바꾸면 깨진다
 web/components/note/      본문 주입 + 수치 출처 팝오버
 web/components/workbench/ 폼 · 회사 검색 · 근거 패널
+  └ stage-rail.tsx        파이프라인 단계 레일 — 진행 표시와 같은 자리 (D39)
 web/lib/api.ts            /api/* 클라이언트 (타입은 app.py의 ViewModel)
 web/lib/use-generation.ts 생성 → SSE 진행 → 결과
 ```
+
+**파이프라인은 열려 있습니다** (D39). `build_report`가 단계마다 `StageReport`를
+남기고(`status`·`checks`·`registered`·`note`) 화면이 그걸 레일로 냅니다.
+`absent`(정상 부재)와 `failed`(결함)를 **반드시 구분**하십시오 — 단일 부문 회사에
+부문 손익이 없는 것은 정상입니다.
 
 ---
 
@@ -329,7 +335,7 @@ docs/HANDOFF.md 와 docs/decisions.md 읽고 이어가자.
 ```
 
 세부는 이 순서로 보면 됩니다:
-[decisions.md](decisions.md) D1~D37 →
+[decisions.md](decisions.md) D1~D39 →
 [corpus/FINDINGS.md](../corpus/FINDINGS.md)(왜 사람에게 묻는 쪽으로 돌았는가) →
 [research/01-benchmark-smic.md](research/01-benchmark-smic.md)(SMIC 갭 분석) →
 [DEPLOY.md](DEPLOY.md)(배포·제약)
