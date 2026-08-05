@@ -59,6 +59,18 @@ class Card:
     error: str = ""
     vm: dict = field(default_factory=dict)  # ViewModel 전체 (본문 포함)
 
+    # ── 문서 상태 — 나중에 다시 게이트·치환하기 위한 것 ──────────────
+    # 이게 있어야 코멘트를 받아 문단을 고쳐 쓸 수 있다. 없으면 카드는
+    # 읽기 전용 스냅샷이고, 리뷰 루프가 성립하지 않는다.
+    assembled: str = ""  # 치환 **전** 마크다운 (플레이스홀더 살아 있음)
+    registry: list[dict] = field(default_factory=list)  # NumberRegistry.dump()
+
+    # ── 버전 ─────────────────────────────────────────────────────────
+    # 버전 이력은 감사 흔적이 아니라 **콘텐츠**다 — "조정 방향과 시점은
+    # 추정치 자체만큼 중요한 기록"이다 (D25).
+    version: str = "v0.1"
+    versions: list[dict] = field(default_factory=list)
+
     def summary(self) -> dict:
         """목록용 — 본문을 뺀다. 카드 하나에 60KB가 붙어 있다."""
         return {
@@ -74,7 +86,18 @@ class Card:
             "gate_passed": bool(self.vm.get("gate_passed")),
             "registry_size": self.vm.get("registry_size", 0),
             "stage_count": len(self.vm.get("stages") or []),
+            "version": self.version,
+            "revision_count": len(self.versions),
         }
+
+
+def next_version(current: str) -> str:
+    """v0.1 → v0.2. 자릿수가 넘으면 v0.10이 아니라 그대로 이어간다."""
+    m = re.fullmatch(r"v(\d+)\.(\d+)", current or "")
+    if not m:
+        return "v0.1"
+    major, minor = int(m.group(1)), int(m.group(2))
+    return f"v{major}.{minor + 1}"
 
 
 def attention_reasons(vm: dict) -> list[str]:

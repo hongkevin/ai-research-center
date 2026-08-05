@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Board, BoardHint } from "@/components/board/board";
 import { NoteBody, type Heading } from "@/components/note/note-body";
+import { RevisePanel } from "@/components/note/revise-panel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -99,7 +100,8 @@ export default function Workbench() {
         </span>
         {open && (
           <span className="text-[13px] text-muted-foreground">
-            — {open.company || open.symbol} ({open.symbol}) · FY{open.year}
+            — {open.company || open.symbol} ({open.symbol}) · FY{open.year} ·{" "}
+            <span className="font-mono">{open.version}</span>
           </span>
         )}
         <div className="ml-auto">
@@ -131,6 +133,15 @@ export default function Workbench() {
               >
                 ← 보드로
               </Button>
+              {open.vm.gate_passed && (
+                <div className="mb-4">
+                  <RevisePanel
+                    cardId={open.id}
+                    version={open.version}
+                    onAccepted={() => void openCard(open.id)}
+                  />
+                </div>
+              )}
               <CenterColumn vm={open.vm} error="" onHeadings={onHeadings} />
             </>
           ) : error ? (

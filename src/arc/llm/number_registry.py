@@ -212,6 +212,22 @@ class NumberRegistry:
     def __contains__(self, key: str) -> bool:
         return key in self._entries
 
+    def dump(self) -> list[dict]:
+        """레지스트리를 JSON으로.
+
+        카드에 실어 **나중에 다시 게이트·치환**하기 위한 것이다. 코멘트를 받아
+        문단을 고쳐 쓰려면 그 시점에 같은 레지스트리가 있어야 한다 — 없으면
+        플레이스홀더를 값으로 되돌릴 수 없고, 숫자가 안 바뀌었다는 것도
+        증명할 수 없다.
+        """
+        return [e.model_dump(mode="json") for e in self._entries.values()]
+
+    @classmethod
+    def load(cls, records: list[dict]) -> NumberRegistry:
+        reg = cls()
+        reg.register_all(NumberEntry.model_validate(r) for r in records)
+        return reg
+
     def catalog(self) -> list[dict[str, str | None]]:
         """LLM 프롬프트에 넣을 카탈로그. **값(크기)은 포함하지 않는다.**
 
