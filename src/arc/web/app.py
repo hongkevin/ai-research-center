@@ -599,10 +599,17 @@ def api_company_reports(symbol: str, back_days: int = 900):
 
     end = dt.datetime.now(dt.UTC).date()
     start = end - dt.timedelta(days=max(90, min(back_days, 1800)))
+    # **종류를 좁혀서 받는다.** 안 좁히면 삼성전자가 39페이지 8초다.
+    #   A 정기공시   — 사업·반기·분기보고서
+    #   I 거래소공시 — 잠정실적이 여기 있다
+    p = _shared_provider()
+    sym = symbol.strip()
     try:
-        ds = _shared_provider().get_disclosures(symbol.strip(), start, end)
+        periodic_src = p.get_disclosures(sym, start, end, pblntf_ty="A")
+        market_src = p.get_disclosures(sym, start, end, pblntf_ty="I")
     except Exception as exc:  # noqa: BLE001 — 화면에 원인을 보여주는 게 목적이다
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=502)
+    ds = periodic_src + market_src
 
     return {
         "periodic": [
