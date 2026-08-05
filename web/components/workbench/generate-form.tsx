@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -61,6 +63,10 @@ export function GenerateForm({
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     onChange({ ...state, [k]: v });
 
+  // 평소엔 최신만 보인다. 과거 재현이 필요할 때만 목록을 연다.
+  const [picking, setPicking] = useState(false);
+  const current = filings.find((f) => f.year === state.year && f.period === state.period);
+
   if (collapsed) {
     return (
       <div className="space-y-6">
@@ -93,40 +99,80 @@ export function GenerateForm({
           />
         </div>
 
-        <Label htmlFor="report" className="text-xs text-muted-foreground mt-5 block">
-          정기보고서
-        </Label>
-        {/* **계산이 아니라 DART가 준 목록이다.** 기한으로 추측하면 결산월이
-            다른 회사·정정신고·미제출을 전부 틀린다. */}
-        <select
-          id="report"
-          value={periodKey(state)}
-          disabled={busy || filings.length === 0}
-          onChange={(e) => {
-            const [y, p] = e.target.value.split(":");
-            onChange({ ...state, year: Number(y), period: p as PeriodCode });
-          }}
-          className="mt-1 h-9 w-full rounded-md border bg-transparent px-2.5 text-[13px] disabled:opacity-50"
-        >
-          {filings.length === 0 ? (
-            <option>{loadingFilings ? "공시 목록을 읽는 중…" : "회사를 먼저 고르십시오"}</option>
-          ) : (
-            filings.map((f) => (
+        <Label className="text-xs text-muted-foreground mt-5 block">정기보고서</Label>
+
+        {/* **최신을 사실로 보여준다.** 최신 보고서가 이미 prior·prior2를 담고
+            있어 과거를 고를 이유가 거의 없고, 잘못 고르면 철 지난 노트가
+            조용히 나온다. 다만 선택을 없애지는 않는다 — D34의 시점 정합성
+            재현(과거 시점 데이터만으로 만든 노트가 유효했는가)이 이 문으로
+            들어온다. */}
+        {filings.length === 0 ? (
+          <p className="mt-1 text-[12.5px] text-muted-foreground">
+            {loadingFilings ? "공시 목록을 읽는 중…" : "회사를 먼저 고르십시오"}
+          </p>
+        ) : picking ? (
+          <select
+            autoFocus
+            value={periodKey(state)}
+            disabled={busy}
+            onChange={(e) => {
+              const [y, p] = e.target.value.split(":");
+              onChange({ ...state, year: Number(y), period: p as PeriodCode });
+              setPicking(false);
+            }}
+            className="mt-1 h-9 w-full rounded-md border bg-transparent px-2.5 text-[13px]"
+          >
+            {filings.map((f) => (
               <option key={f.rcept_no} value={`${f.year}:${f.period}`}>
                 {f.label} · {f.filed_at} 제출
               </option>
-            ))
-          )}
-        </select>
+            ))}
+          </select>
+        ) : (
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="min-w-0 flex-1 text-[13px]">
+              {current?.label ?? "—"}
+              <span className="text-muted-foreground">
+                {current && ` · ${current.filed_at} 제출`}
+              </span>
+              {current?.url && (
+                <>
+                  {" "}
+                  <a
+                    href={current.url}
+                    target="_blank"
+                    rel="noopener"
+                    className="text-num hover:underline"
+                  >
+                    공시↗
+                  </a>
+                </>
+              )}
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setPicking(true)}
+              className="flex-none text-[11.5px] text-muted-foreground hover:text-foreground"
+            >
+              다른 보고서
+            </button>
+          </div>
+        )}
 
         {/* 더 최신 실적이 이미 나와 있으면 말해준다. 모르고 옛 보고서로 쓰는
             것과, 알고도 그걸 쓰는 것은 다르다. */}
         {preliminary && (
           <div className="mt-1.5 rounded-md border border-warn/50 bg-warn/10 px-2.5 py-1.5 text-[11.5px]">
-            <b className="text-warn">{preliminary.filed_at} 잠정실적</b>이 이미
-            나왔습니다. ARC는 아직 정기보고서만 읽습니다 —{" "}
-            <a href={preliminary.url} target="_blank" rel="noopener" className="text-num hover:underline">
-              공시 원문
+            <b className="text-warn">{preliminary.filed_at} 잠정실적</b>이 이미 나왔습니다.
+            ARC는 아직 정기보고서만 읽습니다 —{" "}
+            <a
+              href={preliminary.url}
+              target="_blank"
+              rel="noopener"
+              className="text-num hover:underline"
+            >
+              공시 원문↗
             </a>
           </div>
         )}
