@@ -1,56 +1,105 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { Board, BoardHint } from "@/components/board/board";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
 import { ThemeToggle } from "@/components/workbench/theme-toggle";
-import { useGeneration, type Phase } from "@/lib/use-generation";
-import type { ViewModel } from "@/lib/api";
+import { useGeneration } from "@/lib/use-generation";
+import {
+  confirmCard,
+  deleteCard,
+  getCard,
+  listCards,
+  type CardDetail,
+  type CardSummary,
+  type ViewModel,
+} from "@/lib/api";
 
 /**
- * 실적 리뷰 노트 작업대 — 검토자가 발간 여부를 판단하는 화면.
+ * 작업대 — 보드가 홈이고, 카드를 열면 그 리포트가 나온다.
  *
- * 구성 원칙은 이전 화면(index.html:3-4)에서 그대로 가져왔다:
- * 왼쪽은 조작(입력·가정), 가운데는 결과(노트), 오른쪽은 근거(게이트·출처).
- * 근거를 접어두지 않는 이유는, 이 제품이 파는 것이 "글"이 아니라
+ * 구성 원칙은 이전 화면에서 그대로 가져왔다: 왼쪽은 조작, 가운데는 결과,
+ * 오른쪽은 근거. 근거를 접어두지 않는 이유는 이 제품이 파는 것이 "글"이 아니라
  * "검증된 글"이기 때문이다.
+ *
+ * 달라진 것은 **가운데가 하나의 리포트가 아니라 보드**라는 점이다. 생성은
+ * 화면을 붙들지 않고 카드를 만들고, 사람은 기다리는 대신 다른 카드를 본다.
  */
 export default function Workbench() {
-  const [form, setForm] = useState<FormState>({
-    symbol: "",
-    year: 2025,
-    llm: false,
-    assume: "",
-  });
+  const [form, setForm] = useState<FormState>({ symbol: "", year: 2025, llm: false, assume: "" });
   const [headings, setHeadings] = useState<Heading[]>([]);
+  const [cards, setCards] = useState<CardSummary[]>([]);
+  const [open, setOpen] = useState<CardDetail | null>(null);
   const { phase, steps, vm, error, elapsed, run } = useGeneration();
 
   const busy = phase === "running";
-
-  // NoteBody의 effect가 매 렌더마다 다시 돌지 않도록 안정된 참조를 준다
   const onHeadings = useCallback((h: Heading[]) => setHeadings(h), []);
+
+  // 보드를 주기적으로 읽는다. 생성이 백그라운드에서 끝나므로 콜백을 엮는 것보다
+  // 짧은 폴링이 단순하고 튼튼하다 — 목록은 본문을 빼고 오므로 가볍다.
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      const next = await listCards();
+      if (alive) setCards(next);
+    };
+    void tick();
+    const t = setInterval(tick, 3000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
 
   function submit(publish: boolean) {
     setHeadings([]);
+    setOpen(null);
     run({ ...form, publish });
   }
+
+  async function openCard(id: string) {
+    setHeadings([]);
+    setOpen(await getCard(id));
+  }
+
+  async function confirm(id: string) {
+    await confirmCard(id);
+    setCards(await listCards());
+  }
+
+  async function remove(id: string) {
+    await deleteCard(id);
+    setOpen((cur) => (cur?.id === id ? null : cur));
+    setCards(await listCards());
+  }
+
+  // 열린 카드가 있으면 그것을, 없으면 방금 생성한 것을 본다
+  const shown: ViewModel | null = open ? open.vm : vm;
 
   return (
     <>
       <header className="sticky top-0 z-10 flex flex-wrap items-baseline gap-3 border-b bg-card px-8 py-5">
-        <h1 className="text-[15px] font-semibold tracking-tight">AI Research Center</h1>
+        <button
+          type="button"
+          onClick={() => setOpen(null)}
+          className="text-[15px] font-semibold tracking-tight hover:text-num"
+        >
+          AI Research Center
+        </button>
         <span className="text-[13px] text-muted-foreground">
           코스닥 미커버 종목 실적 리뷰 노트 · 사람이 검토 후 발간
         </span>
-        {vm?.company && (
+        {open && (
           <span className="text-[13px] text-muted-foreground">
-            — {vm.company} ({vm.symbol}) · {vm.market} · FY{vm.year} · {vm.basis}재무제표
+            — {open.company || open.symbol} ({open.symbol}) · FY{open.year}
           </span>
         )}
         <div className="ml-auto">
@@ -67,16 +116,38 @@ export default function Workbench() {
             busy={busy}
             steps={steps}
             elapsed={elapsed}
-            vm={vm}
+            vm={shown}
           />
         </div>
 
         <div className="px-8 py-8">
-          <CenterColumn vm={vm} error={error} phase={phase} onHeadings={onHeadings} />
+          {open ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setOpen(null)}
+                className="mb-3 -ml-2 h-7 text-[12px] text-muted-foreground"
+              >
+                ← 보드로
+              </Button>
+              <CenterColumn vm={open.vm} error="" onHeadings={onHeadings} />
+            </>
+          ) : error ? (
+            <Alert variant="destructive" className="max-w-[860px]">
+              <AlertTitle>생성 실패</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : (
+            <>
+              <Board cards={cards} onOpen={openCard} onConfirm={confirm} onDelete={remove} />
+              <BoardHint />
+            </>
+          )}
         </div>
 
         <div className="border-t px-7 py-8 xl:sticky xl:top-(--header-h) xl:max-h-[calc(100vh-var(--header-h))] xl:overflow-y-auto xl:border-t-0 xl:border-l">
-          {vm && !vm.error && <EvidenceRail vm={vm} headings={headings} />}
+          {open && !open.vm.error && <EvidenceRail vm={open.vm} headings={headings} />}
         </div>
       </div>
     </>
@@ -86,12 +157,10 @@ export default function Workbench() {
 function CenterColumn({
   vm,
   error,
-  phase,
   onHeadings,
 }: {
-  vm: ViewModel | null;
+  vm: ViewModel;
   error: string;
-  phase: Phase;
   onHeadings: (h: Heading[]) => void;
 }) {
   if (error) {
@@ -100,24 +169,6 @@ function CenterColumn({
         <AlertTitle>생성 실패</AlertTitle>
         <AlertDescription>{error}</AlertDescription>
       </Alert>
-    );
-  }
-
-  if (!vm) {
-    if (phase === "running") {
-      return (
-        <p className="py-10 text-center text-[13px] text-muted-foreground">
-          공시를 읽고 있습니다. 왼쪽에 진행 상황이 표시됩니다.
-        </p>
-      );
-    }
-    return (
-      <p className="py-10 text-center text-[13px] text-muted-foreground">
-        종목코드를 입력하면 DART 공시에서 실적 리뷰 노트를 생성합니다.
-        <br />
-        생성된 <span className="num cursor-default">모든 수치</span>는 클릭하면 출처와 산식을
-        보여줍니다.
-      </p>
     );
   }
 
@@ -159,9 +210,7 @@ function CenterColumn({
                   <h2 className="!mt-0 !border-0 !pt-0">부문 구성</h2>
                   <div
                     className="chart"
-                    dangerouslySetInnerHTML={{
-                      __html: vm.segment_chart + vm.segment_legend,
-                    }}
+                    dangerouslySetInnerHTML={{ __html: vm.segment_chart + vm.segment_legend }}
                   />
                 </>
               )}
@@ -181,7 +230,6 @@ function CenterColumn({
         </>
       ) : (
         // 차단된 초안은 **보여주지 않는다** — 검토자가 결과로 착각한다
-        // (`app.py::_to_view`의 같은 판단).
         <Alert variant="destructive" className="max-w-[860px]">
           <AlertTitle>G0 게이트 차단 — 발간할 수 없습니다.</AlertTitle>
           <AlertDescription>

@@ -102,6 +102,62 @@ export interface ViewModel {
   error: string;
 }
 
+/** 보드의 칸. 순서가 곧 왼→오. */
+export const COLUMNS = ["running", "attention", "review", "published"] as const;
+export type Column = (typeof COLUMNS)[number];
+
+export const COLUMN_LABEL: Record<Column, string> = {
+  running: "수집됨",
+  // 카드가 실제로 쌓이는 곳. 다른 데서 못 하는 일(1차 공시 대조)이 여기 있다.
+  attention: "확인 필요",
+  review: "검토 대기",
+  published: "발간됨",
+};
+
+/** 목록용 — 본문(60KB)이 빠져 있다. */
+export interface CardSummary {
+  id: string;
+  symbol: string;
+  year: number;
+  created_at: string;
+  column: Column;
+  confirmed: boolean;
+  company: string;
+  attention: string[];
+  error: string;
+  gate_passed: boolean;
+  registry_size: number;
+  stage_count: number;
+}
+
+export interface CardDetail extends Omit<CardSummary, "gate_passed" | "registry_size" | "stage_count"> {
+  vm: ViewModel;
+}
+
+export async function listCards(): Promise<CardSummary[]> {
+  const r = await fetch(`${BASE}/api/cards`);
+  if (!r.ok) return [];
+  return (await r.json()).cards ?? [];
+}
+
+export async function getCard(id: string): Promise<CardDetail> {
+  const r = await fetch(`${BASE}/api/cards/${id}`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/** 「확인함」 — 확인 필요를 벗어난다. 칸 배정 자체는 서버가 자동으로 한다. */
+export async function confirmCard(id: string): Promise<CardSummary> {
+  const r = await fetch(`${BASE}/api/cards/${id}/confirm`, { method: "POST" });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function deleteCard(id: string): Promise<void> {
+  const r = await fetch(`${BASE}/api/cards/${id}`, { method: "DELETE" });
+  if (!r.ok) await fail(r);
+}
+
 export interface CompanyHit {
   name: string;
   symbol: string;
