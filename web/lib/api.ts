@@ -10,7 +10,22 @@
  * 따로 띄울 때만 `NEXT_PUBLIC_API_BASE`로 가리킨다.
  */
 
+import { accessToken } from "./supabase";
+
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
+/**
+ * 인증 헤더를 붙인 fetch.
+ *
+ * Next 서버가 없어(D37) 브라우저가 토큰을 들고 있다가 호출마다 붙인다.
+ * 로그인이 꺼져 있으면(로컬 개발) 그냥 통과한다.
+ */
+async function api(path: string, init: RequestInit = {}): Promise<Response> {
+  const token = await accessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(`${BASE}${path}`, { ...init, headers });
+}
 
 export interface Binding {
   key: string;
@@ -149,26 +164,26 @@ export interface CardDetail
 }
 
 export async function listCards(): Promise<CardSummary[]> {
-  const r = await fetch(`${BASE}/api/cards`);
+  const r = await api(`/api/cards`);
   if (!r.ok) return [];
   return (await r.json()).cards ?? [];
 }
 
 export async function getCard(id: string): Promise<CardDetail> {
-  const r = await fetch(`${BASE}/api/cards/${id}`);
+  const r = await api(`/api/cards/${id}`);
   if (!r.ok) await fail(r);
   return r.json();
 }
 
 /** 「확인함」 — 확인 필요를 벗어난다. 칸 배정 자체는 서버가 자동으로 한다. */
 export async function confirmCard(id: string): Promise<CardSummary> {
-  const r = await fetch(`${BASE}/api/cards/${id}/confirm`, { method: "POST" });
+  const r = await api(`/api/cards/${id}/confirm`, { method: "POST" });
   if (!r.ok) await fail(r);
   return r.json();
 }
 
 export async function deleteCard(id: string): Promise<void> {
-  const r = await fetch(`${BASE}/api/cards/${id}`, { method: "DELETE" });
+  const r = await api(`/api/cards/${id}`, { method: "DELETE" });
   if (!r.ok) await fail(r);
 }
 
@@ -205,7 +220,7 @@ export interface Proposal {
 }
 
 export async function listSections(id: string): Promise<{ version: string; sections: DocSection[] }> {
-  const r = await fetch(`${BASE}/api/cards/${id}/sections`);
+  const r = await api(`/api/cards/${id}/sections`);
   if (!r.ok) await fail(r);
   return r.json();
 }
@@ -215,7 +230,7 @@ export async function proposeRevision(
   section: string,
   comment: string,
 ): Promise<Proposal> {
-  const r = await fetch(`${BASE}/api/cards/${id}/revise`, {
+  const r = await api(`/api/cards/${id}/revise`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ section, comment }),
@@ -237,7 +252,7 @@ export async function saveSection(
   after: string,
   comment: string,
 ): Promise<SaveResult> {
-  const r = await fetch(`${BASE}/api/cards/${id}/accept`, {
+  const r = await api(`/api/cards/${id}/accept`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ section, after, comment }),
@@ -273,14 +288,14 @@ async function fail(r: Response): Promise<never> {
 }
 
 export async function searchCompanies(q: string, limit = 10): Promise<CompanyHit[]> {
-  const r = await fetch(`${BASE}/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+  const r = await api(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
   if (!r.ok) return [];
   const d = await r.json();
   return d.results ?? [];
 }
 
 export async function startJob(req: JobRequest): Promise<string> {
-  const r = await fetch(`${BASE}/api/jobs`, {
+  const r = await api(`/api/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -291,11 +306,20 @@ export async function startJob(req: JobRequest): Promise<string> {
 }
 
 export async function fetchResult(jobId: string): Promise<ViewModel> {
-  const r = await fetch(`${BASE}/api/jobs/${jobId}/result`);
+  const r = await api(`/api/jobs/${jobId}/result`);
   if (!r.ok) await fail(r);
   return r.json();
 }
 
-export function eventsUrl(jobId: string): string {
-  return `${BASE}/api/jobs/${jobId}/events`;
+/**
+ * 진행 스트림 주소.
+ *
+ * **`EventSource`는 헤더를 붙일 수 없다.** 그래서 이 경로만 토큰을 쿼리로
+ * 넘긴다. 쿼리 토큰은 서버 로그에 남을 수 있어 일반적으로 피해야 하지만,
+ * 다른 방법이 없고 이 엔드포인트가 흘리는 것은 단계 이름뿐이다.
+ */
+export async function eventsUrl(jobId: string): Promise<string> {
+  const token = await accessToken();
+  const q = token ? `?access_token=${encodeURIComponent(token)}` : "";
+  return `${BASE}/api/jobs/${jobId}/events${q}`;
 }

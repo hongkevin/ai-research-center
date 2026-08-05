@@ -41,19 +41,75 @@ PUBLIC_PATHS = frozenset({"/api/health"})
 
 _REALM = "AI Research Center"
 
+# Supabase는 로그인한 사용자 토큰에 이 audience를 넣는다
+_SUPABASE_AUD = "authenticated"
+
+
+def _is_public(path: str, *, jwt_mode: bool) -> bool:
+    """이 경로를 인증 없이 열어줄 것인가.
+
+    **JWT 모드에서는 화면 껍데기가 열려 있어야 한다.** 로그인 페이지 자체가
+    그 껍데기 안에 있어서, 정적 파일까지 막으면 로그인할 방법이 없다. 대신
+    데이터는 전부 `/api/*` 뒤에 있으므로 그쪽만 잠근다.
+
+    Basic 모드는 지금 동작을 그대로 둔다 — 화면까지 막던 것을 갑자기 열면
+    배포된 주소의 노출 범위가 조용히 넓어진다.
+    """
+    if path in PUBLIC_PATHS:
+        return True
+    return jwt_mode and not path.startswith("/api/")
+
 
 class BasicAuthMiddleware(BaseHTTPMiddleware):
-    """공유 비밀번호. `ARC_PASSWORD`가 비어 있으면 통과시킨다(로컬 개발)."""
+    """접근 제어. **설정된 것에 따라 방식을 고른다.**
+
+    1. `SUPABASE_JWT_SECRET`이 있으면 → Supabase 액세스 토큰(Bearer) 검증
+    2. 없고 `ARC_PASSWORD`가 있으면 → 공유 비밀번호(HTTP Basic)
+    3. 둘 다 없으면 → 통과 (로컬 개발). 뜰 때 경고한다.
+
+    **왜 Basic을 아직 안 지우는가.** 지금 지우면 Supabase 키가 안 꽂힌 동안
+    서버가 **OpenAI 키를 들고 무방비로 열린다** — 이 파일이 존재하는 이유가
+    그것이다. Supabase가 배포에서 확인된 뒤에 지운다.
+
+    Next 서버가 없어(정적 익스포트, D37) 브라우저가 토큰을 직접 들고 오므로
+    **API가 스스로 서명을 확인해야 한다.** Supabase 서버 클라이언트가 쿠키로
+    대신해 주는 구조가 여기서는 성립하지 않는다.
+    """
 
     def __init__(self, app, password: str | None = None, username: str = "arc") -> None:
         super().__init__(app)
         self.password = password if password is not None else os.environ.get("ARC_PASSWORD", "")
         self.username = os.environ.get("ARC_USERNAME", username)
-        if not self.password:
+        self.jwt_secret = os.environ.get("SUPABASE_JWT_SECRET", "")
+        if self.jwt_secret:
+            log.info("Supabase 토큰 검증으로 실행됩니다.")
+        elif not self.password:
             log.warning(
-                "ARC_PASSWORD가 없어 인증 없이 실행됩니다. "
+                "SUPABASE_JWT_SECRET·ARC_PASSWORD가 모두 없어 인증 없이 실행됩니다. "
                 "공개 주소에 올릴 때는 반드시 설정하십시오 — 서버의 LLM 키가 무방비가 됩니다."
             )
+
+    def _claims(self, header: str | None) -> dict | None:
+        """`Authorization: Bearer <jwt>` → 검증된 클레임. 아니면 None.
+
+        HS256 + 프로젝트 JWT 시크릿을 전제한다. Supabase 프로젝트가 비대칭
+        서명키(RS256/ES256)를 쓰면 JWKS 조회가 따로 필요하다.
+        """
+        if not header or not header.lower().startswith("bearer "):
+            return None
+        token = header.split(" ", 1)[1].strip()
+        try:
+            import jwt
+
+            return jwt.decode(
+                token,
+                self.jwt_secret,
+                algorithms=["HS256"],
+                audience=_SUPABASE_AUD,
+            )
+        except Exception as exc:  # noqa: BLE001 — 만료·서명불일치·형식오류 전부 거부다
+            log.debug("토큰 거부: %s", exc)
+            return None
 
     def _ok(self, header: str | None) -> bool:
         if not header or not header.lower().startswith("basic "):
@@ -67,7 +123,30 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         return hmac.compare_digest(user, self.username) and hmac.compare_digest(pw, self.password)
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        if not self.password or request.url.path in PUBLIC_PATHS:
+        jwt_mode = bool(self.jwt_secret)
+        if _is_public(request.url.path, jwt_mode=jwt_mode):
+            return await call_next(request)
+
+        if jwt_mode:
+            header = request.headers.get("authorization")
+            # **`EventSource`는 헤더를 붙일 수 없다.** 진행 스트림만 쿼리
+            # 토큰을 받는다. 쿼리 토큰은 서버 로그에 남을 수 있어 일반적으로
+            # 피해야 하지만 다른 방법이 없고, 이 경로가 흘리는 것은 단계
+            # 이름뿐이다.
+            if not header and request.url.path.endswith("/events"):
+                q = request.query_params.get("access_token", "")
+                header = f"Bearer {q}" if q else None
+            claims = self._claims(header)
+            if claims is None:
+                # Basic과 달리 `WWW-Authenticate`를 주지 않는다 — 브라우저
+                # 기본 로그인 창이 뜨면 우리 로그인 화면으로 갈 수 없다.
+                return PlainTextResponse("로그인이 필요합니다.", status_code=401)
+            # 나중에 카드를 사람별로 나눌 때 쓸 자리 (소유자 필드)
+            request.state.user_id = claims.get("sub", "")
+            request.state.user_email = claims.get("email", "")
+            return await call_next(request)
+
+        if not self.password:
             return await call_next(request)
         if self._ok(request.headers.get("authorization")):
             return await call_next(request)

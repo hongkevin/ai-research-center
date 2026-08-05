@@ -67,7 +67,7 @@ export function useGeneration() {
         return;
       }
 
-      const es = new EventSource(eventsUrl(jobId));
+      const es = new EventSource(await eventsUrl(jobId));
       source.current = es;
 
       es.addEventListener("step", (e) => {

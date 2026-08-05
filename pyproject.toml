@@ -28,6 +28,9 @@ web = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
+    # Supabase 액세스 토큰 검증 (web/auth.py). Next 서버가 없어 브라우저가
+    # 토큰을 직접 들고 오므로 API가 스스로 서명을 확인해야 한다.
+    "pyjwt",
 ]
 dev = [
     "pytest",

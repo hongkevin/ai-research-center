@@ -116,10 +116,10 @@ React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
 | | |
 |---|---|
 | 배포 | https://ai-research-center-production.up.railway.app · 리전 **Asia Southeast(싱가포르)** |
-| 인증 | HTTP Basic · 아이디 `arc` · 비밀번호는 Railway `ARC_PASSWORD` |
+| 인증 | **Supabase(Google) 또는 HTTP Basic** — 설정된 쪽을 쓴다 (D42). Basic은 Supabase 확인 후 삭제 |
 | 저장소 | github.com/hongkevin/ai-research-center (**PUBLIC**) |
 | 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) · **단계 레일** (D39) · **보드** (D40) · **리뷰 루프** (D41) |
-| 테스트 | 568 통과 · ruff 클린 · eslint 클린 |
+| 테스트 | 575 통과 · ruff 클린 · eslint 클린 |
 | CI | 린트 · 테스트 · **프런트 빌드** · Docker 빌드+헬스체크+화면서빙 · **키 패턴 검사** |
 | 성능 | 결정론 3.0초 / LLM 30~35초 (US 리전 기준 실측 — 싱가포르 이전 후 미측정) |
 | 비용 | 건당 ~$0.005 (실측 $0.0055, `gpt-5.6-luna`) |
@@ -339,7 +339,7 @@ docs/HANDOFF.md 와 docs/decisions.md 읽고 이어가자.
 ```
 
 세부는 이 순서로 보면 됩니다:
-[decisions.md](decisions.md) D1~D41 →
+[decisions.md](decisions.md) D1~D42 →
 [corpus/FINDINGS.md](../corpus/FINDINGS.md)(왜 사람에게 묻는 쪽으로 돌았는가) →
 [research/01-benchmark-smic.md](research/01-benchmark-smic.md)(SMIC 갭 분석) →
 [DEPLOY.md](DEPLOY.md)(배포·제약)

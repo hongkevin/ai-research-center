@@ -82,7 +82,10 @@ git push origin main
 |---|---|---|
 | `DART_API_KEY` | (발급값) | 필수. 없으면 아무것도 안 된다 |
 | `OPENAI_API_KEY` | (발급값) | 없으면 결정론 문장으로만 생성 |
-| `ARC_PASSWORD` | 동료와 공유할 비밀번호 | **필수.** 없으면 인증 없이 열린다 |
+| `ARC_PASSWORD` | 동료와 공유할 비밀번호 | Supabase를 안 쓸 때 **필수.** 없으면 인증 없이 열린다 |
+| `NEXT_PUBLIC_SUPABASE_URL` | (프로젝트 URL) | 로그인을 쓸 때. **빌드 시점에 박힌다** |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (anon 키) | 위와 같음 |
+| `SUPABASE_JWT_SECRET` | 설정 → API → JWT Secret | **anon 키가 아니다.** 넣으면 Basic 대신 토큰 검증으로 전환된다 |
 | `ARC_USERNAME` | `arc` | 기본값 |
 | `ARC_LLM_LIMIT` | `200` | 프로세스당 LLM 호출 상한 |
 | `ARC_STORE_DIR` | `/data/arc-store` | Dockerfile 기본값. 볼륨과 맞춘다 |
