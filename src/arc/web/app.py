@@ -275,6 +275,7 @@ def _generate(
     symbol: str,
     year: int,
     *,
+    period: str = "ANNUAL",
     use_llm: bool,
     overrides: dict[str, float],
     publish: bool = False,
@@ -308,10 +309,13 @@ def _generate(
     # 틀렸다고 생성이 죽으면 안 된다 — 추정 이력은 향상이지 필수가 아니다.
     store = _open_store()
     published_at = dt.datetime.now(dt.UTC).date()
+    from arc.data.base import PeriodType
+
     r = build_report(
         symbol,
         year,
         provider,
+        period=PeriodType(period),
         published_at=published_at,
         llm=client,
         store=store,
@@ -422,6 +426,7 @@ def api_start_job(payload: dict):
     """
     symbol = str(payload.get("symbol", "")).strip()
     year = int(payload.get("year", 2025))
+    period = str(payload.get("period", "ANNUAL"))
     use_llm = bool(payload.get("llm", False))
     publish = bool(payload.get("publish", False))
     try:
@@ -445,6 +450,7 @@ def api_start_job(payload: dict):
             vm, doc = _generate(
                 symbol,
                 year,
+                period=period,
                 use_llm=use_llm,
                 overrides=overrides,
                 publish=publish,
@@ -559,6 +565,22 @@ def api_search(q: str = "", limit: int = 10):
         return {"results": _search_provider().search_companies(q, limit)}
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}", "results": []}, 503)
+
+
+@app.get("/api/company/{symbol}")
+def api_company(symbol: str):
+    """회사 한 줄 — 이름·종목코드·**시장 구분**.
+
+    코스피·코스닥·코넥스는 읽는 사람에게 전혀 다른 맥락이다(유동성·공시 수준·
+    커버리지). 고른 직후에 보여주지 않으면 다 만들고 나서야 알게 된다.
+
+    `corpCode.xml`에는 시장 구분이 없어 `company.json`을 한 번 친다.
+    """
+    try:
+        c = _shared_provider().get_company(symbol.strip())
+    except Exception as exc:  # noqa: BLE001 — 화면에 원인을 보여주는 게 목적이다
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=404)
+    return {"symbol": c.symbol, "name": c.name, "market": c.market.value}
 
 
 @app.get("/api/health")

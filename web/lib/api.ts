@@ -267,9 +267,22 @@ export interface CompanyHit {
   symbol: string;
 }
 
+/** 시장 구분까지 붙은 회사 한 줄. corpCode.xml에 없어 company.json을 친다. */
+export interface CompanyInfo {
+  symbol: string;
+  name: string;
+  market: string;
+}
+
+export async function getCompany(symbol: string): Promise<CompanyInfo | null> {
+  const r = await api(`/api/company/${encodeURIComponent(symbol)}`);
+  return r.ok ? r.json() : null;
+}
+
 export interface JobRequest {
   symbol: string;
   year: number;
+  period: string;
   llm: boolean;
   assume: string;
   publish: boolean;

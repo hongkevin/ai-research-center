@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { symbolOf } from "@/components/workbench/company-search";
+import { defaultPeriod } from "@/lib/periods";
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
 import { Brand, BRAND_LINE } from "@/components/workbench/brand";
@@ -42,7 +43,14 @@ import {
  * 화면을 붙들지 않고 카드를 만들고, 사람은 기다리는 대신 다른 카드를 본다.
  */
 export default function Workbench() {
-  const [form, setForm] = useState<FormState>({ symbol: "", year: 2025, llm: false, assume: "" });
+  const DEFAULT = defaultPeriod();
+  const [form, setForm] = useState<FormState>({
+    symbol: "",
+    year: DEFAULT.year,
+    period: DEFAULT.period,
+    llm: false,
+    assume: "",
+  });
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [open, setOpen] = useState<CardDetail | null>(null);

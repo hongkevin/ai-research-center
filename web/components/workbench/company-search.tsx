@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent } from "@/components/ui/popover";
-import { searchCompanies, type CompanyHit } from "@/lib/api";
+import { getCompany, searchCompanies, type CompanyHit, type CompanyInfo } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,6 +31,13 @@ export function symbolOf(input: string): string {
   return bare ? bare[0] : input.trim();
 }
 
+/** 시장 구분은 읽는 사람에게 전혀 다른 맥락이다 — 유동성·공시 수준·커버리지. */
+const MARKET_LABEL: Record<string, string> = {
+  KOSPI: "코스피",
+  KOSDAQ: "코스닥",
+  KONEX: "코넥스",
+};
+
 export function CompanySearch({
   value,
   onChange,
@@ -45,11 +52,13 @@ export function CompanySearch({
   const [open, setOpen] = useState(false);
   const lastQuery = useRef("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const [info, setInfo] = useState<CompanyInfo | null>(null);
 
   useEffect(() => {
     const q = value.trim();
     if (q === lastQuery.current) return;
     lastQuery.current = q;
+    setInfo(null);
     // 빈 입력 처리까지 타이머 안에서 한다. effect 본문에서 바로 setState하면
     // 연쇄 렌더가 생기고 react-hooks/set-state-in-effect가 막는다.
     // 타이핑마다 때리면 서버가 corpCode 인덱스를 반복 훑기도 한다.
@@ -78,6 +87,10 @@ export function CompanySearch({
     onChange(label);
     lastQuery.current = label;
     setOpen(false);
+    // **시장 구분은 고른 직후에 보여야 한다.** 코스피·코스닥·코넥스는 읽는
+    // 사람에게 전혀 다른 맥락인데, 지금은 다 만들고 나서야 알 수 있었다.
+    setInfo(null);
+    void getCompany(hit.symbol).then(setInfo);
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -110,6 +123,14 @@ export function CompanySearch({
         disabled={disabled}
         required
       />
+
+      {info && (
+        <span className="mt-1 block text-[11.5px] text-muted-foreground">
+          <span className="font-medium text-foreground">{MARKET_LABEL[info.market] ?? info.market}</span>
+          {" · "}
+          {info.name} · {info.symbol}
+        </span>
+      )}
 
       <PopoverContent
         anchor={inputRef}
