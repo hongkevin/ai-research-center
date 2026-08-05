@@ -1,13 +1,12 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CompanySearch } from "@/components/workbench/company-search";
-import { Hint, KeyValue, SectionLabel } from "@/components/workbench/section-label";
+import { Hint, SectionLabel } from "@/components/workbench/section-label";
 import { StageRail } from "@/components/workbench/stage-rail";
 import type { ViewModel } from "@/lib/api";
 import type { Step } from "@/lib/use-generation";
@@ -34,6 +33,8 @@ export function GenerateForm({
   steps,
   elapsed,
   vm,
+  collapsed = false,
+  onExpand,
 }: {
   state: FormState;
   onChange: (s: FormState) => void;
@@ -42,9 +43,23 @@ export function GenerateForm({
   steps: Step[];
   elapsed: number;
   vm: ViewModel | null;
+  /** 카드를 보는 중에는 접는다 — 생성 폼은 보드에서만 필요하다. */
+  collapsed?: boolean;
+  onExpand?: () => void;
 }) {
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     onChange({ ...state, [k]: v });
+
+  if (collapsed) {
+    return (
+      <div className="space-y-6">
+        <Button variant="outline" size="sm" onClick={onExpand} className="w-full">
+          + 새 노트 생성
+        </Button>
+        <StageRail stages={vm?.stages ?? []} steps={steps} running={busy} elapsed={elapsed} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -138,30 +153,6 @@ export function GenerateForm({
         elapsed={elapsed}
       />
 
-      {vm && !vm.error && (
-        <section>
-          <SectionLabel>커버리지</SectionLabel>
-          <Card>
-            <CardContent className="py-4">
-              <KeyValue label="매핑된 지표">{vm.metrics_found}개</KeyValue>
-              <KeyValue label="레지스트리">{vm.registry_size}건</KeyValue>
-              {vm.metrics_missing.length > 0 && (
-                <KeyValue label="미확인 계정">{vm.metrics_missing.join(", ")}</KeyValue>
-              )}
-              {vm.llm_used ? (
-                <>
-                  <KeyValue label="서술">{vm.llm_model}</KeyValue>
-                  {vm.llm_cost != null && (
-                    <KeyValue label="건당 비용">${vm.llm_cost.toFixed(4)}</KeyValue>
-                  )}
-                </>
-              ) : (
-                <KeyValue label="서술">결정론 문장</KeyValue>
-              )}
-            </CardContent>
-          </Card>
-        </section>
-      )}
     </div>
   );
 }

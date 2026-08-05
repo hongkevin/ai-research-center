@@ -131,6 +131,8 @@ export default function Workbench() {
             steps={steps}
             elapsed={elapsed}
             vm={shown}
+            collapsed={open !== null}
+            onExpand={() => setOpen(null)}
           />
         </div>
 
