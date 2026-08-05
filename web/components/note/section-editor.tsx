@@ -135,9 +135,13 @@ export function SectionEditor({
     }
   }
 
+  // **화면의 절반을 넘지 않는다.** shadcn Textarea는 `field-sizing-content`라
+  // 내용만큼 늘어나서, 긴 섹션을 열면 시트가 문서를 통째로 덮어버린다. 상한을
+  // 걸고 안쪽이 스크롤되게 한다 — 고치는 자리와 읽는 자리가 함께 보여야
+  // 편집이 성립한다.
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card shadow-[0_-8px_24px_rgba(0,0,0,.12)]">
-      <div className="mx-auto max-w-[900px] px-5 py-3">
+    <div className="fixed inset-x-0 bottom-0 z-40 flex max-h-[50dvh] flex-col border-t bg-card shadow-[0_-8px_24px_rgba(0,0,0,.12)]">
+      <div className="mx-auto w-full max-w-[900px] overflow-y-auto px-5 py-3">
         {/* 섹션 갈아타기. 편집기를 닫고 다른 제목을 찾아 올라가는 왕복을 없앤다. */}
         <div className="mb-2 flex flex-wrap gap-1">
           {sections.map((s) => (
@@ -194,7 +198,7 @@ export function SectionEditor({
               onChange={(e) => setComment(e.target.value)}
               disabled={busy}
               placeholder="예) 첫 문장이 결론이 아니라 나열로 시작합니다. 가장 중요한 한 가지를 앞으로 빼 주세요."
-              className="mt-2 text-[13px]"
+              className="mt-2 max-h-[18dvh] overflow-y-auto text-[13px]"
             />
             <Button
               size="sm"
@@ -255,7 +259,8 @@ export function SectionEditor({
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               disabled={busy}
-              className="mt-2 font-mono text-[12.5px]"
+              // 시트가 절반을 넘지 않도록 여기서도 상한을 건다
+              className="mt-2 max-h-[26dvh] overflow-y-auto font-mono text-[12.5px]"
             />
             <Hint>
               <code>{"{{num:키}}"}</code>는 레지스트리의 수치입니다. 지우면 그 숫자가
