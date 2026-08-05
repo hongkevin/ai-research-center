@@ -19,6 +19,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -27,6 +28,7 @@ from arc.data.base import (
     ConsolidationType,
     DataProvider,
     FinancialStatement,
+    NewsItem,
     PeriodType,
 )
 from arc.data.kr.dart import DartProvider
@@ -89,7 +91,7 @@ from arc.finmodel.valuation import (
     build_valuation_entries,
     build_valuation_observations,
 )
-from arc.llm.number_registry import NumberRegistry
+from arc.llm.number_registry import NumberRegistry, mask_numbers
 from arc.verify.g0 import G0Gate, GateResult
 
 TEMPLATE_NAME = "earnings_review.md.j2"
@@ -462,6 +464,9 @@ def compose_sections(
         "watchpoints": [t.text for t in lenses.tensions] if lenses else [],
         # 산업 배경도 LLM 전용 레인이다 (미검증). 없으면 섹션이 통째로 빠진다.
         "industry_context": "",
+        # 최근 이슈 — 같은 미검증 레인이지만 근거에 날짜와 링크가 있다 (D45).
+        "recent_issues": "",
+        "news_articles": [],
         "method_notes": _method_notes(ms, valuation, info, estimates),
     }
 
@@ -984,6 +989,12 @@ def _header_rows(
     return rows
 
 
+def _press_of(url: str) -> str:
+    """기사 URL → 매체. 도메인이 곧 매체다 — 검색 API가 이름을 주지 않는다."""
+    host = urlparse(url).netloc.removeprefix("www.")
+    return host or "—"
+
+
 def link_to_sections(registry: NumberRegistry) -> int:
     """레지스트리의 `verify_url`을 **그 숫자가 실린 절**로 바꾼다. 바꾼 건수를 준다.
 
@@ -1198,6 +1209,8 @@ def build_report(
     # 낸다 (D34: 1년차 영업이익 오차가 이미 중앙값 55.9%다).
     forward: list[dict[str, float]] | None = None,
     with_segments: bool = True,
+    # 최근 기사 스니펫. **주면 미검증 레인이 하나 더 열린다** (D45).
+    news: list[NewsItem] | None = None,
     on_progress: Callable[[str, str], None] | None = None,
 ) -> ReportResult:
     """S1 → S6b 관통.
@@ -1518,7 +1531,7 @@ def build_report(
 
     narration = None
     if llm is not None:
-        from arc.llm.narrate import narrate, narrate_industry
+        from arc.llm.narrate import narrate, narrate_industry, narrate_news
 
         st_llm = step("llm", "문장 작성")
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
@@ -1606,6 +1619,45 @@ def build_report(
                 st_ind.note = " · ".join(industry_problems) or (
                     "숫자가 섞여 D31 규칙으로 버렸습니다. 리포트는 그대로 냅니다."
                 )
+
+        if news:
+            st_news = step("news", "최근 이슈")
+            issues, news_problems = narrate_news(
+                llm,
+                company_name=company.name,
+                articles=[
+                    {"title": mask_numbers(a.title), "snippet": mask_numbers(a.snippet)}
+                    for a in news
+                ],
+            )
+            sections["recent_issues"] = issues
+            if issues:
+                # 문단을 못 만들었으면 기사 표도 싣지 않는다 — 근거 없는 링크
+                # 목록만 남으면 「관련 없는 기사」를 우리가 고른 것처럼 읽힌다.
+                sections["news_articles"] = [
+                    {
+                        # **제목의 숫자를 가린다.** 검산하지 않은 숫자를 그대로
+                        # 옮기면 독자는 그걸 우리 주장으로 읽고, G0도 막는다.
+                        "title": mask_numbers(a.title).replace("|", "\\|"),
+                        "url": a.url,
+                        "press": _press_of(a.url),
+                        "date": a.published_at.date().isoformat() if a.published_at else "—",
+                    }
+                    for a in news
+                ]
+                st_news.summary = f"기사 {len(news)}건 · {len(issues)}자"
+                st_news.checks = [
+                    {"label": "출처로 되짚을 수 있는가", "value": "링크 있음", "ok": True},
+                    {"label": "숫자 없음", "value": "확인", "ok": True},
+                ]
+            else:
+                st_news.status = "absent"
+                st_news.summary = "문단 버림"
+                st_news.note = " · ".join(news_problems) or (
+                    "쓸 만한 이슈가 없어 비웠습니다. 기사 표도 싣지 않습니다."
+                )
+            if news_problems and narration is not None:
+                narration.problems.extend(news_problems)
     assembled = assemble(
         company,
         ms,

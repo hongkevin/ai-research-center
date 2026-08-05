@@ -368,8 +368,33 @@ export interface JobRequest {
   year: number;
   period: string;
   llm: boolean;
+  /** 최근 기사를 찾아 「최근 이슈」 절을 붙일 것인가 (D45). */
+  search: boolean;
   assume: string;
   publish: boolean;
+}
+
+export interface Capabilities {
+  llm_key: boolean;
+  news_key: boolean;
+}
+
+/**
+ * 서버가 무엇을 할 수 있는가.
+ *
+ * 기사 검색은 별도 키(NAVER_CLIENT_ID/SECRET)가 있어야 돈다. 키가 없는데
+ * 체크박스를 켤 수 있게 두면 눌러도 아무 일이 안 일어나고, 사용자는 기능이
+ * 고장 났다고 읽는다. 못 하면 **못 한다고 쓴다.**
+ */
+export async function getCapabilities(): Promise<Capabilities> {
+  try {
+    const r = await api("/api/health");
+    if (!r.ok) return { llm_key: false, news_key: false };
+    const d = await r.json();
+    return { llm_key: !!d.llm_key, news_key: !!d.news_key };
+  } catch {
+    return { llm_key: false, news_key: false };
+  }
 }
 
 /** 서버가 준 메시지를 그대로 올린다 — 원인을 화면에 보여주는 게 목적이다. */

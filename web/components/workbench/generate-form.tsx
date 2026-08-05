@@ -19,6 +19,8 @@ export interface FormState {
   /** 어느 정기보고서인가. 엔진은 진작 이 축을 알고 있었다(PeriodType). */
   period: PeriodCode;
   llm: boolean;
+  /** 최근 기사를 찾아 「최근 이슈」 절을 붙일 것인가 (D45). */
+  search: boolean;
   assume: string;
 }
 
@@ -42,6 +44,7 @@ export function GenerateForm({
   preliminary,
   collapsed = false,
   onExpand,
+  newsAvailable = false,
 }: {
   state: FormState;
   onChange: (s: FormState) => void;
@@ -57,6 +60,8 @@ export function GenerateForm({
   preliminary: Preliminary | null;
   /** 카드를 보는 중에는 접는다 — 생성 폼은 보드에서만 필요하다. */
   collapsed?: boolean;
+  /** 서버에 기사 검색 키가 있는가. 없으면 체크박스를 잠근다. */
+  newsAvailable?: boolean;
   onExpand?: () => void;
 }) {
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
@@ -64,15 +69,27 @@ export function GenerateForm({
 
   // 평소엔 최신만 보인다. 과거 재현이 필요할 때만 목록을 연다.
   const [picking, setPicking] = useState(false);
-  const current = filings.find((f) => f.year === state.year && f.period === state.period);
+  const current = filings.find(
+    (f) => f.year === state.year && f.period === state.period,
+  );
 
   if (collapsed) {
     return (
       <div className="space-y-6">
-        <Button variant="outline" size="sm" onClick={onExpand} className="w-full">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onExpand}
+          className="w-full"
+        >
           + 새 초안
         </Button>
-        <StageRail stages={vm?.stages ?? []} steps={steps} running={busy} elapsed={elapsed} />
+        <StageRail
+          stages={vm?.stages ?? []}
+          steps={steps}
+          running={busy}
+          elapsed={elapsed}
+        />
       </div>
     );
   }
@@ -98,7 +115,9 @@ export function GenerateForm({
           />
         </div>
 
-        <Label className="text-xs text-muted-foreground mt-5 block">정기보고서</Label>
+        <Label className="text-xs text-muted-foreground mt-5 block">
+          정기보고서
+        </Label>
 
         {/* **최신을 사실로 보여준다.** 최신 보고서가 이미 prior·prior2를 담고
             있어 과거를 고를 이유가 거의 없고, 잘못 고르면 철 지난 노트가
@@ -146,7 +165,9 @@ export function GenerateForm({
             </div>
             {current && (
               <div className="text-[11.5px] text-muted-foreground">
-                <span className="whitespace-nowrap">{current.filed_at} 제출</span>
+                <span className="whitespace-nowrap">
+                  {current.filed_at} 제출
+                </span>
                 {current.url && (
                   <>
                     {" · "}
@@ -169,8 +190,8 @@ export function GenerateForm({
             것과, 알고도 그걸 쓰는 것은 다르다. */}
         {preliminary && (
           <div className="mt-1.5 rounded-md border border-warn/50 bg-warn/10 px-2.5 py-1.5 text-[11.5px]">
-            <b className="text-warn">{preliminary.filed_at} 잠정실적</b>이 이미 나왔습니다.
-            ARC는 아직 정기보고서만 읽습니다 —{" "}
+            <b className="text-warn">{preliminary.filed_at} 잠정실적</b>이 이미
+            나왔습니다. ARC는 아직 정기보고서만 읽습니다 —{" "}
             <a
               href={preliminary.url}
               target="_blank"
@@ -184,13 +205,16 @@ export function GenerateForm({
 
         {!hasPeriodicInfo(state) && (
           <Hint>
-            분기보고서에는 <b>주식수·배당·감사의견·인력·지분·출자</b>가 없습니다(연간
-            공시). 부문 손익과 재무제표는 그대로 나옵니다.
+            분기보고서에는 <b>주식수·배당·감사의견·인력·지분·출자</b>가
+            없습니다(연간 공시). 부문 손익과 재무제표는 그대로 나옵니다.
           </Hint>
         )}
 
-
-        <div className="flex items-center gap-2 mt-5">
+        {/* 「문장까지 작성」이라고만 써 두면 누가 쓰는지가 안 보인다.
+            AI가 하는 일과 하지 않는 일을 라벨에서 갈라 준다 — 수치는
+            어느 쪽이든 코드가 만든다는 게 이 제품의 전제다. */}
+        <SectionLabel>AI 작성</SectionLabel>
+        <div className="flex items-center gap-2 mt-1.5">
           <Checkbox
             id="llm"
             checked={state.llm}
@@ -198,18 +222,52 @@ export function GenerateForm({
             disabled={busy}
           />
           <Label htmlFor="llm" className="text-sm">
-            문장까지 작성
+            AI로 서술 작성
           </Label>
         </div>
-        <Hint>끄면 표와 수치만 만듭니다. <b>수치는 어느 쪽이든 같습니다.</b></Hint>
+        <Hint>
+          끄면 표와 수치만 만듭니다. <b>수치는 어느 쪽이든 같습니다</b> — AI는
+          문장만 쓰고 숫자는 코드가 만듭니다.
+        </Hint>
+
+        <div className="flex items-center gap-2 mt-3">
+          <Checkbox
+            id="search"
+            checked={state.search && state.llm && newsAvailable}
+            onCheckedChange={(c) => set("search", c === true)}
+            disabled={busy || !state.llm || !newsAvailable}
+          />
+          <Label
+            htmlFor="search"
+            className={`text-sm ${!state.llm || !newsAvailable ? "text-muted-foreground" : ""}`}
+          >
+            AI로 최근 기사 반영
+          </Label>
+        </div>
+        <Hint>
+          {!newsAvailable ? (
+            <>
+              기사 검색 키가 없어 켤 수 없습니다 (<code>NAVER_CLIENT_ID</code> ·{" "}
+              <code>NAVER_CLIENT_SECRET</code>).
+            </>
+          ) : !state.llm ? (
+            "서술 작성을 켜야 기사를 문단으로 만들 수 있습니다."
+          ) : (
+            <>
+              공시에 없는 사건(수주·규제·소송 등)을 <b>「최근 이슈」 절</b>로
+              붙입니다. 공시 밖이라 <b>숫자는 가려서</b> 싣고 기사 링크를 함께
+              답니다.
+            </>
+          )}
+        </Hint>
 
         <Button type="submit" disabled={busy} className="w-full mt-6">
           {busy ? "작성 중…" : "초안 작성"}
         </Button>
         <Hint>
-          공시에서 수치를 읽어 초안을 만듭니다. 읽고 고친 뒤 카드에서 발간합니다.
+          공시에서 수치를 읽어 초안을 만듭니다. 읽고 고친 뒤 카드에서
+          발간합니다.
         </Hint>
-
       </form>
 
       {/* 진행 표시와 단계 기록은 같은 것의 두 상태다 — 흘러가다가 그 자리에 남는다 */}
@@ -219,7 +277,6 @@ export function GenerateForm({
         running={busy}
         elapsed={elapsed}
       />
-
     </div>
   );
 }

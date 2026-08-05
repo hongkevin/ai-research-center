@@ -337,6 +337,7 @@ def _generate(
     *,
     period: str = "ANNUAL",
     use_llm: bool,
+    search: bool = False,
     overrides: dict[str, float],
     forward: list[dict[str, float]] | None = None,
     publish: bool = False,
@@ -366,6 +367,17 @@ def _generate(
             # 상한에 닿으면 **LLM만 끈다.** 화면이 죽는 것보다 수치만 나오는 편이 낫다.
             budget_exhausted = True
 
+    # 최근 기사 — **LLM이 있을 때만 의미가 있다.** 스니펫을 문단으로 만드는
+    # 게 이 레인의 전부라, 문장을 안 쓰면 링크 목록만 남는다.
+    news = None
+    news_error = ""
+    if search and client is not None:
+        try:
+            news = _search_news(symbol)
+        except Exception as exc:  # noqa: BLE001 — 검색 실패가 생성을 막지 않는다
+            news_error = f"기사 검색 실패: {type(exc).__name__}"
+            log.warning("뉴스 검색 실패 (%s): %s", symbol, exc)
+
     # 저장소를 못 쓰면 **이력 없이 계속한다.** 볼륨이 안 붙었거나 경로가
     # 틀렸다고 생성이 죽으면 안 된다 — 추정 이력은 향상이지 필수가 아니다.
     store = _open_store()
@@ -380,11 +392,14 @@ def _generate(
         published_at=published_at,
         llm=client,
         store=store,
+        news=news,
         assumptions=overrides or None,
         forward=forward or None,
         on_progress=on_progress,
     )
     vm = _to_view(r)
+    if news_error:
+        vm.notice = (vm.notice + " " if vm.notice else "") + news_error
     if budget_exhausted:
         vm.notice = (
             f"LLM 생성 한도({LLM_BUDGET.limit}건)에 도달해 기본 문장으로 냈습니다. "
@@ -413,6 +428,25 @@ def _generate(
             else {}
         ),
     }
+
+
+def news_available() -> bool:
+    """기사 검색을 켤 수 있는가. 키가 없으면 체크박스를 눌러도 아무 일이 없다."""
+    return bool(os.environ.get("NAVER_CLIENT_ID") and os.environ.get("NAVER_CLIENT_SECRET"))
+
+
+def _search_news(symbol: str, limit: int = 12):
+    """종목의 최근 기사 스니펫. **회사명으로 찾는다** — 종목코드로는 안 걸린다.
+
+    본문은 가져오지 않는다(스니펫 전용, ARCHITECTURE §5.1). 우리가 하는 일은
+    "무엇이 있었는지"를 링크와 함께 보여 주는 것이지 기사를 재생산하는 게 아니다.
+    """
+    if not news_available():
+        return None
+    from arc.data.kr.naver_news import NaverNewsProvider
+
+    company = _shared_provider().get_company(symbol)
+    return NaverNewsProvider().get_news(company.name, limit=limit) or None
 
 
 def _open_store() -> SnapshotStore | None:
@@ -504,6 +538,7 @@ def api_start_job(payload: dict):
     year = int(payload.get("year", 2025))
     period = str(payload.get("period", "ANNUAL"))
     use_llm = bool(payload.get("llm", False))
+    search = bool(payload.get("search", False))
     publish = bool(payload.get("publish", False))
     try:
         symbol = _resolve_symbol(symbol)
@@ -535,6 +570,7 @@ def api_start_job(payload: dict):
                 year,
                 period=period,
                 use_llm=use_llm,
+                search=search,
                 overrides=overrides,
                 publish=publish,
                 on_progress=job.emit,
@@ -728,6 +764,8 @@ def api_health():
         "status": "ok",
         "dart_key": bool(os.environ.get("DART_API_KEY")),
         "llm_key": bool(os.environ.get("OPENAI_API_KEY")),
+        # 기사 검색 체크박스를 켤 수 있는가. 없으면 화면이 이유를 적는다.
+        "news_key": news_available(),
         "auth": bool(os.environ.get("ARC_PASSWORD")),
         "llm_used": LLM_BUDGET.used,
         "llm_limit": LLM_BUDGET.limit,

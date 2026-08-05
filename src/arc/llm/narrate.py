@@ -367,3 +367,88 @@ def narrate_industry(
     if digit:
         return "", [f"산업 배경에 검증 불가능한 숫자가 있어 버렸다: {digit.group(0)!r}"]
     return text, []
+
+
+NEWS_SYSTEM_PROMPT = """\
+당신은 한국 증권사 리서치센터의 애널리스트입니다. 종목 리포트의 **최근 이슈**
+문단을 씁니다.
+
+## 이 문단의 성격
+
+주어진 **기사 스니펫만** 근거로 씁니다. 공시가 아니라 언론 보도이므로
+독자에게 「AI가 정리한 미검증 서술」로 표시되고, 각 기사의 매체·날짜·링크가
+문단 아래에 함께 실립니다.
+
+## 절대 규칙 — 숫자
+
+**숫자를 일절 쓰지 마십시오.** 금액·성장률·점유율·순위·연도 어느 것도 쓰지
+않습니다. 스니펫의 숫자는 이미 가려져 있습니다(⟨수치⟩). 가려진 자리를
+추측해 복원하지 마십시오. 숫자가 하나라도 있으면 이 문단은 통째로 삭제됩니다.
+
+## 절대 규칙 — 주어진 것 밖으로 나가지 않기
+
+- 스니펫에 없는 사실을 덧붙이지 마십시오. 기억에 있는 뉴스도 쓰지 않습니다.
+- 보도를 사실로 단정하지 마십시오. "보도됐다", "알려졌다"로 씁니다.
+- 목표주가·투자의견·매수/매도 표현은 금지입니다.
+- 기사가 회사와 무관하면 그 기사는 버리십시오. 동명이인·동명 회사가 섞입니다.
+
+## 쓰는 법
+
+- **실적 숫자를 되풀이하지 마십시오.** 그건 리포트의 다른 절이 공시로 이미
+  말합니다. 여기서는 **공시에 없는 것**을 씁니다 — 수주·계약·규제·소송·
+  경영권·설비투자·인허가처럼 다음 분기 숫자를 바꿀 사건.
+- 여러 기사가 같은 사건을 말하면 하나로 묶으십시오.
+- 쓸 만한 것이 없으면 빈 문자열을 내십시오. **억지로 채우지 않습니다.**
+- 3~5문장. 한 문단.
+
+## 출력 형식
+
+아래 JSON만 출력하십시오.
+
+{"recent_issues": "3~5문장 또는 빈 문자열"}"""
+
+
+def build_news_prompt(company_name: str, articles: list[dict[str, str]]) -> str:
+    lines = [f"# 대상\n{company_name}\n", "# 기사 스니펫 (숫자는 가려져 있습니다)"]
+    for i, a in enumerate(articles, 1):
+        lines.append(f"[{i}] {a['title']}\n    {a['snippet']}")
+    lines.append(
+        "\n# 과업\n다음 분기 숫자를 바꿀 만한 사건을 정리하십시오. "
+        "**숫자는 쓰지 않습니다.** JSON만 출력합니다."
+    )
+    return "\n".join(lines)
+
+
+def narrate_news(
+    client: LLMClient,
+    *,
+    company_name: str,
+    articles: list[dict[str, str]],
+) -> tuple[str, list[str]]:
+    """최근 이슈 문단. `(본문, 문제 목록)`.
+
+    **산업 배경과 같은 레인이다** (D31) — 검증 수단이 없으므로 숫자를 두지
+    않는다. 다른 점은 근거가 모델의 기억이 아니라 **날짜와 링크가 붙은
+    기사**라는 것이다. 그래서 독자가 되짚을 수 있다.
+
+    실패하면 빈 문자열을 준다. 리포트를 막지 않는다.
+    """
+    if not articles:
+        return "", ["기사가 없어 최근 이슈를 만들지 않았다."]
+    try:
+        completion = client.complete(
+            system=NEWS_SYSTEM_PROMPT,
+            user=build_news_prompt(company_name, articles),
+            tier=Tier.WRITE,
+        )
+        payload = parse_response(completion.text)
+    except Exception as exc:  # noqa: BLE001 — provider별 예외가 다르다
+        return "", [f"{type(exc).__name__}: {exc}"]
+
+    text = str(payload.get("recent_issues") or "").strip()
+    if not text:
+        return "", ["쓸 만한 이슈가 없어 비웠다."]
+    digit = re.search(r"\d", text)
+    if digit:
+        return "", [f"최근 이슈에 검증 불가능한 숫자가 있어 버렸다: {digit.group(0)!r}"]
+    return text, []
