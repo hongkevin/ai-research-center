@@ -2,7 +2,6 @@
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CompanySearch } from "@/components/workbench/company-search";
@@ -10,10 +9,19 @@ import { Hint, SectionLabel } from "@/components/workbench/section-label";
 import { StageRail } from "@/components/workbench/stage-rail";
 import type { ViewModel } from "@/lib/api";
 import type { Step } from "@/lib/use-generation";
+import {
+  hasPeriodicInfo,
+  isFiled,
+  periodKey,
+  reportPeriods,
+  type PeriodCode,
+} from "@/lib/periods";
 
 export interface FormState {
   symbol: string;
   year: number;
+  /** 어느 정기보고서인가. 엔진은 진작 이 축을 알고 있었다(PeriodType). */
+  period: PeriodCode;
   llm: boolean;
   assume: string;
 }
@@ -82,19 +90,34 @@ export function GenerateForm({
           />
         </div>
 
-        <Label htmlFor="year" className="text-xs text-muted-foreground mt-5 block">
-          사업연도
+        <Label htmlFor="report" className="text-xs text-muted-foreground mt-5 block">
+          정기보고서
         </Label>
-        <Input
-          id="year"
-          type="number"
-          min={2015}
-          max={2030}
-          value={state.year}
-          onChange={(e) => set("year", Number(e.target.value))}
+        {/* **연도가 아니라 보고서를 고른다.** RA는 연도를 정하지 않고 방금 올라온
+            보고서에 반응한다. 기한이 안 지난 것은 아직 안 나왔을 수 있어 표시한다. */}
+        <select
+          id="report"
+          value={periodKey(state)}
           disabled={busy}
-          className="mt-1"
-        />
+          onChange={(e) => {
+            const [y, p] = e.target.value.split(":");
+            onChange({ ...state, year: Number(y), period: p as PeriodCode });
+          }}
+          className="mt-1 h-9 w-full rounded-md border bg-transparent px-2.5 text-[13px]"
+        >
+          {reportPeriods().map((p) => (
+            <option key={periodKey(p)} value={periodKey(p)}>
+              {p.label}
+              {!isFiled(p) ? " · 미제출 가능" : ""}
+            </option>
+          ))}
+        </select>
+        {!hasPeriodicInfo(state) && (
+          <Hint>
+            분기보고서에는 <b>주식수·배당·감사의견·인력·지분·출자</b>가 없습니다(연간
+            공시). 부문 손익과 재무제표는 그대로 나옵니다.
+          </Hint>
+        )}
 
         <Label htmlFor="assume" className="text-xs text-muted-foreground mt-5 block">
           추정 가정 덮어쓰기
