@@ -183,7 +183,7 @@ web/components/note/      본문 주입 + 수치 출처 팝오버
 web/components/workbench/ 폼 · 회사 검색 · 근거 패널
   └ stage-rail.tsx        파이프라인 단계 레일 — 진행 표시와 같은 자리 (D39)
 web/components/board/     작업 보드 — 카드가 칸에 놓인다 (D40)
-web/components/note/revise-panel.tsx  코멘트 → diff → 채택 (D41)
+web/components/note/section-editor.tsx  코멘트 · 직접 편집 → diff → 버전 (D41)
 web/lib/api.ts            /api/* 클라이언트 (타입은 app.py의 ViewModel)
 web/lib/use-generation.ts 생성 → SSE 진행 → 결과
 ```

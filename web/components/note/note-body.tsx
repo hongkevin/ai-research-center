@@ -42,9 +42,15 @@ export interface Heading {
 export function NoteBody({
   html,
   onHeadings,
+  onEditSection,
+  editableSections,
 }: {
   html: string;
   onHeadings?: (headings: Heading[]) => void;
+  /** 제목 옆 「수정」을 누르면 그 섹션으로 편집기를 연다. */
+  onEditSection?: (title: string) => void;
+  /** 고칠 수 있는 섹션 제목들. 잠긴 섹션에는 버튼을 달지 않는다. */
+  editableSections?: string[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [info, setInfo] = useState<NumberInfo | null>(null);
@@ -63,6 +69,27 @@ export function NoteBody({
     });
     onHeadings(found);
   }, [html, onHeadings]);
+
+  // 제목 옆에 「수정」을 단다. 문서 어디를 읽든 그 자리에서 편집을 열 수 있어야
+  // 위로 스크롤해 올라갔다 내려오는 왕복이 사라진다.
+  useEffect(() => {
+    const root = ref.current;
+    if (!root || !onEditSection) return;
+    const allowed = new Set(editableSections ?? []);
+    const made: HTMLButtonElement[] = [];
+    root.querySelectorAll("h2").forEach((h) => {
+      const title = (h.textContent ?? "").trim();
+      if (!allowed.has(title)) return;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = "수정";
+      b.className = "note-edit";
+      b.addEventListener("click", () => onEditSection(title));
+      h.appendChild(b);
+      made.push(b);
+    });
+    return () => made.forEach((b) => b.remove());
+  }, [html, onEditSection, editableSections]);
 
   // 위임으로 붙인다 — 본문이 통째로 바뀌어도 핸들러를 다시 달 필요가 없다.
   const open = useCallback((el: HTMLElement) => {
