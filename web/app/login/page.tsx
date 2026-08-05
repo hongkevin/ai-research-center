@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { Brand, BRAND_LINE } from "@/components/workbench/brand";
 import { authEnabled, safeNextPath, signInWithGoogle } from "@/lib/supabase";
 
 /**
@@ -31,11 +32,8 @@ function Form() {
   return (
     <main className="flex min-h-dvh items-center justify-center px-5 py-8">
       <div className="w-full max-w-sm">
-        <div className="mb-10 text-[15px] font-semibold tracking-tight">AI Research Center</div>
-        <h1 className="mb-2 text-[22px] font-semibold tracking-tight">로그인</h1>
-        <p className="mb-8 text-[13px] text-muted-foreground">
-          코스닥 미커버 종목 실적 리뷰 노트 · 사람이 검토 후 발간
-        </p>
+        <Brand className="mb-3 block text-[22px]" />
+        <p className="mb-10 text-[13px] text-muted-foreground">{BRAND_LINE}</p>
 
         {authEnabled ? (
           <Button onClick={go} disabled={pending} className="w-full">

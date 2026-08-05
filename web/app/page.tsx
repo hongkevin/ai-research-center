@@ -14,6 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
+import { Brand, BRAND_LINE } from "@/components/workbench/brand";
 import { ThemeToggle } from "@/components/workbench/theme-toggle";
 import { authEnabled, signOut, supabase } from "@/lib/supabase";
 import { useGeneration } from "@/lib/use-generation";
@@ -136,21 +137,24 @@ export default function Workbench() {
   return (
     <>
       <header className="sticky top-0 z-10 flex flex-wrap items-baseline gap-3 border-b bg-card px-8 py-5">
-        <button
-          type="button"
-          onClick={() => setOpen(null)}
-          className="text-[15px] font-semibold tracking-tight hover:text-num"
-        >
-          AI Research Center
+        <button type="button" onClick={() => setOpen(null)} className="shrink-0">
+          <Brand className="text-[15px]" />
         </button>
-        <span className="text-[13px] text-muted-foreground">
-          코스닥 미커버 종목 실적 리뷰 노트 · 사람이 검토 후 발간
-        </span>
-        {open && (
-          <span className="text-[13px] text-muted-foreground">
-            — {open.company || open.symbol} ({open.symbol}) · FY{open.year} ·{" "}
-            <span className="font-mono">{open.version}</span>
+
+        {/* 카드를 열면 설명 자리를 종목 사실이 가져간다 — 둘이 같은 줄에서
+            경쟁하면 헤더가 다시 뚱뚱해진다. 「연결/별도」는 이 바닥에서 먼저
+            확인하는 것이라 반드시 남긴다(React 이관 때 빠뜨렸던 자리다). */}
+        {open ? (
+          <span className="truncate text-[13px]">
+            <span className="font-medium">{open.company || open.symbol}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              ({open.symbol}) · {open.vm.market} · FY{open.year} · {open.vm.basis} ·{" "}
+              <span className="font-mono">{open.version}</span>
+            </span>
           </span>
+        ) : (
+          <span className="text-[13px] text-muted-foreground">{BRAND_LINE}</span>
         )}
         <div className="ml-auto flex items-center gap-1">
           <ThemeToggle />
