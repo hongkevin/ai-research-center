@@ -28,6 +28,7 @@ import {
   deleteCard,
   getCard,
   listCards,
+  getCapabilities,
   getFilings,
   listSections,
   publishCard,
@@ -55,8 +56,11 @@ export default function Workbench() {
     year: 0,
     period: "ANNUAL",
     llm: false,
+    search: false,
     assume: "",
   });
+  // 서버에 기사 검색 키가 있는가. 없으면 체크박스가 이유를 적고 잠긴다.
+  const [newsAvailable, setNewsAvailable] = useState(false);
   const [filings, setFilings] = useState<Filing[]>([]);
   const [loadingFilings, setLoadingFilings] = useState(false);
   const [preliminary, setPreliminary] = useState<Preliminary | null>(null);
@@ -139,6 +143,10 @@ export default function Workbench() {
       alive = false;
     };
   }, [form.symbol]);
+
+  useEffect(() => {
+    void getCapabilities().then((c) => setNewsAvailable(c.news_key));
+  }, []);
 
   function submit(publish: boolean) {
     setHeadings([]);
@@ -262,6 +270,7 @@ export default function Workbench() {
             loadingFilings={loadingFilings}
             preliminary={preliminary}
             collapsed={open !== null}
+            newsAvailable={newsAvailable}
             onExpand={() => setOpen(null)}
           />
         </div>
