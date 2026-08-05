@@ -583,6 +583,52 @@ def api_company(symbol: str):
     return {"symbol": c.symbol, "name": c.name, "market": c.market.value}
 
 
+@app.get("/api/company/{symbol}/reports")
+def api_company_reports(symbol: str, back_days: int = 900):
+    """이 회사에 **실제로 올라와 있는** 정기보고서.
+
+    기한으로 계산한 목록은 추측이다 — 결산월이 다르고, 일찍 낼 수도 늦을 수도
+    있고, 아예 없을 수도 있다. DART에 물어보면 목록이 사실이 되고 접수일·
+    접수번호가 함께 온다.
+
+    **잠정실적도 함께 준다.** 우리는 아직 그걸 읽지 못하지만, 더 최신 실적이
+    이미 나와 있다는 사실은 알려줘야 한다 — 모르고 옛 보고서로 쓰는 것과
+    알고도 그걸 쓰는 것은 다르다 (corpus/FINDINGS.md).
+    """
+    from arc.data.kr.filings import periodic_filings, preliminary_filings
+
+    end = dt.datetime.now(dt.UTC).date()
+    start = end - dt.timedelta(days=max(90, min(back_days, 1800)))
+    try:
+        ds = _shared_provider().get_disclosures(symbol.strip(), start, end)
+    except Exception as exc:  # noqa: BLE001 — 화면에 원인을 보여주는 게 목적이다
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=502)
+
+    return {
+        "periodic": [
+            {
+                "year": f.year,
+                "period": f.period.value,
+                "label": f.label,
+                "title": f.title,
+                "filed_at": f.filed_at.isoformat(),
+                "rcept_no": f.rcept_no,
+                "url": f.url,
+            }
+            for f in periodic_filings(ds)
+        ],
+        # 우리가 아직 못 읽는 것. 최신 하나면 충분하다.
+        "preliminary": [
+            {
+                "title": d.title,
+                "filed_at": d.filed_at.isoformat(),
+                "url": d.provenance.verify_url or "",
+            }
+            for d in preliminary_filings(ds)[:1]
+        ],
+    }
+
+
 @app.get("/api/health")
 def api_health():
     """플랫폼 헬스체크용. **인증 없이 열려 있다** (auth.PUBLIC_PATHS)."""

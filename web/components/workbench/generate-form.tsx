@@ -9,13 +9,8 @@ import { Hint, SectionLabel } from "@/components/workbench/section-label";
 import { StageRail } from "@/components/workbench/stage-rail";
 import type { ViewModel } from "@/lib/api";
 import type { Step } from "@/lib/use-generation";
-import {
-  hasPeriodicInfo,
-  isFiled,
-  periodKey,
-  reportPeriods,
-  type PeriodCode,
-} from "@/lib/periods";
+import { hasPeriodicInfo, periodKey, type PeriodCode } from "@/lib/periods";
+import type { Filing, Preliminary } from "@/lib/api";
 
 export interface FormState {
   symbol: string;
@@ -41,6 +36,8 @@ export function GenerateForm({
   steps,
   elapsed,
   vm,
+  filings,
+  preliminary,
   collapsed = false,
   onExpand,
 }: {
@@ -51,6 +48,9 @@ export function GenerateForm({
   steps: Step[];
   elapsed: number;
   vm: ViewModel | null;
+  /** DART가 준 실제 정기보고서 목록. 회사를 고르기 전에는 비어 있다. */
+  filings: Filing[];
+  preliminary: Preliminary | null;
   /** 카드를 보는 중에는 접는다 — 생성 폼은 보드에서만 필요하다. */
   collapsed?: boolean;
   onExpand?: () => void;
@@ -93,25 +93,41 @@ export function GenerateForm({
         <Label htmlFor="report" className="text-xs text-muted-foreground mt-5 block">
           정기보고서
         </Label>
-        {/* **연도가 아니라 보고서를 고른다.** RA는 연도를 정하지 않고 방금 올라온
-            보고서에 반응한다. 기한이 안 지난 것은 아직 안 나왔을 수 있어 표시한다. */}
+        {/* **계산이 아니라 DART가 준 목록이다.** 기한으로 추측하면 결산월이
+            다른 회사·정정신고·미제출을 전부 틀린다. */}
         <select
           id="report"
           value={periodKey(state)}
-          disabled={busy}
+          disabled={busy || filings.length === 0}
           onChange={(e) => {
             const [y, p] = e.target.value.split(":");
             onChange({ ...state, year: Number(y), period: p as PeriodCode });
           }}
-          className="mt-1 h-9 w-full rounded-md border bg-transparent px-2.5 text-[13px]"
+          className="mt-1 h-9 w-full rounded-md border bg-transparent px-2.5 text-[13px] disabled:opacity-50"
         >
-          {reportPeriods().map((p) => (
-            <option key={periodKey(p)} value={periodKey(p)}>
-              {p.label}
-              {!isFiled(p) ? " · 미제출 가능" : ""}
-            </option>
-          ))}
+          {filings.length === 0 ? (
+            <option>회사를 먼저 고르십시오</option>
+          ) : (
+            filings.map((f) => (
+              <option key={f.rcept_no} value={`${f.year}:${f.period}`}>
+                {f.label} · {f.filed_at} 제출
+              </option>
+            ))
+          )}
         </select>
+
+        {/* 더 최신 실적이 이미 나와 있으면 말해준다. 모르고 옛 보고서로 쓰는
+            것과, 알고도 그걸 쓰는 것은 다르다. */}
+        {preliminary && (
+          <div className="mt-1.5 rounded-md border border-warn/50 bg-warn/10 px-2.5 py-1.5 text-[11.5px]">
+            <b className="text-warn">{preliminary.filed_at} 잠정실적</b>이 이미
+            나왔습니다. ARC는 아직 정기보고서만 읽습니다 —{" "}
+            <a href={preliminary.url} target="_blank" rel="noopener" className="text-num hover:underline">
+              공시 원문
+            </a>
+          </div>
+        )}
+
         {!hasPeriodicInfo(state) && (
           <Hint>
             분기보고서에는 <b>주식수·배당·감사의견·인력·지분·출자</b>가 없습니다(연간
