@@ -3,12 +3,9 @@ import { cn } from "@/lib/utils";
 /**
  * 워드마크.
  *
- * `ARC`는 그대로 두고, **확장형의 A·R·C에만** 색을 준다 — 약어가 어디서
- * 왔는지가 색으로 보인다. 새 색을 들이지 않고 이미 뜻을 가진 것을 쓴다:
- * 수치(파랑) · 추정(보라) · 통과(초록).
- *
- * 굵기와 크기는 건드리지 않는다. 장식이 아니라 표식이라 그 이상은 이 바닥에서
- * 가볍게 읽힌다.
+ * 확장형의 **A·R·C만 밝게** 둔다 — 약어가 어디서 왔는지가 명도 차이로 보인다.
+ * **색상은 쓰지 않는다.** 세 글자에 서로 다른 색을 얹으면 금융 도구가 아니라
+ * 소비자 앱처럼 읽힌다. 대비만으로 충분하다.
  */
 export function Brand({
   className,
@@ -23,9 +20,9 @@ export function Brand({
       ARC
       {expansion && (
         <span className="ml-1.5 font-normal text-muted-foreground">
-          <span className="text-num">A</span>I{" "}
-          <span className="text-est">R</span>esearch{" "}
-          <span className="text-ok">C</span>enter
+          - <span className="text-foreground">A</span>I{" "}
+          <span className="text-foreground">R</span>esearch{" "}
+          <span className="text-foreground">C</span>enter
         </span>
       )}
     </span>
