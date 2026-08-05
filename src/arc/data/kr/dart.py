@@ -299,13 +299,14 @@ class DartProvider(DataProvider):
             if key in seen:
                 continue
             seen.add(key)
+            cur, prior, prior2 = _flow_amounts(row)
             items.append(
                 FinancialLineItem(
                     account_id=None,  # 주요계정에는 표준계정 코드가 없다
                     account_name=name,
-                    amount=_parse_amount(row.get("thstrm_amount")),
-                    prior_amount=_parse_amount(row.get("frmtrm_amount")),
-                    prior2_amount=_parse_amount(row.get("bfefrmtrm_amount")),
+                    amount=cur,
+                    prior_amount=prior,
+                    prior2_amount=prior2,
                     currency=row.get("currency") or "KRW",
                     statement_type=row.get("sj_div"),
                 )
@@ -340,18 +341,20 @@ class DartProvider(DataProvider):
     ) -> FinancialStatement:
         """fnlttSinglAcntAll.json 응답 → FinancialStatement (순수 파싱, 테스트 대상)."""
         rows = payload.get("list", [])
-        items = [
-            FinancialLineItem(
-                account_id=row.get("account_id") or None,
-                account_name=row.get("account_nm", ""),
-                amount=_parse_amount(row.get("thstrm_amount")),
-                prior_amount=_parse_amount(row.get("frmtrm_amount")),
-                prior2_amount=_parse_amount(row.get("bfefrmtrm_amount")),
-                currency=row.get("currency") or "KRW",
-                statement_type=row.get("sj_div"),
+        items = []
+        for row in rows:
+            cur, prior, prior2 = _flow_amounts(row)
+            items.append(
+                FinancialLineItem(
+                    account_id=row.get("account_id") or None,
+                    account_name=row.get("account_nm", ""),
+                    amount=cur,
+                    prior_amount=prior,
+                    prior2_amount=prior2,
+                    currency=row.get("currency") or "KRW",
+                    statement_type=row.get("sj_div"),
+                )
             )
-            for row in rows
-        ]
         rcept_no = rows[0].get("rcept_no") if rows else None
         return FinancialStatement(
             symbol=symbol,
@@ -491,6 +494,36 @@ def search_corp_index(
 
     scored.sort(key=lambda x: (x[0], x[1], x[2]["name"]))
     return [item for _, _, item in scored[:limit]]
+
+
+def _flow_amounts(row: dict) -> tuple[int | None, int | None, int | None]:
+    """행 하나 → (당기, 전기, 전전기). **정기보고서 종류마다 컬럼 이름이 다르다.**
+
+    실측(삼성물산 028260):
+
+    | 보고서 | 당기 | 전기 | 전전기 |
+    |---|---|---|---|
+    | 사업 | `thstrm_amount` | `frmtrm_amount` | `bfefrmtrm_amount` |
+    | 분기·반기 손익 | `thstrm_add_amount`(누적) | `frmtrm_add_amount`(전년 누적) | **없음** |
+    | 분기·반기 재무상태 | `thstrm_amount` | `frmtrm_amount` | 없음 |
+
+    한때 `frmtrm_amount`·`bfefrmtrm_amount`만 읽었다. 분기 손익에는 그 두 칸이
+    아예 없어서 **전기가 통째로 비었다** — 전년 대비 증감이 안 나오고, 3개년
+    추이 차트에 막대가 한 해만 섰다. 어닝 리뷰에서 전년 동기 비교가 없으면
+    남는 게 없다.
+
+    **누적을 쓴다.** 분기 손익에는 단독 분기(`thstrm_amount`)와 누적
+    (`thstrm_add_amount`)이 함께 오는데, 반기보고서의 `thstrm_amount`는
+    2분기 단독이라 「반기」라는 이름과 어긋난다. 고른 기간과 숫자의 기간이
+    같아야 한다. 전기도 같은 기준(`frmtrm_add_amount`)이라 비교가 성립한다.
+
+    재무상태표에는 `_add_` 칸이 없어 자동으로 기존 경로를 탄다.
+    """
+    return (
+        _parse_amount(row.get("thstrm_add_amount") or row.get("thstrm_amount")),
+        _parse_amount(row.get("frmtrm_add_amount") or row.get("frmtrm_amount")),
+        _parse_amount(row.get("bfefrmtrm_amount")),
+    )
 
 
 def _parse_amount(raw: str | None) -> int | None:

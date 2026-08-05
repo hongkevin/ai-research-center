@@ -40,6 +40,11 @@ def _esc(s: str) -> str:
     return html.escape(str(s), quote=True)
 
 
+def palette(i: int) -> str:
+    """조각 색 — 범례를 화면에서 다시 그릴 때 같은 색을 써야 한다."""
+    return _PALETTE[i % len(_PALETTE)]
+
+
 def segment_bar(slices: list[Slice], *, width: int = 640, height: int = 46) -> str:
     """부문 구성 가로 막대. 비중이 큰 순서로 이어 그린다.
 

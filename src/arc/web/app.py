@@ -39,7 +39,7 @@ from fastapi.staticfiles import StaticFiles
 from arc.data.kr.dart import DartProvider
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
-from arc.render.charts import Slice, legend, segment_bar, trend_bars
+from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.cards import (
     PUBLISHED,
@@ -139,8 +139,12 @@ class ViewModel:
     stages: list[dict] = field(default_factory=list)
     segment_chart: str = ""  # 인라인 SVG
     segment_legend: str = ""
+    # 범례에 **숫자를 싣는다.** 막대만 있으면 "감으로만" 보인다는 지적이 나왔다.
+    # 값은 전부 레지스트리에서 꺼낸 표시 문자열이라 본문과 갈라질 수 없다.
+    segment_items: list[dict] = field(default_factory=list)
     trend_chart: str = ""
     trend_legend: str = ""
+    trend_note: str = ""  # 해가 모자랄 때 왜 그런지
     industry_context: bool = False  # 미검증 레인이 있었는가
     llm_used: bool = False
     llm_model: str = ""
@@ -177,6 +181,16 @@ def _shared_provider() -> DartProvider:
 
 def _search_provider() -> DartProvider:
     return _shared_provider()
+
+
+def _shown(registry: NumberRegistry, key: str) -> str:
+    """레지스트리에 있으면 표시 문자열, 없으면 빈 문자열.
+
+    **화면이 숫자를 직접 포맷하지 않는다.** 여기서 f-string을 쓰면 본문과 다른
+    반올림이 생기고, 그 숫자는 게이트도 감사 추적도 거치지 않는다.
+    """
+    entry = registry._entries.get(key)
+    return entry.rendered() if entry is not None else ""
 
 
 def _to_view(r: ReportResult) -> ViewModel:
@@ -257,31 +271,56 @@ def _to_view(r: ReportResult) -> ViewModel:
     ]
 
     seg = r.segments
+    y = r.metrics.fiscal_year
     if seg is not None and seg.usable and len(seg.lines) > 1:
-        ordered = sorted(seg.lines, key=lambda x: -x.amount)
-        names = [x.name for x in ordered]
+        # 정렬해도 **레지스트리 키는 원래 순번**이라 인덱스를 들고 다닌다.
+        ordered = sorted(enumerate(seg.lines), key=lambda kv: -kv[1].amount)
         shares = [
             Slice(
                 label=x.name, share=x.share if x.share is not None else x.amount / seg.total * 100
             )
-            for x in ordered
+            for _, x in ordered
         ]
         v.segment_chart = segment_bar(shares)
-        v.segment_legend = legend(names)
+        v.segment_legend = legend([x.name for _, x in ordered])
+        v.segment_items = [
+            {
+                "name": x.name,
+                "color": palette(rank),
+                "amount": _shown(r.registry, f"segment{i + 1}_revenue_{y}a"),
+                "share": _shown(r.registry, f"segment{i + 1}_share_{y}a"),
+            }
+            for rank, (i, x) in enumerate(ordered)
+        ]
 
     ms = r.metrics
-    years = [str(ms.fiscal_year - 2), str(ms.fiscal_year - 1), str(ms.fiscal_year)]
-    trend = []
+    # **있는 해만 그린다.** 분기보고서에는 전전기 손익이 아예 없어서, 3칸을
+    # 고정으로 그리면 막대가 한 해에만 서 있는 빈 차트가 나온다.
+    cols = [
+        (str(ms.fiscal_year - 2), "prior2"),
+        (str(ms.fiscal_year - 1), "prior"),
+        (str(ms.fiscal_year), "current"),
+    ]
+    series: dict[str, dict[str, float]] = {}
     for key, label in (("revenue", "매출액"), ("operating_income", "영업이익")):
         mv = ms.values.get(key)
         if mv is None:
             continue
-        vals = [float(mv.prior2 or 0), float(mv.prior or 0), float(mv.current or 0)]
-        if any(vals):
-            trend.append((label, vals))
-    if trend:
+        got = {
+            name: float(getattr(mv, attr)) for name, attr in cols if getattr(mv, attr) is not None
+        }
+        if got:
+            series[label] = got
+    years = [name for name, _ in cols if any(name in g for g in series.values())]
+    if series and years:
+        trend = [(label, [g.get(name, 0.0) for name in years]) for label, g in series.items()]
         v.trend_chart = trend_bars(years, trend)
         v.trend_legend = legend([n for n, _ in trend])
+        if len(years) < 3:
+            v.trend_note = (
+                "분기·반기보고서에는 전전기 손익이 공시되지 않아 "
+                f"{len(years)}개년만 그렸습니다. 3개년은 사업보고서에서 나옵니다."
+            )
 
     n = r.narration
     if n is not None:
