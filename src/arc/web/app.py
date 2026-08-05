@@ -595,7 +595,7 @@ def api_company_reports(symbol: str, back_days: int = 900):
     이미 나와 있다는 사실은 알려줘야 한다 — 모르고 옛 보고서로 쓰는 것과
     알고도 그걸 쓰는 것은 다르다 (corpus/FINDINGS.md).
     """
-    from arc.data.kr.filings import periodic_filings, preliminary_filings
+    from arc.data.kr.filings import periodic_filings, unread_preliminary
 
     end = dt.datetime.now(dt.UTC).date()
     start = end - dt.timedelta(days=max(90, min(back_days, 1800)))
@@ -617,14 +617,15 @@ def api_company_reports(symbol: str, back_days: int = 900):
             }
             for f in periodic_filings(ds)
         ],
-        # 우리가 아직 못 읽는 것. 최신 하나면 충분하다.
+        # **정기보고서보다 나중에 나온** 잠정실적만. 그때만 RA가 우리보다
+        # 최신 숫자를 갖고 있다 — 그냥 있다고 알리면 거짓말이 된다.
         "preliminary": [
             {
                 "title": d.title,
                 "filed_at": d.filed_at.isoformat(),
                 "url": d.provenance.verify_url or "",
             }
-            for d in preliminary_filings(ds)[:1]
+            for d in ([unread_preliminary(ds)] if unread_preliminary(ds) else [])
         ],
     }
 
