@@ -129,34 +129,40 @@ export function GenerateForm({
             ))}
           </select>
         ) : (
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="min-w-0 flex-1 text-[13px]">
-              {current?.label ?? "—"}
-              <span className="text-muted-foreground">
-                {current && ` · ${current.filed_at} 제출`}
+          <div className="mt-1">
+            {/* 왼쪽 열이 320px이라 한 줄에 다 넣으면 「제출」이 쪼개진다.
+                이름과 조작을 위, 사실을 아래로 나눈다. */}
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="min-w-0 truncate text-[13px] font-medium">
+                {current?.label ?? "—"}
               </span>
-              {current?.url && (
-                <>
-                  {" "}
-                  <a
-                    href={current.url}
-                    target="_blank"
-                    rel="noopener"
-                    className="text-num hover:underline"
-                  >
-                    공시↗
-                  </a>
-                </>
-              )}
-            </span>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setPicking(true)}
-              className="flex-none text-[11.5px] text-muted-foreground hover:text-foreground"
-            >
-              다른 보고서
-            </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setPicking(true)}
+                className="flex-none whitespace-nowrap text-[11.5px] text-muted-foreground hover:text-foreground"
+              >
+                다른 보고서
+              </button>
+            </div>
+            {current && (
+              <div className="text-[11.5px] text-muted-foreground">
+                <span className="whitespace-nowrap">{current.filed_at} 제출</span>
+                {current.url && (
+                  <>
+                    {" · "}
+                    <a
+                      href={current.url}
+                      target="_blank"
+                      rel="noopener"
+                      className="whitespace-nowrap text-num hover:underline"
+                    >
+                      공시↗
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
 
