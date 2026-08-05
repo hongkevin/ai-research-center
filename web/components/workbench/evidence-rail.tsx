@@ -1,11 +1,11 @@
 "use client";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Heading } from "@/components/note/note-body";
+import { Assumptions } from "@/components/workbench/assumptions";
 import { RailSection } from "@/components/workbench/rail-section";
-import { Hint, KeyValue } from "@/components/workbench/section-label";
+import { Hint } from "@/components/workbench/section-label";
 import { RevisionHistory } from "@/components/workbench/revision-history";
 import type { Revision, ViewModel } from "@/lib/api";
 
@@ -20,10 +20,14 @@ export function EvidenceRail({
   vm,
   headings,
   versions,
+  cardId,
+  onRecomputed,
 }: {
   vm: ViewModel;
   headings: Heading[];
   versions?: Revision[];
+  cardId?: string;
+  onRecomputed?: () => void;
 }) {
   const blocked = !vm.gate_passed;
   return (
@@ -94,39 +98,8 @@ export function EvidenceRail({
         </Card>
       </RailSection>
 
-      {vm.assumptions.length > 0 && (
-        <RailSection title="추정 가정" count={vm.assumptions.length}>
-          <Card>
-            <CardContent className="py-3">
-              {vm.assumptions.map((a) => (
-                <div key={a.key} className="mb-1.5">
-                  <KeyValue
-                    label={
-                      <>
-                        {a.label}
-                        {a.override && (
-                          <Badge className="ml-1.5 bg-warn/15 text-warn border-transparent px-1.5 py-0 text-[10px]">
-                            입력
-                          </Badge>
-                        )}
-                      </>
-                    }
-                  >
-                    {a.value}
-                    {a.unit}
-                  </KeyValue>
-                  <Hint>{a.basis}</Hint>
-                </div>
-              ))}
-              {vm.estimate_warnings.map((w, i) => (
-                <Alert key={i} className="mt-2 bg-warn/10 border-transparent py-2">
-                  <AlertDescription className="text-[12.5px]">{w}</AlertDescription>
-                </Alert>
-              ))}
-            </CardContent>
-          </Card>
-        </RailSection>
-      )}
+      {/* 편집은 Assumptions가 맡는다 — 기준선과 근거를 보여준 다음에 고친다. */}
+      {cardId && <Assumptions cardId={cardId} assumptions={vm.assumptions} onRecomputed={onRecomputed ?? (() => {})} />}
 
       {vm.revisions.length > 0 && (
         <RailSection title="추정 변화" count={vm.revisions.length}>

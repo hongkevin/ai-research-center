@@ -442,7 +442,14 @@ def api_start_job(payload: dict):
     if cards is not None:
         card_id = cards.new_id()
         cards.save(
-            Card(id=card_id, symbol=symbol, year=year, created_at=now_iso(), column="running")
+            Card(
+                id=card_id,
+                symbol=symbol,
+                year=year,
+                period=period,
+                created_at=now_iso(),
+                column="running",
+            )
         )
 
     def work(job):
@@ -846,6 +853,59 @@ def api_accept_revision(card_id: str, payload: dict):
     card.version = next_version(card.version)
     cards.save(card)
     return {"version": card.version, "revision_count": len(card.versions)}
+
+
+@app.post("/api/cards/{card_id}/recompute")
+def api_recompute(card_id: str, payload: dict):
+    """가정을 바꿔 **다시 계산**한다 → 버전이 오른다.
+
+    가정은 초안을 보기 전에 정할 수 없다 — 「최근 2개년 평균이 12.3%였다」를
+    모르는 상태에서 15를 넣으라는 것이 이전 폼이었다. 그래서 이 조작은
+    카드에 있다 ([D24](../../docs/decisions.md#d24)의 계산/판단 경계).
+
+    문장 수정과 달리 **숫자가 바뀐다.** 그래서 LLM 서술은 버리고 결정론
+    문장으로 다시 만든다 — 옛 문장이 새 숫자를 설명한다고 우길 수 없다.
+    """
+    cards, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+
+    raw = payload.get("assumptions") or {}
+    try:
+        overrides = {str(k): float(v) for k, v in raw.items()}
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "가정 값은 숫자여야 합니다."}, status_code=400)
+
+    try:
+        vm, doc = _generate(
+            card.symbol,
+            card.year,
+            period=card.period,
+            use_llm=False,
+            overrides=overrides,
+        )
+    except Exception as exc:  # noqa: BLE001 — 화면에 원인을 보여주는 게 목적이다
+        return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)
+
+    changed = [f"{a['label']} {a['value']}{a['unit']}" for a in vm.assumptions if a.get("override")]
+    card.vm = vm.__dict__
+    card.assembled = doc.get("assembled", "")
+    card.registry = doc.get("registry", [])
+    card.attention = attention_reasons(card.vm)
+    card.column = column_for(card.vm, confirmed=card.confirmed, published=False)
+    card.versions.append(
+        {
+            "version": next_version(card.version),
+            "created_at": now_iso(),
+            "section": "추정 가정",
+            "comment": "가정 변경 — " + (", ".join(changed) or "기준선으로 되돌림"),
+            "before": "",
+            "after": "",
+        }
+    )
+    card.version = next_version(card.version)
+    cards.save(card)
+    return {"version": card.version, "assumptions": vm.assumptions}
 
 
 @app.delete("/api/cards/{card_id}")
