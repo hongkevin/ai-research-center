@@ -40,6 +40,7 @@ from arc.data.kr.dart import DartProvider
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import Slice, legend, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
+from arc.store.cards import Card, CardStore, attention_reasons, column_for, now_iso
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
 from arc.web.jobs import JobStore
@@ -334,6 +335,19 @@ def _open_store() -> SnapshotStore | None:
         return None
 
 
+def _open_cards() -> CardStore | None:
+    """카드 저장소. 볼륨이 없으면 None — 생성은 계속되고 이력만 안 남는다.
+
+    `_open_store()`와 같은 판단이다. 저장이 실패했다고 리포트 생성을 막으면
+    안 된다.
+    """
+    try:
+        return CardStore(STORE_DIR)
+    except OSError as exc:
+        log.warning("카드 저장소를 열지 못했습니다 (%s): %s", STORE_DIR, exc)
+        return None
+
+
 def _store_status() -> dict[str, object]:
     """볼륨이 제대로 붙었는지 — 배포 직후 확인용."""
     store = _open_store()
@@ -402,17 +416,52 @@ def api_start_job(payload: dict):
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    def work(job):
-        return _generate(
-            symbol,
-            year,
-            use_llm=use_llm,
-            overrides=overrides,
-            publish=publish,
-            on_progress=job.emit,
+    # 카드를 **먼저** 만든다. 생성이 30초 걸려도 보드에는 바로 나타나야
+    # "입력 → 대기 → 툭"을 벗어난다 — 사람은 기다리지 않고 다른 일을 한다.
+    cards = _open_cards()
+    card_id = ""
+    if cards is not None:
+        card_id = cards.new_id()
+        cards.save(
+            Card(id=card_id, symbol=symbol, year=year, created_at=now_iso(), column="running")
         )
 
-    return {"job_id": JOBS.start(work).id}
+    def work(job):
+        try:
+            vm = _generate(
+                symbol,
+                year,
+                use_llm=use_llm,
+                overrides=overrides,
+                publish=publish,
+                on_progress=job.emit,
+            )
+        except Exception as exc:
+            # 실패한 카드가 `running`에 영영 남으면 보드가 거짓말을 한다.
+            # 확인 필요로 내려놓고 예외는 그대로 올려 작업 기록에 남긴다.
+            failed = ViewModel(symbol=symbol, year=year, error=f"{type(exc).__name__}: {exc}")
+            _land_card(cards, card_id, failed, published=False)
+            raise
+        _land_card(cards, card_id, vm, published=publish)
+        return vm
+
+    return {"job_id": JOBS.start(work).id, "card_id": card_id}
+
+
+def _land_card(cards: CardStore | None, card_id: str, vm: ViewModel, *, published: bool) -> None:
+    """생성이 끝난 카드를 칸에 놓는다. **자동 판정한다** (store/cards.py 참조)."""
+    if cards is None or not card_id:
+        return
+    card = cards.get(card_id)
+    if card is None:
+        return
+    data = vm.__dict__
+    card.vm = data
+    card.company = vm.company
+    card.error = vm.error
+    card.attention = attention_reasons(data)
+    card.column = column_for(data, confirmed=card.confirmed, published=bool(vm.published_path))
+    cards.save(card)
 
 
 @app.get("/api/jobs/{job_id}/events")
@@ -507,6 +556,67 @@ def api_health():
         # 볼륨이 붙었는지. false면 생성은 되지만 revision 추적이 죽는다.
         "store": _store_status(),
     }
+
+
+# ── 보드 (작업 중인 리포트 = 카드) ───────────────────────────────────
+@app.get("/api/cards")
+def api_cards():
+    """보드 목록. **본문은 빼고 준다** — 카드 하나에 60KB가 붙어 있다."""
+    cards = _open_cards()
+    if cards is None:
+        return {"cards": [], "note": "저장소를 열 수 없어 이력이 남지 않습니다."}
+    return {"cards": [c.summary() for c in cards.list()]}
+
+
+@app.get("/api/cards/{card_id}")
+def api_card(card_id: str):
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+    try:
+        card = cards.get(card_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if card is None:
+        return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    return card.__dict__
+
+
+@app.post("/api/cards/{card_id}/confirm")
+def api_confirm_card(card_id: str):
+    """「확인함」 — 확인 필요를 벗어난다.
+
+    **옮기는 노동을 만들지 않는다.** 칸 배정은 자동이고, 사람은 "봤다"만
+    남긴다. 수동으로 임의의 칸에 옮기는 것은 열어뒀지만 아직 만들지 않았다
+    (D40) — 자동 판정이 얼마나 틀리는지 보고 붙이는 편이 낫다.
+    """
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+    try:
+        card = cards.get(card_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if card is None:
+        return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    card.confirmed = True
+    card.column = column_for(card.vm, confirmed=True, published=bool(card.vm.get("published_path")))
+    cards.save(card)
+    return card.summary()
+
+
+@app.delete("/api/cards/{card_id}")
+def api_delete_card(card_id: str):
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+    try:
+        ok = cards.delete(card_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if not ok:
+        return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    return {"deleted": card_id}
 
 
 # ── 화면 (Next.js 정적 익스포트) ─────────────────────────────────────
