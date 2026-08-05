@@ -274,6 +274,32 @@ export interface CompanyInfo {
   market: string;
 }
 
+/** 실제로 제출된 정기보고서 1건. **계산이 아니라 DART가 준 사실이다.** */
+export interface Filing {
+  year: number;
+  period: string;
+  label: string;
+  title: string;
+  filed_at: string;
+  rcept_no: string;
+  url: string;
+}
+
+/** 우리가 아직 못 읽는 것 — 하지만 있다는 사실은 알려야 한다. */
+export interface Preliminary {
+  title: string;
+  filed_at: string;
+  url: string;
+}
+
+export async function getFilings(
+  symbol: string,
+): Promise<{ periodic: Filing[]; preliminary: Preliminary[] }> {
+  const r = await api(`/api/company/${encodeURIComponent(symbol)}/reports`);
+  if (!r.ok) return { periodic: [], preliminary: [] };
+  return r.json();
+}
+
 export async function getCompany(symbol: string): Promise<CompanyInfo | null> {
   const r = await api(`/api/company/${encodeURIComponent(symbol)}`);
   return r.ok ? r.json() : null;

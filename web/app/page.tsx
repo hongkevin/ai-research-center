@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { symbolOf } from "@/components/workbench/company-search";
-import { defaultPeriod } from "@/lib/periods";
+
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
 import { Brand, BRAND_LINE } from "@/components/workbench/brand";
@@ -25,8 +25,11 @@ import {
   deleteCard,
   getCard,
   listCards,
+  getFilings,
   listSections,
   type DocSection,
+  type Filing,
+  type Preliminary,
   type CardDetail,
   type CardSummary,
   type ViewModel,
@@ -43,14 +46,15 @@ import {
  * 화면을 붙들지 않고 카드를 만들고, 사람은 기다리는 대신 다른 카드를 본다.
  */
 export default function Workbench() {
-  const DEFAULT = defaultPeriod();
   const [form, setForm] = useState<FormState>({
     symbol: "",
-    year: DEFAULT.year,
-    period: DEFAULT.period,
+    year: 0,
+    period: "ANNUAL",
     llm: false,
     assume: "",
   });
+  const [filings, setFilings] = useState<Filing[]>([]);
+  const [preliminary, setPreliminary] = useState<Preliminary | null>(null);
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [open, setOpen] = useState<CardDetail | null>(null);
@@ -92,6 +96,30 @@ export default function Workbench() {
       clearInterval(t);
     };
   }, []);
+
+  // 회사가 확정되면 **DART에 뭐가 올라와 있는지** 물어 목록을 채우고 최신을
+  // 기본값으로 잡는다. 기한으로 계산하던 추측을 걷어낸 자리다.
+  useEffect(() => {
+    const code = symbolOf(form.symbol);
+    const valid = /^\d{6}$/.test(code);
+    let alive = true;
+    void (async () => {
+      // effect 본문에서 바로 setState하면 연쇄 렌더가 생긴다. 두 갈래 모두
+      // 마이크로태스크 뒤로 넘긴다.
+      await Promise.resolve();
+      const d = valid ? await getFilings(code) : { periodic: [], preliminary: [] };
+      if (!alive) return;
+      setFilings(d.periodic);
+      setPreliminary(d.preliminary[0] ?? null);
+      const top = d.periodic[0];
+      if (top) {
+        setForm((f) => ({ ...f, year: top.year, period: top.period as FormState["period"] }));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [form.symbol]);
 
   function submit(publish: boolean) {
     setHeadings([]);
@@ -190,6 +218,8 @@ export default function Workbench() {
             steps={steps}
             elapsed={elapsed}
             vm={shown}
+            filings={filings}
+            preliminary={preliminary}
             collapsed={open !== null}
             onExpand={() => setOpen(null)}
           />
