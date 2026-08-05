@@ -182,6 +182,25 @@ export async function confirmCard(id: string): Promise<CardSummary> {
   return r.json();
 }
 
+/**
+ * 가정을 바꿔 다시 계산한다 → 버전이 오른다.
+ *
+ * 문장 수정과 달리 **숫자가 바뀐다.** 서버가 LLM 서술을 버리고 결정론 문장으로
+ * 다시 만든다 — 옛 문장이 새 숫자를 설명한다고 우길 수 없다.
+ */
+export async function recompute(
+  id: string,
+  assumptions: Record<string, number>,
+): Promise<{ version: string } | { error: string }> {
+  const r = await api(`/api/cards/${id}/recompute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ assumptions }),
+  });
+  const body = await r.json().catch(() => ({}));
+  return r.ok ? body : { error: body.error ?? `HTTP ${r.status}` };
+}
+
 export async function deleteCard(id: string): Promise<void> {
   const r = await api(`/api/cards/${id}`, { method: "DELETE" });
   if (!r.ok) await fail(r);

@@ -5,7 +5,6 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { CompanySearch } from "@/components/workbench/company-search";
 import { Hint, SectionLabel } from "@/components/workbench/section-label";
 import { StageRail } from "@/components/workbench/stage-rail";
@@ -190,22 +189,6 @@ export function GenerateForm({
           </Hint>
         )}
 
-        <Label htmlFor="assume" className="text-xs text-muted-foreground mt-5 block">
-          추정 가정 덮어쓰기
-        </Label>
-        <Textarea
-          id="assume"
-          rows={3}
-          value={state.assume}
-          onChange={(e) => set("assume", e.target.value)}
-          disabled={busy}
-          placeholder={"revenue_growth=15\noperating_margin=38"}
-          className="mt-1 font-mono text-[12.5px]"
-        />
-        <Hint>
-          비우면 과거 실적의 기계적 연장을 기준선으로 씁니다. 지정한 가정은 노트에{" "}
-          <b>사용자 입력</b>으로 표시됩니다.
-        </Hint>
 
         <div className="flex items-center gap-2 mt-5">
           <Checkbox

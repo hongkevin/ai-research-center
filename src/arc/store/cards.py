@@ -51,7 +51,9 @@ class Card:
     id: str
     symbol: str
     year: int
-    created_at: str  # ISO8601 UTC
+    # 어느 정기보고서로 만들었나. 가정을 바꿔 **다시 계산**하려면 있어야 한다.
+    period: str = "ANNUAL"
+    created_at: str = ""  # ISO8601 UTC
     column: str = RUNNING
     confirmed: bool = False  # 사람이 「확인함」을 눌렀는가
     company: str = ""
@@ -77,6 +79,7 @@ class Card:
             "id": self.id,
             "symbol": self.symbol,
             "year": self.year,
+            "period": self.period,
             "created_at": self.created_at,
             "column": self.column,
             "confirmed": self.confirmed,
