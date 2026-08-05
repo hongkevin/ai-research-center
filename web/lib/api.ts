@@ -176,6 +176,16 @@ export interface DocSection {
   title: string;
   editable: boolean;
   chars: number;
+  /** 플레이스홀더가 살아 있는 원문. 직접 편집이 이걸 고친다. */
+  text: string;
+}
+
+export interface SaveResult {
+  ok: boolean;
+  version?: string;
+  /** G0가 막았을 때. **직접 숫자를 타이핑하면 여기 걸린다.** */
+  violations?: { rule: string; detail: string }[];
+  error?: string;
 }
 
 /** 제안된 수정 1건. **아직 채택되지 않았다.** */
@@ -214,18 +224,27 @@ export async function proposeRevision(
   return r.json();
 }
 
-/** 채택 → 버전이 오른다. 서버가 **G0를 다시 돌린 뒤에만** 받아준다. */
-export async function acceptRevision(
+/**
+ * 섹션을 저장한다 → 버전이 오른다.
+ *
+ * LLM 제안을 채택할 때도, 사람이 직접 고친 것을 저장할 때도 **같은 경로**다.
+ * 서버가 G0를 다시 돌린 뒤에만 받아주므로, 직접 편집으로 숫자를 타이핑하면
+ * 여기서 막히고 이유가 돌아온다 — 불변식이 처음으로 사람에게 보이는 자리다.
+ */
+export async function saveSection(
   id: string,
-  p: Proposal,
-): Promise<{ version: string; revision_count: number }> {
+  section: string,
+  after: string,
+  comment: string,
+): Promise<SaveResult> {
   const r = await fetch(`${BASE}/api/cards/${id}/accept`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ section: p.section, after: p.after, comment: p.comment }),
+    body: JSON.stringify({ section, after, comment }),
   });
-  if (!r.ok) await fail(r);
-  return r.json();
+  const body = await r.json().catch(() => ({}));
+  if (r.ok) return { ok: true, version: body.version };
+  return { ok: false, error: body.error, violations: body.violations };
 }
 
 export interface CompanyHit {

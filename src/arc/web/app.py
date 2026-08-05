@@ -639,7 +639,14 @@ def _load_card(card_id: str):
 
 @app.get("/api/cards/{card_id}/sections")
 def api_card_sections(card_id: str):
-    """고칠 수 있는 섹션 목록. 잠긴 것도 함께 준다 — 왜 못 고치는지 보여야 한다."""
+    """섹션 목록 + **원문**(플레이스홀더 살아 있음).
+
+    원문을 함께 주는 이유는 직접 편집 때문이다. 사람이 본문을 직접 고칠 때
+    숫자를 그냥 타이핑하면 G0가 막는데, 그 순간 불변식이 처음으로 **사람에게
+    보인다** — "이 숫자는 레지스트리에 없다".
+
+    잠긴 섹션도 함께 준다. 왜 못 고치는지도 정보다.
+    """
     from arc.llm.revise import split_sections
 
     _, card, err = _load_card(card_id)
@@ -648,7 +655,7 @@ def api_card_sections(card_id: str):
     return {
         "version": card.version,
         "sections": [
-            {"title": s.title, "editable": s.editable, "chars": len(s.text)}
+            {"title": s.title, "editable": s.editable, "chars": len(s.text), "text": s.text}
             for s in split_sections(card.assembled)
         ],
     }

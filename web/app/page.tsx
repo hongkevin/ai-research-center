@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Board, BoardHint } from "@/components/board/board";
 import { NoteBody, type Heading } from "@/components/note/note-body";
-import { RevisePanel } from "@/components/note/revise-panel";
+import { SectionEditor } from "@/components/note/section-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ import {
   deleteCard,
   getCard,
   listCards,
+  listSections,
+  type DocSection,
   type CardDetail,
   type CardSummary,
   type ViewModel,
@@ -39,6 +41,8 @@ export default function Workbench() {
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [open, setOpen] = useState<CardDetail | null>(null);
+  const [sections, setSections] = useState<DocSection[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);
   const { phase, steps, vm, error, elapsed, run } = useGeneration();
 
   const busy = phase === "running";
@@ -69,7 +73,15 @@ export default function Workbench() {
   async function openCard(id: string) {
     setHeadings([]);
     setOpen(await getCard(id));
+    try {
+      setSections((await listSections(id)).sections);
+    } catch {
+      setSections([]);
+    }
   }
+
+  const editable = sections.filter((s) => s.editable);
+  const editingSection = editable.find((s) => s.title === editing) ?? null;
 
   async function confirm(id: string) {
     await confirmCard(id);
@@ -133,16 +145,13 @@ export default function Workbench() {
               >
                 ← 보드로
               </Button>
-              {open.vm.gate_passed && (
-                <div className="mb-4">
-                  <RevisePanel
-                    cardId={open.id}
-                    version={open.version}
-                    onAccepted={() => void openCard(open.id)}
-                  />
-                </div>
-              )}
-              <CenterColumn vm={open.vm} error="" onHeadings={onHeadings} />
+              <CenterColumn
+                vm={open.vm}
+                error=""
+                onHeadings={onHeadings}
+                onEditSection={setEditing}
+                editableSections={editable.map((s) => s.title)}
+              />
             </>
           ) : error ? (
             <Alert variant="destructive" className="max-w-[860px]">
@@ -161,6 +170,17 @@ export default function Workbench() {
           {open && !open.vm.error && <EvidenceRail vm={open.vm} headings={headings} />}
         </div>
       </div>
+
+      {open && editingSection && (
+        <SectionEditor
+          key={editingSection.title}
+          cardId={open.id}
+          version={open.version}
+          section={editingSection}
+          onClose={() => setEditing(null)}
+          onSaved={() => void openCard(open.id)}
+        />
+      )}
     </>
   );
 }
@@ -169,10 +189,14 @@ function CenterColumn({
   vm,
   error,
   onHeadings,
+  onEditSection,
+  editableSections,
 }: {
   vm: ViewModel;
   error: string;
   onHeadings: (h: Heading[]) => void;
+  onEditSection?: (title: string) => void;
+  editableSections?: string[];
 }) {
   if (error) {
     return (
@@ -237,7 +261,12 @@ function CenterColumn({
               )}
             </div>
           )}
-          <NoteBody html={vm.body_html} onHeadings={onHeadings} />
+          <NoteBody
+            html={vm.body_html}
+            onHeadings={onHeadings}
+            onEditSection={onEditSection}
+            editableSections={editableSections}
+          />
         </>
       ) : (
         // 차단된 초안은 **보여주지 않는다** — 검토자가 결과로 착각한다
