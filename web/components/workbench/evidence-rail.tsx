@@ -5,7 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Heading } from "@/components/note/note-body";
 import { Hint, KeyValue, SectionLabel } from "@/components/workbench/section-label";
-import type { ViewModel } from "@/lib/api";
+import { RevisionHistory } from "@/components/workbench/revision-history";
+import type { Revision, ViewModel } from "@/lib/api";
 
 /**
  * 오른쪽 열 — 근거.
@@ -14,7 +15,15 @@ import type { ViewModel } from "@/lib/api";
  * 게이트 결과와 수치 출처가 화면에 상시로 있어야 논증이 성립한다
  * (index.html:3-4의 구성 원칙).
  */
-export function EvidenceRail({ vm, headings }: { vm: ViewModel; headings: Heading[] }) {
+export function EvidenceRail({
+  vm,
+  headings,
+  versions,
+}: {
+  vm: ViewModel;
+  headings: Heading[];
+  versions?: Revision[];
+}) {
   return (
     <div className="space-y-8">
       {vm.gate_passed && headings.length > 0 && (
@@ -45,6 +54,8 @@ export function EvidenceRail({ vm, headings }: { vm: ViewModel; headings: Headin
           </Card>
         </section>
       )}
+
+      {versions !== undefined && <RevisionHistory versions={versions} />}
 
       <section>
         <SectionLabel>발간 게이트</SectionLabel>

@@ -192,7 +192,9 @@ export default function Workbench() {
         </div>
 
         <div className="border-t px-7 py-8 xl:sticky xl:top-(--header-h) xl:max-h-[calc(100vh-var(--header-h))] xl:overflow-y-auto xl:border-t-0 xl:border-l">
-          {open && !open.vm.error && <EvidenceRail vm={open.vm} headings={headings} />}
+          {open && !open.vm.error && (
+            <EvidenceRail vm={open.vm} headings={headings} versions={open.versions} />
+          )}
         </div>
       </div>
 
