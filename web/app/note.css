@@ -35,8 +35,9 @@
   letter-spacing: -0.01em;
   font-weight: 650;
 }
-/* 제목 옆 「수정」. 평소엔 물러나 있다가 그 줄에 다가가면 드러난다 —
-   읽는 흐름을 방해하지 않으면서 손이 닿는 곳에 있어야 한다. */
+/* 제목 옆 「수정」.
+   **완전히 숨기지 않는다.** hover에만 나타나게 했더니 있는 줄도 몰랐다(실측).
+   평소엔 흐리게 두어 읽는 흐름을 방해하지 않되 존재는 보이게 한다. */
 .note-edit {
   margin-left: 8px;
   padding: 1px 7px;
@@ -46,7 +47,7 @@
   font-weight: 500;
   color: var(--muted-foreground);
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.5;
   transition: opacity 0.12s;
   vertical-align: middle;
 }
