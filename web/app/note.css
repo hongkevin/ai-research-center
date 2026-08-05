@@ -60,6 +60,14 @@
   border-color: var(--num);
 }
 
+/* 제목으로 이동할 때 sticky 헤더 밑에 숨지 않게 한다.
+   `scrollIntoView({block:"start"})`는 요소를 뷰포트 맨 위에 붙이는데, 그 위를
+   헤더가 덮는다. 목차 클릭과 편집기 열기가 **같은 이 규칙**으로 고쳐진다. */
+.note h2,
+.note h3 {
+  scroll-margin-top: calc(var(--header-h) + 16px);
+}
+
 .note h3 {
   font-size: 14.5px;
   margin: 24px 0 8px;

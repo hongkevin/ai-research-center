@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { cn } from "@/lib/utils";
+
 import { Board, BoardHint } from "@/components/board/board";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { SectionEditor } from "@/components/note/section-editor";
@@ -87,6 +89,19 @@ export default function Workbench() {
     run({ ...form, publish });
   }
 
+  // 편집기를 열면 그 섹션을 화면 위쪽으로 끌어온다. 시트가 아래 절반을
+  // 차지하므로, 가만두면 고치는 대상이 시트 뒤에 있을 수 있다.
+  function startEditing(title: string | null) {
+    setEditing(title);
+    if (!title) return;
+    requestAnimationFrame(() => {
+      const h = [...document.querySelectorAll(".note h2")].find((el) =>
+        (el.textContent ?? "").trim().startsWith(title),
+      );
+      h?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   async function openCard(id: string) {
     setHeadings([]);
     setOpen(await getCard(id));
@@ -167,7 +182,7 @@ export default function Workbench() {
           />
         </div>
 
-        <div className="px-8 py-8">
+        <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
           {open ? (
             <>
               <div className="mb-3 flex items-center gap-2">
@@ -183,7 +198,7 @@ export default function Workbench() {
                   <Button
                     size="sm"
                     variant={editing ? "secondary" : "default"}
-                    onClick={() => setEditing(editing ? null : editable[0].title)}
+                    onClick={() => startEditing(editing ? null : editable[0].title)}
                     className="h-7 text-[12px]"
                   >
                     {editing ? "편집기 닫기" : "문서 수정"}
@@ -207,7 +222,7 @@ export default function Workbench() {
                 vm={open.vm}
                 error=""
                 onHeadings={onHeadings}
-                onEditSection={setEditing}
+                onEditSection={startEditing}
                 editableSections={editable.map((s) => s.title)}
               />
             </>
@@ -238,7 +253,7 @@ export default function Workbench() {
           version={open.version}
           section={editingSection}
           sections={editable}
-          onPick={setEditing}
+          onPick={startEditing}
           onClose={() => setEditing(null)}
           onSaved={() => void openCard(open.id)}
         />
