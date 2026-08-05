@@ -13,6 +13,7 @@ import { EvidenceRail } from "@/components/workbench/evidence-rail";
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
 import { ThemeToggle } from "@/components/workbench/theme-toggle";
+import { authEnabled, signOut, supabase } from "@/lib/supabase";
 import { useGeneration } from "@/lib/use-generation";
 import {
   confirmCard,
@@ -46,6 +47,22 @@ export default function Workbench() {
   const { phase, steps, vm, error, elapsed, run } = useGeneration();
 
   const busy = phase === "running";
+  const [signedIn, setSignedIn] = useState<boolean | null>(authEnabled ? null : true);
+
+  // 로그인이 켜져 있으면 세션이 있어야 화면을 연다. 껍데기는 공개지만
+  // 데이터는 전부 `/api/*` 뒤에 있어서, 세션 없이는 빈 보드만 보인다.
+  useEffect(() => {
+    if (!authEnabled) return;
+    const client = supabase();
+    void client.auth.getSession().then(({ data }) => {
+      if (data.session) setSignedIn(true);
+      else location.replace(`/login/?next=${encodeURIComponent(location.pathname)}`);
+    });
+    const { data: sub } = client.auth.onAuthStateChange((_e, session) => {
+      setSignedIn(Boolean(session));
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
   const onHeadings = useCallback((h: Heading[]) => setHeadings(h), []);
 
   // 보드를 주기적으로 읽는다. 생성이 백그라운드에서 끝나므로 콜백을 엮는 것보다
@@ -97,6 +114,10 @@ export default function Workbench() {
   // 열린 카드가 있으면 그것을, 없으면 방금 생성한 것을 본다
   const shown: ViewModel | null = open ? open.vm : vm;
 
+  // 세션을 확인하는 동안은 아무것도 그리지 않는다 — 빈 보드가 잠깐 보이면
+  // 카드가 사라진 것처럼 읽힌다.
+  if (signedIn === null) return null;
+
   return (
     <>
       <header className="sticky top-0 z-10 flex flex-wrap items-baseline gap-3 border-b bg-card px-8 py-5">
@@ -116,8 +137,18 @@ export default function Workbench() {
             <span className="font-mono">{open.version}</span>
           </span>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-1">
           <ThemeToggle />
+          {authEnabled && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void signOut().then(() => location.replace("/login/"))}
+              className="h-7 text-[12px] text-muted-foreground"
+            >
+              로그아웃
+            </Button>
+          )}
         </div>
       </header>
 
