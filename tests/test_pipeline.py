@@ -290,3 +290,56 @@ def test_source_table_escapes_pipes_in_formulas():
         ]
     )
     assert _source_rows("{{num:x_2025a}}", reg)[0]["formula"] == r"(당기 - 전기) / \|전기\|"
+
+
+class TestStageReports:
+    """파이프라인을 여는 기록.
+
+    이 시스템은 종목코드를 넣으면 30초 뒤 완성본을 뱉는 블랙박스였다. 중간에
+    무엇을 검산했고 무엇을 **못 구했는지**가 화면에 나오지 않으면, 검토자는
+    없는 것과 실패한 것을 구분할 수 없다.
+    """
+
+    def _report(self):
+        return build_report(
+            "000000", 2025, FakeProvider(has_consolidated=True), published_at=dt.date(2026, 8, 1)
+        )
+
+    def test_stages_are_recorded_in_order(self):
+        stages = self._report().stages
+        keys = [s.key for s in stages]
+        assert keys[:3] == ["company", "statement", "metrics"]
+        # 게이트는 마지막이다 — 조립본이 있어야 검사할 수 있다
+        assert keys[-1] == "gate"
+
+    def test_every_stage_says_what_it_did(self):
+        for s in self._report().stages:
+            assert s.label, f"{s.key}에 이름이 없다"
+            assert s.summary or s.note, f"{s.key}가 아무것도 말하지 않는다"
+
+    def test_registry_contributions_are_attributed(self):
+        """어느 단계가 숫자를 만들었는지가 파이프라인을 여는 핵심 정보다."""
+        r = self._report()
+        by_key = {s.key: s for s in r.stages}
+        assert by_key["metrics"].registered > 0
+        # 합계가 레지스트리 크기를 넘을 수 없다 (같은 항목을 두 번 세면 넘는다)
+        assert sum(s.registered for s in r.stages) <= len(r.registry)
+
+    def test_absent_is_not_failed(self):
+        """**없는 것과 실패한 것은 다르다.**
+
+        단일 부문 회사에 부문 손익이 없는 건 정상이고(D33이 정확히 거부한다),
+        DART 조회 실패는 결함이다. 같은 색으로 칠하면 정상을 결함으로 읽는다.
+        """
+        stages = self._report().stages
+        assert all(s.status in {"ok", "partial", "absent", "failed"} for s in stages)
+        # 픽스처는 원문을 주지 않으므로 부문/사업 단계는 아예 열리지 않거나
+        # absent다 — 어느 쪽이든 failed면 안 된다
+        for s in stages:
+            if s.key in {"segments", "segment_profit", "business"}:
+                assert s.status != "failed", f"{s.key}가 정상 부재를 실패로 표시했다"
+
+    def test_gate_stage_carries_the_verdict(self):
+        r = self._report()
+        gate_stage = next(s for s in r.stages if s.key == "gate")
+        assert (gate_stage.status == "failed") is not r.gate.passed

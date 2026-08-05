@@ -422,11 +422,23 @@ def test_revenue_matching_but_profit_mismatching_is_rejected():
 
 
 def test_no_segment_profit_table_is_reported_as_coverage_not_failure():
-    """단일 영업부문은 공시 의무가 없다. 파싱 실패와 뭉뚱그리면 진단이 막힌다."""
+    """주석이 없는 것과 파싱이 실패한 것은 다르다. 뭉뚱그리면 진단이 막힌다."""
     ms = _metrics(2025, 27_342_589_100_000, 1_233_604_641_000)
     sp = build_segment_profit([_section(CJ_REGION)], ms)
     assert not sp.usable
     assert "공시하지 않았다" in sp.note
+
+
+def test_missing_note_does_not_claim_the_company_is_single_segment():
+    """**주석이 없다고 부문이 하나인 것은 아니다.**
+
+    파마리서치는 매출을 4개 부문(의약품·의료기기·화장품·기타)으로 공시하면서
+    영업부문 주석은 내지 않는다. "단일 영업부문"이라고 단정하면 같은 리포트의
+    「2.2 부문 구성」과 정면으로 모순된다 — 실제로 발간물에 실렸던 결함이다.
+    """
+    ms = _metrics(2025, 27_342_589_100_000, 1_233_604_641_000)
+    sp = build_segment_profit([_section(CJ_REGION)], ms)
+    assert "단일" not in sp.note
 
 
 def test_the_right_section_is_chosen_by_reconciliation_not_by_title():

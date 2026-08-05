@@ -122,6 +122,9 @@ class ViewModel:
     assumptions: list[dict] = field(default_factory=list)
     revisions: list[dict] = field(default_factory=list)
     estimate_warnings: list[str] = field(default_factory=list)
+    # 파이프라인 단계 기록 — 무엇을 검산했고 무엇을 못 구했는지.
+    # 이게 없으면 화면은 종목코드를 넣으면 완성본이 나오는 블랙박스다.
+    stages: list[dict] = field(default_factory=list)
     segment_chart: str = ""  # 인라인 SVG
     segment_legend: str = ""
     trend_chart: str = ""
@@ -177,6 +180,21 @@ def _to_view(r: ReportResult) -> ViewModel:
     v.metrics_found = len(r.metrics.values)
     v.metrics_missing = r.metrics.missing_labels
     v.registry_size = len(r.registry)
+
+    # 단계 기록은 **게이트가 막아도 낸다.** 차단됐을 때야말로 어느 단계에서
+    # 무엇이 어긋났는지 봐야 한다 — 본문만 숨기고 과정은 남긴다.
+    v.stages = [
+        {
+            "key": s.key,
+            "label": s.label,
+            "status": s.status,
+            "summary": s.summary,
+            "checks": s.checks,
+            "registered": s.registered,
+            "note": s.note,
+        }
+        for s in r.stages
+    ]
 
     # 게이트가 막으면 본문을 렌더하지 않는다 — 차단된 초안을 보여주면
     # 검토자가 그걸 결과로 착각한다.

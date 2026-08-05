@@ -48,6 +48,29 @@ export interface Revision {
   direction: string;
 }
 
+export interface StageCheck {
+  label: string;
+  value: string;
+  ok: boolean;
+}
+
+/**
+ * 파이프라인 단계 하나의 기록.
+ *
+ * `status`에서 **`absent`와 `failed`는 다릅니다.** 단일 부문 회사에 부문 손익이
+ * 없는 건 정상이고(D33이 정확히 거부합니다), DART 조회 실패는 결함입니다.
+ * 같은 색으로 칠하면 검토자가 정상을 결함으로 읽습니다.
+ */
+export interface Stage {
+  key: string;
+  label: string;
+  status: "ok" | "partial" | "absent" | "failed";
+  summary: string;
+  checks: StageCheck[];
+  registered: number;
+  note: string;
+}
+
 export interface ViewModel {
   symbol: string;
   year: number;
@@ -62,6 +85,7 @@ export interface ViewModel {
   metrics_found: number;
   metrics_missing: string[];
   registry_size: number;
+  stages: Stage[];
   assumptions: Assumption[];
   revisions: Revision[];
   estimate_warnings: string[];

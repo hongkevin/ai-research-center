@@ -182,6 +182,35 @@ class TestViewModel:
             segments = None
             business = None
             narration = None
+            # 파이프라인 단계 기록. 실제 ReportResult는 항상 채운다.
+            stages = [
+                type(
+                    "St",
+                    (),
+                    {
+                        "key": "metrics",
+                        "label": "지표 추출·계산",
+                        "status": "ok",
+                        "summary": "지표 13종",
+                        "checks": [],
+                        "registered": 3,
+                        "note": "",
+                    },
+                )(),
+                type(
+                    "St",
+                    (),
+                    {
+                        "key": "segment_profit",
+                        "label": "부문별 손익",
+                        "status": "absent",
+                        "summary": "단일 부문",
+                        "checks": [],
+                        "registered": 0,
+                        "note": "부문이 하나라 전사 손익과 같습니다.",
+                    },
+                )(),
+            ]
 
         r = _R()
         r.gate = _Gate(passed)
@@ -498,3 +527,30 @@ class TestJobResultEndpoint:
         body = json.loads(r.body)
         assert body["symbol"] == "214450"
         assert body["gate_passed"] is True
+
+
+class TestStagesReachTheScreen:
+    """파이프라인 기록이 화면까지 오는가.
+
+    엔진이 단계마다 무엇을 검산했는지 이미 알고 있어도 `_to_view`가 버리면
+    화면은 그대로 블랙박스다.
+    """
+
+    def _vm(self, passed: bool):
+        from arc.web.app import _to_view
+
+        return _to_view(TestViewModel()._result(passed))
+
+    def test_stages_are_carried(self):
+        vm = self._vm(True)
+        assert vm.stages
+        assert {"key", "label", "status", "summary", "checks", "registered", "note"} <= set(
+            vm.stages[0]
+        )
+
+    def test_stages_survive_a_blocked_gate(self):
+        """차단됐을 때야말로 어느 단계가 어긋났는지 봐야 한다."""
+        vm = self._vm(False)
+        assert not vm.gate_passed
+        assert vm.body_html == ""
+        assert vm.stages, "본문은 숨기더라도 과정은 남겨야 한다"
