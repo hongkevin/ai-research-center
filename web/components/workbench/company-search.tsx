@@ -18,6 +18,19 @@ import { cn } from "@/lib/utils";
  * 자리에서 목록이 뜨는 이 화면의 흐름이 끊긴다. Popover는 위치 계산과 충돌
  * 회피에만 쓴다.
  */
+/**
+ * 입력값에서 서버에 보낼 종목코드를 꺼낸다.
+ *
+ * 화면에는 「카카오페이 (377300)」처럼 남기고 서버에는 `377300`을 보낸다.
+ * 괄호 안 코드 → 여섯 자리만 친 경우 → 그 외에는 입력 그대로(이름 검색).
+ */
+export function symbolOf(input: string): string {
+  const paren = input.match(/\((\d{6})\)/);
+  if (paren) return paren[1];
+  const bare = input.trim().match(/^\d{6}$/);
+  return bare ? bare[0] : input.trim();
+}
+
 export function CompanySearch({
   value,
   onChange,
@@ -57,10 +70,13 @@ export function CompanySearch({
   function pick(i: number) {
     const hit = hits[i];
     if (!hit) return;
-    // **종목코드**를 넣는다 — 이름을 넣으면 동명이인 회사에서 서버가 되묻는다
-    // (`_resolve_symbol`이 여럿이면 고르지 않고 알린다).
-    onChange(hit.symbol);
-    lastQuery.current = hit.symbol;
+    // **이름과 코드를 함께 남긴다.** 코드만 넣으면 뭘 골랐는지 화면에서
+    // 사라지고, 이름만 넣으면 동명이인에서 서버가 되묻는다
+    // (`_resolve_symbol`이 여럿이면 고르지 않고 알린다). 제출할 때
+    // `symbolOf()`가 괄호 안 코드를 꺼내 쓴다.
+    const label = `${hit.name} (${hit.symbol})`;
+    onChange(label);
+    lastQuery.current = label;
     setOpen(false);
   }
 

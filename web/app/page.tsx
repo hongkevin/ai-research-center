@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EvidenceRail } from "@/components/workbench/evidence-rail";
+import { symbolOf } from "@/components/workbench/company-search";
 import { GenerateForm, type FormState } from "@/components/workbench/generate-form";
 import { Hint } from "@/components/workbench/section-label";
 import { Brand, BRAND_LINE } from "@/components/workbench/brand";
@@ -87,7 +88,7 @@ export default function Workbench() {
   function submit(publish: boolean) {
     setHeadings([]);
     setOpen(null);
-    run({ ...form, publish });
+    run({ ...form, symbol: symbolOf(form.symbol), publish });
   }
 
   // 편집기를 열면 그 섹션을 화면 위쪽으로 끌어온다. 시트가 아래 절반을

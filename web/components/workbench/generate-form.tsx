@@ -54,7 +54,7 @@ export function GenerateForm({
     return (
       <div className="space-y-6">
         <Button variant="outline" size="sm" onClick={onExpand} className="w-full">
-          + 새 노트 생성
+          + 새 초안
         </Button>
         <StageRail stages={vm?.stages ?? []} steps={steps} running={busy} elapsed={elapsed} />
       </div>
@@ -69,7 +69,7 @@ export function GenerateForm({
           onSubmit(false);
         }}
       >
-        <SectionLabel>생성</SectionLabel>
+        <SectionLabel>새 초안</SectionLabel>
 
         <Label htmlFor="symbol" className="text-xs text-muted-foreground">
           회사명 또는 종목코드
@@ -127,7 +127,7 @@ export function GenerateForm({
         <Hint>끄면 결정론 문장으로 생성합니다. 수치는 어느 쪽이든 동일합니다.</Hint>
 
         <Button type="submit" disabled={busy} className="w-full mt-6">
-          {busy ? "생성 중…" : "노트 생성"}
+          {busy ? "작성 중…" : "초안 작성"}
         </Button>
         <Button
           type="button"
@@ -139,8 +139,8 @@ export function GenerateForm({
           검토 완료 · 발간
         </Button>
         <Hint>
-          <b>생성</b>은 미리보기라 이력에 남지 않습니다. <b>발간</b>해야 추정이 저장되고 다음
-          발간의 변화 추적 기준이 됩니다.
+          <b>초안 작성</b>은 미리보기라 이력에 남지 않습니다. <b>발간</b>해야 추정이 저장되고
+          다음 발간의 변화 추적 기준이 됩니다 (D27).
         </Hint>
 
       </form>
