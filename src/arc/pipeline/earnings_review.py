@@ -1076,6 +1076,9 @@ def build_report(
     reports: DartReportProvider | None = None,
     store: object | None = None,
     assumptions: dict[str, float] | None = None,
+    # 2년차 이후의 연차별 가정. **기계가 늘리지 않는다** — 사람이 넣은 만큼만
+    # 낸다 (D34: 1년차 영업이익 오차가 이미 중앙값 55.9%다).
+    forward: list[dict[str, float]] | None = None,
     with_segments: bool = True,
     on_progress: Callable[[str, str], None] | None = None,
 ) -> ReportResult:
@@ -1283,7 +1286,7 @@ def build_report(
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
     st = step("estimates", "추정·밸류에이션 산출")
     before = len(registry)
-    estimates = build_estimates(ms, assumptions)
+    estimates = build_estimates(ms, assumptions, forward)
     previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
     revisions = compare_estimates(previous, estimates)
     if estimates.usable:

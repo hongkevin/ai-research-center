@@ -272,3 +272,50 @@ class TestObservations:
 
     def test_unusable_estimate_produces_nothing(self):
         assert build_estimate_observations(apply_assumptions(_ms(), []), []) == []
+
+
+class TestMultiYear:
+    """연차 확장 — **기계는 한 해만 세우고, 그 뒤는 사람이 넣는다.**
+
+    D34 실측에서 1년차 영업이익 오차가 이미 중앙값 55.9%였다. 기계가 2년차를
+    얹으면 그럴듯해 보이는 노이즈가 는다. 반면 사람이 연차별 가정을 넣으면
+    기계는 예측하지 않고 산술만 한다 — D24의 계산/판단 경계다.
+    """
+
+    def test_default_is_still_one_year(self):
+        est = build_estimates(_ms())
+        assert len(est.years) == 1
+        assert est.years[0].fiscal_year == est.fiscal_year
+
+    def test_person_can_extend_and_the_chain_compounds(self):
+        """2년차는 1년차 매출 위에 쌓인다 — 기준 실적이 아니라."""
+        est = build_estimates(
+            _ms(),
+            overrides={"revenue_growth": 10},
+            forward=[{"revenue_growth": 20}],
+        )
+        assert len(est.years) == 2
+        assert est.years[0].values["revenue"] == 1100  # 1000 × 1.10
+        assert est.years[1].values["revenue"] == 1320  # 1100 × 1.20
+        assert est.years[1].fiscal_year == est.fiscal_year + 1
+
+    def test_unspecified_assumptions_carry_forward(self):
+        """마진을 안 바꾸겠다는 것도 판단이다 — 직전 해를 그대로 이어받는다."""
+        est = build_estimates(
+            _ms(),
+            overrides={"revenue_growth": 10, "operating_margin": 12},
+            forward=[{"revenue_growth": 5}],
+        )
+        y2 = {a.key: a.value for a in est.years[1].assumptions}
+        assert y2["operating_margin"] == 12
+        assert y2["revenue_growth"] == 5
+
+    def test_extending_marks_it_as_a_human_assumption(self):
+        est = build_estimates(_ms(), forward=[{"revenue_growth": 5}])
+        assert est.method == "사용자 지정 가정"
+
+    def test_first_year_aliases_stay_intact(self):
+        """기존 호출부가 그대로 동작해야 한다 — 별칭을 깨면 파이프라인이 죽는다."""
+        est = build_estimates(_ms(), forward=[{"revenue_growth": 5}])
+        assert est.values is est.years[0].values
+        assert est.fiscal_year == est.years[0].fiscal_year
