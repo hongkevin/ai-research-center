@@ -137,14 +137,29 @@ export default function Workbench() {
         <div className="px-8 py-8">
           {open ? (
             <>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setOpen(null)}
-                className="mb-3 -ml-2 h-7 text-[12px] text-muted-foreground"
-              >
-                ← 보드로
-              </Button>
+              <div className="mb-3 flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setOpen(null)}
+                  className="-ml-2 h-7 text-[12px] text-muted-foreground"
+                >
+                  ← 보드로
+                </Button>
+                {editable.length > 0 && (
+                  <Button
+                    size="sm"
+                    variant={editing ? "secondary" : "default"}
+                    onClick={() => setEditing(editing ? null : editable[0].title)}
+                    className="h-7 text-[12px]"
+                  >
+                    {editing ? "편집기 닫기" : "문서 수정"}
+                  </Button>
+                )}
+                <span className="text-[11.5px] text-muted-foreground">
+                  제목 옆 「수정」으로도 열 수 있습니다
+                </span>
+              </div>
               {open.vm.gate_passed && editable.length === 0 && (
                 <Alert className="mb-4 max-w-[860px] border-warn">
                   <AlertTitle>이 카드는 편집할 수 없습니다</AlertTitle>
@@ -187,6 +202,8 @@ export default function Workbench() {
           cardId={open.id}
           version={open.version}
           section={editingSection}
+          sections={editable}
+          onPick={setEditing}
           onClose={() => setEditing(null)}
           onSaved={() => void openCard(open.id)}
         />

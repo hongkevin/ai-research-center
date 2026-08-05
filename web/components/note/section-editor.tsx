@@ -82,12 +82,18 @@ export function SectionEditor({
   cardId,
   version,
   section,
+  sections,
+  onPick,
   onClose,
   onSaved,
 }: {
   cardId: string;
   version: string;
   section: DocSection;
+  /** 고칠 수 있는 섹션 전부. 편집기 안에서 갈아탈 수 있어야 한다 —
+   *  제목 위 「수정」에만 의존하면 있는 줄도 모른다(실측). */
+  sections: DocSection[];
+  onPick: (title: string) => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -132,6 +138,23 @@ export function SectionEditor({
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-card shadow-[0_-8px_24px_rgba(0,0,0,.12)]">
       <div className="mx-auto max-w-[900px] px-5 py-3">
+        {/* 섹션 갈아타기. 편집기를 닫고 다른 제목을 찾아 올라가는 왕복을 없앤다. */}
+        <div className="mb-2 flex flex-wrap gap-1">
+          {sections.map((s) => (
+            <button
+              key={s.title}
+              type="button"
+              onClick={() => onPick(s.title)}
+              className={cn(
+                "rounded-md border px-2 py-0.5 text-[11.5px]",
+                s.title === section.title ? "border-num text-num" : "text-muted-foreground",
+              )}
+            >
+              {s.title}
+            </button>
+          ))}
+        </div>
+
         <div className="flex items-center gap-2">
           <span className="truncate text-[13px] font-medium">{section.title}</span>
           <span className="font-mono text-[11px] text-muted-foreground">{version}</span>
