@@ -34,7 +34,9 @@ export function Assumptions({
   onRecomputed: () => void;
 }) {
   // 화면에서 편집 중인 값. 연차 인덱스 → 키 → 문자열.
-  const [draft, setDraft] = useState<Record<number, Record<string, string>>>({});
+  const [draft, setDraft] = useState<Record<number, Record<string, string>>>(
+    {},
+  );
   const [extra, setExtra] = useState(0); // 사람이 추가한 연차 수
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -64,7 +66,10 @@ export function Assumptions({
     setError("");
     const pack = (i: number) =>
       Object.fromEntries(
-        KEYS.filter((k) => valueOf(i, k) !== "").map((k) => [k, Number(valueOf(i, k))]),
+        KEYS.filter((k) => valueOf(i, k) !== "").map((k) => [
+          k,
+          Number(valueOf(i, k)),
+        ]),
       );
     const r = await recompute(
       cardId,
@@ -88,9 +93,13 @@ export function Assumptions({
           {Array.from({ length: shown }, (_, i) => (
             <div key={i} className="mb-3 border-b pb-2.5 last:border-b-0">
               <div className="mb-1 flex items-baseline justify-between">
-                <span className="font-mono text-[11.5px] text-num">{yearOf(i)}E</span>
+                <span className="font-mono text-[11.5px] text-num">
+                  {yearOf(i)}E
+                </span>
                 {i === 0 && (
-                  <span className="text-[11px] text-muted-foreground">기준선</span>
+                  <span className="text-[11px] text-muted-foreground">
+                    기준선
+                  </span>
                 )}
                 {i > 0 && (
                   <span className="text-[11px] text-muted-foreground">
@@ -99,8 +108,13 @@ export function Assumptions({
                 )}
               </div>
               {KEYS.map((key) => (
-                <div key={key} className="flex items-center justify-between gap-2 py-0.5">
-                  <span className="min-w-0 truncate text-[12px]">{labelOf(key)}</span>
+                <div
+                  key={key}
+                  className="flex items-center justify-between gap-2 py-0.5"
+                >
+                  <span className="min-w-0 truncate text-[12px]">
+                    {labelOf(key)}
+                  </span>
                   <span className="flex flex-none items-center gap-1">
                     <Input
                       type="number"
@@ -108,17 +122,25 @@ export function Assumptions({
                       value={valueOf(i, key)}
                       disabled={busy}
                       onChange={(e) =>
-                        setDraft((d) => ({ ...d, [i]: { ...d[i], [key]: e.target.value } }))
+                        setDraft((d) => ({
+                          ...d,
+                          [i]: { ...d[i], [key]: e.target.value },
+                        }))
                       }
                       className="h-7 w-20 px-1.5 text-right text-[12.5px]"
                     />
-                    <span className="w-3 text-[11px] text-muted-foreground">%</span>
+                    <span className="w-3 text-[11px] text-muted-foreground">
+                      %
+                    </span>
                   </span>
                 </div>
               ))}
               {i === 0 && (
                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  {years[0].assumptions.find((a) => a.key === "revenue_growth")?.basis}
+                  {
+                    years[0].assumptions.find((a) => a.key === "revenue_growth")
+                      ?.basis
+                  }
                 </div>
               )}
             </div>
@@ -147,13 +169,18 @@ export function Assumptions({
             )}
           </div>
 
-          <Button size="sm" disabled={busy} onClick={apply} className="mt-2 w-full">
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={apply}
+            className="mt-2 w-full"
+          >
             {busy ? "다시 계산 중…" : "가정 적용해 다시 계산"}
           </Button>
           <Hint>
-            <b>기계는 첫 해만 세웁니다.</b> 2년차부터는 여기 넣은 가정으로만 갑니다 —
-            직전 해 추정 위에 쌓입니다. 숫자가 바뀌므로 문장은 결정론으로 다시
-            만들어지고 버전이 오릅니다.
+            <b>기계는 첫 해만 세웁니다.</b> 2년차부터는 여기 넣은 가정으로만
+            갑니다 — 직전 해 추정 위에 쌓입니다. 숫자가 바뀌면 본문도 다시
+            쓰이고 버전이 하나 오릅니다.
           </Hint>
           {error && <Hint>{error}</Hint>}
         </CardContent>

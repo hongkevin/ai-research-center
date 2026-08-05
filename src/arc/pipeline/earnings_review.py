@@ -144,6 +144,17 @@ class StageReport:
     note: str = ""  # 비었다면 왜
 
 
+# 정기보고서 주요정보 6종 — 화면에는 한국어로 낸다
+_INFO_LABEL = {
+    "shares": "주식수",
+    "dividend": "배당",
+    "audit": "감사의견",
+    "workforce": "인력",
+    "ownership": "최대주주 지분",
+    "affiliates": "타법인 출자",
+}
+
+
 def _pct(v: float | None) -> str:
     return "—" if v is None else f"{v:+.4f}%"
 
@@ -1109,11 +1120,11 @@ def build_report(
         stages.append(s)
         return s
 
-    st = step("company", "회사 정보 조회")
+    st = step("company", "회사 확인")
     company = provider.get_company(symbol)
     st.summary = f"{company.name} · {company.market.value}"
 
-    st = step("statement", "재무제표 수집")
+    st = step("statement", "재무제표")
     stmt = fetch_statement(
         symbol, fiscal_year, provider, period=period, consolidation=consolidation
     )
@@ -1129,7 +1140,7 @@ def build_report(
         st.status = "partial"
         st.note = "접수번호가 없어 사업보고서 원문을 열 수 없습니다."
 
-    st = step("metrics", "지표 추출·계산")
+    st = step("metrics", "지표 계산")
     ms = extract_metrics(stmt)
     registry = NumberRegistry()
     registry.register_all(build_entries(ms, stmt.provenance))
@@ -1147,7 +1158,7 @@ def build_report(
     info_error: str | None = None
     valuation: ValuationSet | None = None
     if reports is not None:
-        st = step("reports", "정기보고서 주요정보 (주식수·배당·감사의견)")
+        st = step("reports", "주식수·배당·지분 등")
         before = len(registry)
         try:
             info = reports.fetch(symbol, fiscal_year)
@@ -1171,15 +1182,19 @@ def build_report(
                 )
                 if val is not None
             ]
-            st.summary = f"{len(got)}/6종 · {', '.join(got)}"
+            st.summary = f"{len(got)}/6종" + (f" · {', '.join(got)}" if got else "")
             # **무엇을 못 받았는지는 이미 알고 있다.** 조용히 넘기면 커버리지
             # 문제가 숨는다 — 어댑터가 `unavailable`에 남긴 것을 그대로 낸다.
             if info.unavailable:
                 st.status = "partial"
-                st.note = f"받지 못한 것: {', '.join(info.unavailable)}"
+                # **영어 필드명을 그대로 내보내면 안 된다.** 화면에 `shares,
+                # dividend, workforce`가 그대로 찍히고 있었다.
+                st.note = "받지 못한 것: " + ", ".join(
+                    _INFO_LABEL.get(k, k) for k in info.unavailable
+                )
             st.checks = [
                 {
-                    "label": "발행 − 자기주식 = 유통",
+                    "label": "발행주식 − 자기주식 = 유통주식",
                     "value": "일치" if valuation.shares_reconciled else "불일치",
                     "ok": valuation.shares_reconciled,
                 },
@@ -1189,7 +1204,7 @@ def build_report(
                 same = valuation.eps_stmt == valuation.eps_disclosed
                 st.checks.append(
                     {
-                        "label": "EPS 교차검증 (재무제표 vs 배당공시)",
+                        "label": "주당순이익 대조 (재무제표 vs 배당공시)",
                         "value": f"{valuation.eps_stmt:,} vs {valuation.eps_disclosed:,}",
                         "ok": same,
                     }
@@ -1203,7 +1218,7 @@ def build_report(
     business: BusinessProfile | None = None
     st_doc = st_sp = st_seg = st_biz = None
     if with_segments and isinstance(provider, DartProvider) and stmt.rcept_no:
-        st_doc = step("document", "사업보고서 원문 (5~8MB)")
+        st_doc = step("document", "사업보고서 원문")
         text, doc_error = fetch_document(provider, stmt.rcept_no)
         if doc_error and info_error is None:
             info_error = doc_error
@@ -1211,10 +1226,11 @@ def build_report(
             st_doc.status = "failed"
             st_doc.note = doc_error
         else:
-            st_doc.summary = f"{len(text or ''):,}자"
+            # 글자 수는 읽는 사람에게 의미가 없다. 열었는지만 말한다.
+            st_doc.summary = "읽음" if text else "내용 없음"
 
         if text:
-            st_sp = step("segment_profit", "부문별 손익 (IFRS 8 주석)")
+            st_sp = step("segment_profit", "부문별 손익")
             st_seg = step("segments", "부문별 매출")
             st_biz = step("business", "사업 이해")
             # 부문별 **손익** — IFRS 8 주석. 제목이 회사마다 다르고 연결·별도가
@@ -1284,7 +1300,7 @@ def build_report(
             _fill_business_stage(st_biz, business)
 
     # 추정 — 가정에서 계산된다. 직전 추정이 있으면 revision을 잡는다.
-    st = step("estimates", "추정·밸류에이션 산출")
+    st = step("estimates", "추정·밸류에이션")
     before = len(registry)
     estimates = build_estimates(ms, assumptions, forward)
     previous = _load_prior_estimates(store, symbol, estimates.fiscal_year, published_at)
@@ -1327,7 +1343,7 @@ def build_report(
         st.summary = "추정 불가"
         st.note = " · ".join(estimates.warnings) or "기준선을 세울 과거 실적이 부족합니다."
 
-    st = step("lenses", "분석 렌즈 (같은 숫자에 다른 질문)")
+    st = step("lenses", "관점 분석")
     before = len(registry)
     lenses = build_lenses(
         ms,
@@ -1397,7 +1413,7 @@ def build_report(
     if llm is not None:
         from arc.llm.narrate import narrate, narrate_industry
 
-        st_llm = step("llm", "LLM 서술 생성 (가장 오래 걸립니다)")
+        st_llm = step("llm", "문장 작성")
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
         obs = build_observations(ms, build_margin_bridge(ms))
         if valuation is not None and info is not None:
@@ -1444,7 +1460,7 @@ def build_report(
         if narration is not None and narration.used_llm:
             c = narration.completion
             st_llm.summary = (c.model if c is not None else "LLM") + " · 문장만 교체"
-            st_llm.checks = [{"label": "수치 출처", "value": "레지스트리 (불변식 1)", "ok": True}]
+            st_llm.checks = [{"label": "본문 수치", "value": "LLM을 거치지 않음", "ok": True}]
             if c is not None and c.cost_usd is not None:
                 st_llm.checks.append(
                     {"label": "건당 비용", "value": f"${c.cost_usd:.4f}", "ok": True}
@@ -1454,11 +1470,11 @@ def build_report(
                 st_llm.note = " · ".join(narration.problems[:3])
         else:
             st_llm.status = "absent"
-            st_llm.summary = "결정론 문장"
-            st_llm.note = "LLM이 응답하지 않아 결정론 문장으로 냈습니다. 수치는 동일합니다."
+            st_llm.summary = "기본 문장"
+            st_llm.note = "LLM이 응답하지 않아 기본 문장으로 냈습니다. 수치는 동일합니다."
 
         if business is not None and business.usable:
-            st_ind = step("industry", "산업 배경 생성 (미검증 레인)")
+            st_ind = step("industry", "산업 배경")
             industry_text, industry_problems = narrate_industry(
                 llm,
                 company_name=company.name,
@@ -1492,7 +1508,7 @@ def build_report(
         registry=registry,
     )
 
-    st = step("gate", "G0 게이트 검증", label="발간 게이트 G0")
+    st = step("gate", "발간 전 점검", label="발간 전 점검")
     gate = G0Gate(registry).check(assembled)
     rendered = registry.render_text(assembled) if gate.passed else None
     bindings = registry.bindings(assembled) if gate.passed else []

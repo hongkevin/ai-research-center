@@ -42,6 +42,7 @@ from arc.pipeline.earnings_review import ReportResult, build_report, save_estima
 from arc.render.charts import Slice, legend, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.cards import (
+    PUBLISHED,
     Card,
     CardStore,
     attention_reasons,
@@ -347,8 +348,8 @@ def _generate(
     vm = _to_view(r)
     if budget_exhausted:
         vm.notice = (
-            f"LLM 생성 한도({LLM_BUDGET.limit}건)에 도달해 결정론 문장으로 생성했습니다. "
-            "수치와 게이트는 동일합니다."
+            f"LLM 생성 한도({LLM_BUDGET.limit}건)에 도달해 기본 문장으로 냈습니다. "
+            "수치와 점검 결과는 동일합니다."
         )
 
     if publish and r.publishable:
@@ -358,7 +359,21 @@ def _generate(
         path = DRAFTS_DIR / f"{symbol}-FY{year}-{published_at.isoformat()}.md"
         path.write_text(r.rendered or "", encoding="utf-8")
         vm.published_path = str(path)
-    return vm, {"assembled": r.assembled, "registry": r.registry.dump()}
+    est = r.estimates
+    return vm, {
+        "assembled": r.assembled,
+        "registry": r.registry.dump(),
+        "estimate_snapshot": (
+            {
+                "fiscal_year": est.fiscal_year,
+                "base_year": est.base_year,
+                "values": est.values,
+                "method": est.method,
+            }
+            if est is not None and est.usable
+            else {}
+        ),
+    }
 
 
 def _open_store() -> SnapshotStore | None:
@@ -510,6 +525,7 @@ def _land_card(
     card.vm = data
     card.assembled = doc.get("assembled", "")
     card.registry = doc.get("registry", [])
+    card.estimate_snapshot = doc.get("estimate_snapshot", {})
     card.company = vm.company
     card.error = vm.error
     card.attention = attention_reasons(data)
@@ -918,6 +934,7 @@ def api_recompute(card_id: str, payload: dict):
     card.vm = vm.__dict__
     card.assembled = doc.get("assembled", "")
     card.registry = doc.get("registry", [])
+    card.estimate_snapshot = doc.get("estimate_snapshot", {})
     card.attention = attention_reasons(card.vm)
     card.column = column_for(card.vm, confirmed=card.confirmed, published=False)
     card.versions.append(
@@ -933,6 +950,71 @@ def api_recompute(card_id: str, payload: dict):
     card.version = next_version(card.version)
     cards.save(card)
     return {"version": card.version, "assumptions": vm.assumptions}
+
+
+@app.post("/api/cards/{card_id}/publish")
+def api_publish(card_id: str):
+    """카드를 발간한다.
+
+    **생성과 발간은 다르다** ([D27](../../docs/decisions.md#d27)). 생성은
+    미리보기라 이력에 남지 않고, 발간해야 추정이 스냅샷으로 저장돼 다음 발간의
+    변화 추적 기준이 된다.
+
+    한때 이 버튼이 초안 작성 폼에 있었다 — 아직 아무것도 안 만들었는데
+    「검토 완료」를 누를 수 있었다. 발간은 읽고 고친 **뒤에** 하는 일이라
+    카드에 있어야 한다.
+
+    **카드의 현재 본문을 그대로 낸다** — 코멘트로 고친 것도, 직접 편집한 것도
+    살아서 나간다. 다시 생성하면 그 수정이 전부 사라진다.
+    """
+    cards, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+    if not card.vm.get("gate_passed"):
+        return JSONResponse(
+            {"error": "발간 전 점검을 통과하지 못한 초안은 발간할 수 없습니다."}, status_code=409
+        )
+
+    published_at = dt.datetime.now(dt.UTC).date()
+    registry = NumberRegistry.load(card.registry)
+    rendered = registry.render_text(card.assembled)
+
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = DRAFTS_DIR / f"{card.symbol}-FY{card.year}-{published_at.isoformat()}.md"
+    try:
+        path.write_text(rendered, encoding="utf-8")
+    except OSError as exc:
+        return JSONResponse({"error": f"파일을 쓰지 못했습니다: {exc}"}, status_code=500)
+
+    # 추정 이력 — 다음 발간에서 이 값 대비 변화가 표시된다
+    snap = card.estimate_snapshot
+    store = _open_store()
+    if store is not None and snap.get("values"):
+        from arc.finmodel.estimates import ESTIMATE_DATASET
+
+        rows = [
+            {
+                "symbol": card.symbol,
+                "fiscal_year": snap["fiscal_year"],
+                "base_year": snap["base_year"],
+                "metric": metric,
+                "value": value,
+                "method": snap.get("method", ""),
+                "published_at": published_at.isoformat(),
+            }
+            for metric, value in snap["values"].items()
+        ]
+        store.save_snapshot(
+            ESTIMATE_DATASET,
+            rows,
+            snapshot_at=dt.datetime.combine(published_at, dt.time.min, tzinfo=dt.UTC),
+        )
+
+    card.published_path = str(path)
+    card.vm["published_path"] = str(path)
+    card.column = PUBLISHED
+    cards.save(card)
+    return {"published_path": str(path), "version": card.version}
 
 
 @app.delete("/api/cards/{card_id}")

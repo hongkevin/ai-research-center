@@ -70,7 +70,7 @@ export function StageRail({
 
   return (
     <section className="mt-6">
-      <SectionLabel>파이프라인 {stages.length}단계</SectionLabel>
+      <SectionLabel>자료 수집·검산</SectionLabel>
       <div className="divide-y rounded-lg border">
         {stages.map((s) => {
           const st = STATUS[s.status] ?? STATUS.ok;
@@ -107,9 +107,9 @@ export function StageRail({
                 {s.registered > 0 && (
                   <span
                     className="flex-none font-mono text-[11px] text-num"
-                    title="이 단계가 레지스트리에 넣은 수치"
+                    title="이 단계에서 확보한 수치. 전부 공시로 되짚을 수 있습니다."
                   >
-                    +{s.registered}
+                    수치 {s.registered}
                   </span>
                 )}
                 {expandable && (
@@ -140,9 +140,8 @@ export function StageRail({
         })}
       </div>
       <Hint>
-        <span className="text-num">+n</span>은 그 단계가 만든 수치입니다. 전체{" "}
-        {registered}건이 레지스트리를 거쳐 본문에 들어갑니다 — 이 경로 밖의 숫자는 G0가
-        막습니다.
+        본문에 쓰인 수치 <b>{registered}건</b>은 전부 여기서 나왔고 공시로 되짚을 수
+        있습니다. 이 경로 밖의 숫자는 발간 전 점검에서 막힙니다.
       </Hint>
     </section>
   );

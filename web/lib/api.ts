@@ -154,6 +154,7 @@ export interface CardSummary {
   stage_count: number;
   version: string;
   revision_count: number;
+  published_path: string;
 }
 
 /** 수정 1건의 기록. **버전 이력은 감사 흔적이 아니라 콘텐츠다** (D25). */
@@ -166,8 +167,10 @@ export interface Revision {
   after: string;
 }
 
-export interface CardDetail
-  extends Omit<CardSummary, "gate_passed" | "registry_size" | "stage_count" | "revision_count"> {
+export interface CardDetail extends Omit<
+  CardSummary,
+  "gate_passed" | "registry_size" | "stage_count" | "revision_count"
+> {
   vm: ViewModel;
   versions: Revision[];
 }
@@ -211,6 +214,20 @@ export async function recompute(
   return r.ok ? body : { error: body.error ?? `HTTP ${r.status}` };
 }
 
+/**
+ * 카드를 발간한다 — **읽고 고친 뒤에 하는 일**이라 여기 있다.
+ *
+ * 카드의 현재 본문을 그대로 낸다. 코멘트로 고친 것도, 직접 편집한 것도 살아서
+ * 나간다. 그리고 추정이 스냅샷으로 저장돼 다음 발간의 변화 추적 기준이 된다.
+ */
+export async function publishCard(
+  id: string,
+): Promise<{ published_path: string } | { error: string }> {
+  const r = await api(`/api/cards/${id}/publish`, { method: "POST" });
+  const body = await r.json().catch(() => ({}));
+  return r.ok ? body : { error: body.error ?? `HTTP ${r.status}` };
+}
+
 export async function deleteCard(id: string): Promise<void> {
   const r = await api(`/api/cards/${id}`, { method: "DELETE" });
   if (!r.ok) await fail(r);
@@ -248,7 +265,9 @@ export interface Proposal {
   cost_usd: number | null;
 }
 
-export async function listSections(id: string): Promise<{ version: string; sections: DocSection[] }> {
+export async function listSections(
+  id: string,
+): Promise<{ version: string; sections: DocSection[] }> {
   const r = await api(`/api/cards/${id}/sections`);
   if (!r.ok) await fail(r);
   return r.json();
@@ -355,7 +374,10 @@ async function fail(r: Response): Promise<never> {
   throw new Error(detail);
 }
 
-export async function searchCompanies(q: string, limit = 10): Promise<CompanyHit[]> {
+export async function searchCompanies(
+  q: string,
+  limit = 10,
+): Promise<CompanyHit[]> {
   const r = await api(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`);
   if (!r.ok) return [];
   const d = await r.json();
