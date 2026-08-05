@@ -37,10 +37,18 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
+from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import Slice, legend, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
-from arc.store.cards import Card, CardStore, attention_reasons, column_for, now_iso
+from arc.store.cards import (
+    Card,
+    CardStore,
+    attention_reasons,
+    column_for,
+    next_version,
+    now_iso,
+)
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
 from arc.web.jobs import JobStore
@@ -271,8 +279,14 @@ def _generate(
     overrides: dict[str, float],
     publish: bool = False,
     on_progress=None,
-) -> ViewModel:
-    """노트 생성. **생성과 발간은 다르다.**
+) -> tuple[ViewModel, dict]:
+    """노트 생성. 화면용 ViewModel과 **문서 상태**를 함께 돌려준다.
+
+    문서 상태(치환 전 조립본 + 레지스트리)가 있어야 나중에 코멘트를 받아
+    문단을 고쳐 쓰고 다시 게이트를 돌릴 수 있다. 없으면 카드는 읽기 전용
+    스냅샷이고 리뷰 루프가 성립하지 않는다.
+
+    **생성과 발간은 다르다.**
 
     생성은 미리보기다 — 이력에 남지 않는다. 발간해야 추정이 스냅샷으로
     저장되고 다음 발간의 revision 기준이 된다. 생성할 때마다 저장하면
@@ -318,7 +332,7 @@ def _generate(
         path = DRAFTS_DIR / f"{symbol}-FY{year}-{published_at.isoformat()}.md"
         path.write_text(r.rendered or "", encoding="utf-8")
         vm.published_path = str(path)
-    return vm
+    return vm, {"assembled": r.assembled, "registry": r.registry.dump()}
 
 
 def _open_store() -> SnapshotStore | None:
@@ -428,7 +442,7 @@ def api_start_job(payload: dict):
 
     def work(job):
         try:
-            vm = _generate(
+            vm, doc = _generate(
                 symbol,
                 year,
                 use_llm=use_llm,
@@ -440,15 +454,17 @@ def api_start_job(payload: dict):
             # 실패한 카드가 `running`에 영영 남으면 보드가 거짓말을 한다.
             # 확인 필요로 내려놓고 예외는 그대로 올려 작업 기록에 남긴다.
             failed = ViewModel(symbol=symbol, year=year, error=f"{type(exc).__name__}: {exc}")
-            _land_card(cards, card_id, failed, published=False)
+            _land_card(cards, card_id, failed, {}, published=False)
             raise
-        _land_card(cards, card_id, vm, published=publish)
+        _land_card(cards, card_id, vm, doc, published=publish)
         return vm
 
     return {"job_id": JOBS.start(work).id, "card_id": card_id}
 
 
-def _land_card(cards: CardStore | None, card_id: str, vm: ViewModel, *, published: bool) -> None:
+def _land_card(
+    cards: CardStore | None, card_id: str, vm: ViewModel, doc: dict, *, published: bool
+) -> None:
     """생성이 끝난 카드를 칸에 놓는다. **자동 판정한다** (store/cards.py 참조)."""
     if cards is None or not card_id:
         return
@@ -457,6 +473,8 @@ def _land_card(cards: CardStore | None, card_id: str, vm: ViewModel, *, publishe
         return
     data = vm.__dict__
     card.vm = data
+    card.assembled = doc.get("assembled", "")
+    card.registry = doc.get("registry", [])
     card.company = vm.company
     card.error = vm.error
     card.attention = attention_reasons(data)
@@ -522,7 +540,7 @@ def api_job_result(job_id: str):
 def api_reports(payload: dict):
     """리포트 생성. 화면과 **같은 경로**를 탄다."""
     try:
-        vm = _generate(
+        vm, _doc = _generate(
             str(payload.get("symbol", "")).strip(),
             int(payload.get("year", 2025)),
             use_llm=bool(payload.get("llm", False)),
@@ -603,6 +621,148 @@ def api_confirm_card(card_id: str):
     card.column = column_for(card.vm, confirmed=True, published=bool(card.vm.get("published_path")))
     cards.save(card)
     return card.summary()
+
+
+def _load_card(card_id: str):
+    """카드 + 저장소. 실패하면 (None, 응답)을 준다."""
+    cards = _open_cards()
+    if cards is None:
+        return None, None, JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+    try:
+        card = cards.get(card_id)
+    except ValueError as exc:
+        return None, None, JSONResponse({"error": str(exc)}, status_code=400)
+    if card is None:
+        return None, None, JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    return cards, card, None
+
+
+@app.get("/api/cards/{card_id}/sections")
+def api_card_sections(card_id: str):
+    """고칠 수 있는 섹션 목록. 잠긴 것도 함께 준다 — 왜 못 고치는지 보여야 한다."""
+    from arc.llm.revise import split_sections
+
+    _, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+    return {
+        "version": card.version,
+        "sections": [
+            {"title": s.title, "editable": s.editable, "chars": len(s.text)}
+            for s in split_sections(card.assembled)
+        ],
+    }
+
+
+@app.post("/api/cards/{card_id}/revise")
+def api_revise(card_id: str, payload: dict):
+    """코멘트대로 한 섹션을 고쳐 쓴다. **제안일 뿐 채택되지 않는다.**
+
+    LLM은 플레이스홀더만 쓰고 값은 프롬프트에 들어가지 않으므로, 이 호출이
+    문서를 고쳐도 **숫자는 구조적으로 바뀔 수 없다.** diff는 문장에만 생긴다.
+    """
+    from arc.llm.revise import find_section, revise_section
+
+    _, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+
+    title = str(payload.get("section", "")).strip()
+    comment = str(payload.get("comment", "")).strip()
+    if not comment:
+        return JSONResponse({"error": "코멘트가 비어 있습니다."}, status_code=400)
+
+    section = find_section(card.assembled, title)
+    if section is None:
+        return JSONResponse({"error": f"없는 섹션입니다: {title!r}"}, status_code=404)
+    if not section.editable:
+        return JSONResponse(
+            {"error": f"「{title}」은(는) 규칙이 지키는 자리라 고칠 수 없습니다."}, status_code=400
+        )
+
+    if not LLM_BUDGET.take():
+        return JSONResponse(
+            {"error": f"LLM 호출 한도({LLM_BUDGET.limit}건)에 도달했습니다."}, status_code=429
+        )
+    from arc.llm.client import get_client
+
+    p = revise_section(
+        get_client(),
+        section=title,
+        section_label=title,
+        before=section.text,
+        comment=comment,
+        registry=NumberRegistry.load(card.registry),
+    )
+    return {
+        "section": title,
+        "comment": comment,
+        "before": p.before,
+        "after": p.after,
+        "changed": p.changed,
+        "numbers_unchanged": p.numbers_unchanged,
+        "numbers": p.numbers_after,
+        "problems": p.problems,
+        "used_llm": p.used_llm,
+        "model": p.model,
+        "cost_usd": p.cost_usd,
+    }
+
+
+@app.post("/api/cards/{card_id}/accept")
+def api_accept_revision(card_id: str, payload: dict):
+    """제안을 채택한다 → 버전이 올라간다.
+
+    **채택 전에 G0를 다시 돌린다.** 게이트를 건너뛰면 리뷰 루프가 불변식을
+    우회하는 뒷문이 된다.
+    """
+    from arc.llm.revise import find_section, splice
+    from arc.verify.g0 import G0Gate
+
+    cards, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+
+    title = str(payload.get("section", "")).strip()
+    after = str(payload.get("after", ""))
+    comment = str(payload.get("comment", ""))
+    section = find_section(card.assembled, title)
+    if section is None:
+        return JSONResponse({"error": f"없는 섹션입니다: {title!r}"}, status_code=404)
+    if not section.editable:
+        return JSONResponse({"error": "고칠 수 없는 섹션입니다."}, status_code=400)
+
+    registry = NumberRegistry.load(card.registry)
+    candidate = splice(card.assembled, section, after)
+    gate = G0Gate(registry).check(candidate)
+    if not gate.passed:
+        # 막힌 수정은 저장하지 않는다. 차단된 본문이 카드에 남으면 다음 수정이
+        # 그 위에 쌓인다.
+        return JSONResponse(
+            {
+                "error": "G0가 막았습니다 — 채택하지 않았습니다.",
+                "violations": [{"rule": v.rule, "detail": v.detail} for v in gate.violations[:20]],
+            },
+            status_code=409,
+        )
+
+    card.assembled = candidate
+    card.vm["body_html"] = render_html(candidate, registry)
+    card.vm["gate_passed"] = True
+    card.vm["gate_summary"] = gate.summary()
+    card.versions.append(
+        {
+            "version": next_version(card.version),
+            "created_at": now_iso(),
+            "section": title,
+            "comment": comment,
+            "before": section.text,
+            "after": after,
+        }
+    )
+    card.version = next_version(card.version)
+    cards.save(card)
+    return {"version": card.version, "revision_count": len(card.versions)}
 
 
 @app.delete("/api/cards/{card_id}")

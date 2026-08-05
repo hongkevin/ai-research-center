@@ -128,10 +128,24 @@ export interface CardSummary {
   gate_passed: boolean;
   registry_size: number;
   stage_count: number;
+  version: string;
+  revision_count: number;
 }
 
-export interface CardDetail extends Omit<CardSummary, "gate_passed" | "registry_size" | "stage_count"> {
+/** 수정 1건의 기록. **버전 이력은 감사 흔적이 아니라 콘텐츠다** (D25). */
+export interface Revision {
+  version: string;
+  created_at: string;
+  section: string;
+  comment: string;
+  before: string;
+  after: string;
+}
+
+export interface CardDetail
+  extends Omit<CardSummary, "gate_passed" | "registry_size" | "stage_count" | "revision_count"> {
   vm: ViewModel;
+  versions: Revision[];
 }
 
 export async function listCards(): Promise<CardSummary[]> {
@@ -156,6 +170,62 @@ export async function confirmCard(id: string): Promise<CardSummary> {
 export async function deleteCard(id: string): Promise<void> {
   const r = await fetch(`${BASE}/api/cards/${id}`, { method: "DELETE" });
   if (!r.ok) await fail(r);
+}
+
+export interface DocSection {
+  title: string;
+  editable: boolean;
+  chars: number;
+}
+
+/** 제안된 수정 1건. **아직 채택되지 않았다.** */
+export interface Proposal {
+  section: string;
+  comment: string;
+  before: string;
+  after: string;
+  changed: boolean;
+  /** 이 루프의 핵심 보장 — 문장은 바뀌어도 수치는 그대로다. */
+  numbers_unchanged: boolean;
+  numbers: string[];
+  problems: string[];
+  used_llm: boolean;
+  model: string;
+  cost_usd: number | null;
+}
+
+export async function listSections(id: string): Promise<{ version: string; sections: DocSection[] }> {
+  const r = await fetch(`${BASE}/api/cards/${id}/sections`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function proposeRevision(
+  id: string,
+  section: string,
+  comment: string,
+): Promise<Proposal> {
+  const r = await fetch(`${BASE}/api/cards/${id}/revise`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section, comment }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/** 채택 → 버전이 오른다. 서버가 **G0를 다시 돌린 뒤에만** 받아준다. */
+export async function acceptRevision(
+  id: string,
+  p: Proposal,
+): Promise<{ version: string; revision_count: number }> {
+  const r = await fetch(`${BASE}/api/cards/${id}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section: p.section, after: p.after, comment: p.comment }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
 }
 
 export interface CompanyHit {
