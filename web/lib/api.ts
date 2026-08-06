@@ -441,6 +441,16 @@ export interface JobRequest {
   publish: boolean;
 }
 
+/**
+ * 노트 파일 주소. **증권사에서 리포트가 오가는 형식은 Word다** (D53).
+ *
+ * `<a download>` 대신 그냥 링크로 연다 — 서버가 `Content-Disposition`을
+ * 붙이므로 브라우저가 알아서 내려받고, 한글 파일명도 안 깨진다.
+ */
+export function downloadUrl(cardId: string, format: "md" | "docx"): string {
+  return `${BASE}/api/cards/${cardId}/download?format=${format}`;
+}
+
 export interface Capabilities {
   llm_key: boolean;
   news_key: boolean;

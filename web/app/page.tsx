@@ -36,6 +36,7 @@ import { useGeneration } from "@/lib/use-generation";
 import {
   confirmCard,
   deleteCard,
+  downloadUrl,
   getCard,
   listCards,
   getCapabilities,
@@ -422,15 +423,31 @@ export default function Workbench() {
                     수 있었다. */}
                 {/* 이 제품이 내는 것이 원래 마크다운이다. 사람이 그대로
                     가져가 자기 도구에 붙일 수 있어야 한다 (D48). */}
+                {/* 넘길 때 쓰는 형식으로 내려받는다 (D53). Word가 기본인
+                    이유: 증권사에서 리포트가 오가는 형식이다. */}
                 {ready && open.vm.gate_passed && (
-                  <a
-                    href={`/api/cards/${open.id}.md`}
-                    target="_blank"
-                    rel="noopener"
-                    className="text-[12px] text-muted-foreground hover:text-foreground"
-                  >
-                    Markdown으로 보기 ↗
-                  </a>
+                  <span className="flex items-center gap-1 text-[12px]">
+                    <a
+                      href={downloadUrl(open.id, "docx")}
+                      className="rounded border px-2 py-1 hover:border-num/50 hover:text-num"
+                    >
+                      Word 내려받기
+                    </a>
+                    <a
+                      href={downloadUrl(open.id, "md")}
+                      className="rounded border px-2 py-1 text-muted-foreground hover:border-num/50 hover:text-num"
+                    >
+                      .md
+                    </a>
+                    <a
+                      href={`/api/cards/${open.id}.md`}
+                      target="_blank"
+                      rel="noopener"
+                      className="px-1 text-muted-foreground hover:text-foreground"
+                    >
+                      원문 보기 ↗
+                    </a>
+                  </span>
                 )}
                 {ready && open.vm.gate_passed && !open.published_path && (
                   <Button

@@ -27,13 +27,19 @@ import logging
 import os
 import re
 import threading
+import urllib.parse
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    PlainTextResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
@@ -48,6 +54,7 @@ from arc.ingest.prior import (
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
+from arc.render.docx import markdown_to_docx
 from arc.render.html import binding_rows, render_html
 from arc.store.cards import (
     DRAFT,
@@ -1016,6 +1023,58 @@ def api_card_markdown(card_id: str):
         return PlainTextResponse("아직 본문이 없습니다.", status_code=409)
     registry = NumberRegistry.load(card.registry)
     return registry.render_text(card.assembled)
+
+
+def _download_name(card, ext: str) -> str:
+    """`삼성물산_028260_FY2025_2026-08-06.md`. **사람이 찾을 수 있는 이름**이다.
+
+    회사명이 앞이라 파일 목록에서 눈으로 찾히고, 종목코드가 있어 검색되고,
+    날짜가 뒤라 같은 종목이 시간순으로 선다.
+    """
+    name = re.sub(r'[\\/:*?"<>|]', "", (card.company or card.symbol)).strip() or card.symbol
+    stamp = (card.created_at or "")[:10] or dt.datetime.now(dt.UTC).date().isoformat()
+    return f"{name}_{card.symbol}_FY{card.year}_{stamp}.{ext}"
+
+
+@app.get("/api/cards/{card_id}/download")
+def api_download(card_id: str, format: str = "md"):
+    """노트를 파일로 내려받는다 — 마크다운 또는 Word.
+
+    **증권사에서 리포트가 오가는 형식은 Word다.** 초안을 애널리스트에게 넘길
+    때([D51](../../docs/decisions.md#d51)의 「넘김」) 마크다운을 주면 받는
+    쪽이 다시 변환해야 한다.
+    """
+    _, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+    if not card.assembled:
+        return JSONResponse({"error": "아직 본문이 없습니다."}, status_code=409)
+
+    rendered = NumberRegistry.load(card.registry).render_text(card.assembled)
+    if format == "md":
+        return Response(
+            rendered.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers=_attachment(_download_name(card, "md")),
+        )
+    if format == "docx":
+        try:
+            data = markdown_to_docx(rendered, title=f"{card.company} {card.year}")
+        except Exception as exc:  # noqa: BLE001 — 변환 실패가 발간을 되돌리진 않는다
+            log.warning("Word 변환 실패 (%s): %s", card_id, exc)
+            return JSONResponse({"error": f"Word 변환에 실패했습니다: {exc}"}, status_code=500)
+        return Response(
+            data,
+            media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            headers=_attachment(_download_name(card, "docx")),
+        )
+    return JSONResponse({"error": "md 또는 docx만 됩니다."}, status_code=400)
+
+
+def _attachment(filename: str) -> dict[str, str]:
+    """한글 파일명은 `filename*`(RFC 5987)로 보내야 안 깨진다."""
+    quoted = urllib.parse.quote(filename)
+    return {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
 
 
 @app.get("/api/health")
