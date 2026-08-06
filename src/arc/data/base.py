@@ -82,7 +82,11 @@ class Company(BaseModel):
     """기업 개황 (시장 공통)."""
 
     symbol: str  # 종목코드 (KR: 6자리, US: ticker)
-    name: str
+    name: str  # 정식 법인명 — 노트 제목·헤더에 쓴다
+    # 상장 종목명. **법인명과 다르다**: `(주)엘지에너지솔루션` / `LG에너지솔루션`,
+    # `에이치디현대중공업(주)` / `HD현대중공업`. DART가 법인명을 한글로 음차해
+    # 두므로, 기사·시세처럼 **바깥 세상과 맞출 때는 이쪽**을 써야 한다.
+    short_name: str | None = None
     market: Market
     corp_code: str | None = None  # DART 고유번호(8자리) 등 소스별 기업 식별자
     industry: str | None = None

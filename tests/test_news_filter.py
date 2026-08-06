@@ -57,6 +57,11 @@ class TestNoise:
         assert is_noise("파마리서치 주가, 8월 3일 372,000원 9.90% 상승 마감")
         assert is_noise("[코스닥 외국인] 파마리서치·마키나락스 담고 대한광통신 팔아")
 
+    def test_market_commentary_is_noise(self):
+        """시황은 지수를 주어로 쓴다. 회사 사건 제목에는 지수 이름이 안 나온다."""
+        assert is_noise("SK하이닉스 또 -8%↓…코스피 6400선 무너졌다")
+        assert is_noise("SK하이닉스, 10프로 넘게 하락")
+
     def test_multi_company_roundups_are_noise(self):
         """여러 회사를 늘어놓는 묶음 기사는 우리 회사 얘기가 아니라 목록이다."""
         assert is_noise("[제약 브리핑] 동국제약·차바이오·부광약품·파마리서치")

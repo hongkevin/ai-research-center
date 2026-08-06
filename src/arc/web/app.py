@@ -530,8 +530,11 @@ def _search_news(symbol: str, *, months: int = 3, limit: int = 10):
     ck = (symbol, now.date().isoformat())
     cached = _NEWS_CACHE.get(ck)
     if cached is None:
-        # **법인 표기를 떼고 검색한다.** 기사는 `(주)`를 안 쓴다.
-        name = plain_name(_shared_provider().get_company(symbol).name)
+        # **상장 종목명으로 검색한다.** 법인명은 DART가 영문을 한글로 음차해
+        # 둬서 기사와 안 맞는다 — 실측: 「에이치디현대중공업」으로 검색하니
+        # 거른 뒤 1건, 「HD현대중공업」은 정상이었다.
+        company = _shared_provider().get_company(symbol)
+        name = plain_name(company.short_name or company.name)
         cached = (name, NaverNewsProvider().get_news(name, limit=100))
         _NEWS_CACHE[ck] = cached
     name, raw = cached
@@ -550,6 +553,15 @@ def _open_store() -> SnapshotStore | None:
     except OSError as exc:
         log.warning("추정 이력 저장소를 열지 못했습니다 (%s): %s", STORE_DIR, exc)
         return None
+
+
+def _company_name(symbol: str) -> str:
+    """종목코드 → 회사명. 실패해도 생성을 막지 않는다 — 이름은 표시용이다."""
+    try:
+        return _shared_provider().get_company(symbol).name
+    except Exception as exc:  # noqa: BLE001
+        log.warning("회사명을 못 읽었습니다 (%s): %s", symbol, exc)
+        return ""
 
 
 def _open_cards() -> CardStore | None:
@@ -649,6 +661,10 @@ def api_start_job(payload: dict):
                 period=period,
                 created_at=now_iso(),
                 column="running",
+                # **이름을 먼저 채운다.** 생성이 30초 걸리는데 그동안 보드에
+                # 종목코드만 떠 있으면 무슨 카드인지 알 수 없다. corpCode가
+                # 프로세스에 캐시돼 있어 실측 52~115ms다.
+                company=_company_name(symbol),
             )
         )
 
