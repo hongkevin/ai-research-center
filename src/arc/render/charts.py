@@ -140,3 +140,111 @@ def legend(names: list[str]) -> str:
         for i, n in enumerate(names)
     )
     return f'<div style="font-size:12px;opacity:.75;margin-top:6px">{chips}</div>'
+
+
+def quarter_bars(
+    labels: list[str],
+    values: list[float | None],
+    *,
+    width: int = 640,
+    height: int = 150,
+    highlight_from: int | None = None,
+) -> str:
+    """분기 막대. **음수를 아래로 그린다.**
+
+    분기 실적은 4분기에 비용을 몰아 넣어 음수가 나오기도 한다. 전부 위로
+    그리면 적자 분기가 흑자처럼 보인다 — 0선을 긋고 아래로 내린다.
+
+    `highlight_from`부터는 진하게 칠한다. 전년과 당기를 가르는 데 쓴다.
+    """
+    real = [v for v in values if v is not None]
+    if not labels or not real:
+        return ""
+    top_v, bottom_v = max(max(real), 0.0), min(min(real), 0.0)
+    span = top_v - bottom_v
+    if span <= 0:
+        return ""
+
+    pad_b, top = 22, 10
+    plot_h = height - pad_b - top
+    zero_y = top + (top_v / span) * plot_h
+    slot = width / len(labels)
+    bar_w = min(34.0, slot * 0.6)
+
+    parts = [
+        (
+            f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+            f'role="img" aria-label="분기 추이" xmlns="http://www.w3.org/2000/svg">'
+        )
+    ]
+    # 0선 — 음수가 있을 때만 의미가 있다
+    if bottom_v < 0:
+        parts.append(
+            f'<line x1="0" y1="{zero_y:.1f}" x2="{width}" y2="{zero_y:.1f}" '
+            f'stroke="currentColor" stroke-width="0.5" opacity="0.35"/>'
+        )
+    for i, label in enumerate(labels):
+        value = values[i] if i < len(values) else None
+        x = i * slot + (slot - bar_w) / 2
+        if value is not None:
+            h = abs(value) / span * plot_h
+            y = zero_y - h if value >= 0 else zero_y
+            recent = highlight_from is not None and i >= highlight_from
+            parts.append(
+                f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{max(h, 1):.1f}" '
+                f'rx="2" fill="{_PALETTE[0]}" opacity="{"1" if recent else "0.45"}">'
+                f"<title>{_esc(label)}</title></rect>"
+            )
+        parts.append(
+            f'<text x="{i * slot + slot / 2:.1f}" y="{height - 7}" font-size="10" '
+            f'text-anchor="middle" fill="currentColor" opacity="0.65">{_esc(label)}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def margin_line(
+    labels: list[str], values: list[float | None], *, width: int = 640, height: int = 120
+) -> str:
+    """이익률 추이 선. **비율은 막대가 아니라 선이다** — 크기가 아니라 수준이다.
+
+    축 눈금과 값 라벨은 넣지 않는다. 정확한 수치는 표에 있고, 차트가 수치의
+    두 번째 출처가 되면 둘이 갈라질 수 있다.
+    """
+    real = [(i, v) for i, v in enumerate(values) if v is not None]
+    if len(real) < 2:
+        return ""
+    ys = [v for _, v in real]
+    lo, hi = min(ys), max(ys)
+    span = (hi - lo) or 1.0
+    pad_b, top = 20, 10
+    plot_h = height - pad_b - top
+    slot = width / max(len(labels) - 1, 1)
+
+    def point(i: int, v: float) -> tuple[float, float]:
+        return i * slot, top + (hi - v) / span * plot_h
+
+    path = " ".join(
+        f"{'M' if n == 0 else 'L'}{x:.1f},{y:.1f}"
+        for n, (x, y) in enumerate(point(i, v) for i, v in real)
+    )
+    parts = [
+        (
+            f'<svg viewBox="0 0 {width} {height}" width="100%" height="{height}" '
+            f'role="img" aria-label="이익률 추이" xmlns="http://www.w3.org/2000/svg">'
+        ),
+        f'<path d="{path}" fill="none" stroke="{_PALETTE[1]}" stroke-width="2"/>',
+    ]
+    for i, v in real:
+        x, y = point(i, v)
+        parts.append(
+            f'<circle cx="{x:.1f}" cy="{y:.1f}" r="2.5" fill="{_PALETTE[1]}">'
+            f"<title>{_esc(labels[i])}</title></circle>"
+        )
+    for i, label in enumerate(labels):
+        parts.append(
+            f'<text x="{i * slot:.1f}" y="{height - 6}" font-size="10" '
+            f'text-anchor="middle" fill="currentColor" opacity="0.6">{_esc(label)}</text>'
+        )
+    parts.append("</svg>")
+    return "".join(parts)

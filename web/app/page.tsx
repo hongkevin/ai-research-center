@@ -699,6 +699,26 @@ function CenterColumn({
                   )}
                 </>
               )}
+              {vm.quarter_chart && (
+                <>
+                  <h2>분기 추이</h2>
+                  {/* 매출은 막대, 이익률은 선. **비율을 막대로 그리면**
+                      8%와 9%가 거의 같아 보인다 — 크기가 아니라 수준이다. */}
+                  <div
+                    className="chart"
+                    dangerouslySetInnerHTML={{ __html: vm.quarter_chart }}
+                  />
+                  {vm.quarter_margin_chart && (
+                    <div
+                      className="chart"
+                      dangerouslySetInnerHTML={{
+                        __html: vm.quarter_margin_chart,
+                      }}
+                    />
+                  )}
+                  <Hint>{vm.quarter_note}</Hint>
+                </>
+              )}
               {vm.trend_chart && (
                 <>
                   <h2>매출·영업이익 추이</h2>

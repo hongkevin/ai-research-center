@@ -136,6 +136,10 @@ export interface ViewModel {
   segment_items: SegmentItem[];
   trend_chart: string;
   trend_legend: string;
+  /** 분기 막대 + 이익률 선 (D57). 차트 그리기는 RA의 업무 카테고리다. */
+  quarter_chart: string;
+  quarter_margin_chart: string;
+  quarter_note: string;
   trend_note: string;
   industry_context: boolean;
   llm_used: boolean;

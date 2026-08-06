@@ -74,6 +74,7 @@ from arc.finmodel.metrics import (
     build_observations,
     extract_metrics,
 )
+from arc.finmodel.quarterly import build_quarter_entries, build_quarters
 from arc.finmodel.segment_profit import (
     SegmentProfitSet,
     build_segment_profit,
@@ -284,6 +285,7 @@ class ReportResult:
     segment_profit: SegmentProfitSet | None = None
     lenses: LensSet | None = None
     business: BusinessProfile | None = None
+    quarters: object | None = None  # QuarterSeries — 분기 시계열 (D57)
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
     stages: list[StageReport] = field(default_factory=list)  # 단계별 기록
 
@@ -310,6 +312,7 @@ def compose_sections(
     segment_profit: SegmentProfitSet | None = None,
     lenses: LensSet | None = None,
     business: BusinessProfile | None = None,
+    quarters: object | None = None,
 ) -> dict[str, object]:
     """지표 → 섹션 본문. **숫자 리터럴을 쓰지 않는다** — 플레이스홀더만 쓴다.
 
@@ -470,6 +473,7 @@ def compose_sections(
             # (삼성전기 2025 기준 재무상태표 50계정 · 현금흐름표 30계정).
             "balance_table": balance_rows,
             "cash_table": cash_rows,
+            "quarter_table": _quarter_table(p, quarters),
             "segment_table": _segment_rows(y, p, segments),
             "segment_profit": _segment_profit_section(y, p, segment_profit),
             "narrative": narrative,
@@ -499,6 +503,36 @@ def compose_sections(
         "news_articles": [],
         "method_notes": _method_notes(ms, valuation, info, estimates),
     }
+
+
+def _quarter_table(p, quarters) -> str:
+    """분기 추이 표를 **마크다운 문자열로** 만든다.
+
+    템플릿 안에서 `{% for %}`로 행을 돌리면 `trim_blocks`가 블록 태그 뒤
+    개행을 먹어 표가 한 줄로 붙는다(템플릿 머리 주석의 그 함정이다).
+    가변 열 표는 파이썬에서 만들어 통째로 넘긴다 — `sensitivity_table`이
+    이미 그렇게 한다.
+
+    **레지스트리 키로만 채운다** (불변식 1).
+    """
+    if quarters is None or not quarters.points:
+        return ""
+    from arc.finmodel.metrics import _LABELS
+    from arc.finmodel.quarterly import QUARTER_METRICS
+
+    labels = [x.label for x in quarters.points]
+    lines = [
+        "| 항목 | " + " | ".join(labels) + " |",
+        "|---|" + "---|" * len(labels),
+    ]
+    body = 0
+    for metric in QUARTER_METRICS:
+        cells = [p(f"{metric}_{x.label.lower()}") or "—" for x in quarters.points]
+        if all(c == "—" for c in cells):
+            continue
+        lines.append(f"| {_LABELS.get(metric, metric)} | " + " | ".join(cells) + " |")
+        body += 1
+    return "\n".join(lines) if body else ""
 
 
 def _estimates_section(
@@ -1398,6 +1432,34 @@ def build_report(
                     }
                 )
 
+    # 분기 시계열 — **호출 4번으로 8분기**. 각 보고서가 전년 동기 누적을
+    # 함께 주므로 8번 부를 필요가 없다 (D57).
+    quarters = None
+    if with_segments:
+        st_q = step("quarters", "분기 추이")
+        try:
+            quarters = build_quarters(
+                symbol, fiscal_year, provider, consolidation=stmt.consolidation
+            )
+        except Exception as exc:  # noqa: BLE001 — 분기가 없어도 노트는 나온다
+            st_q.status = "absent"
+            st_q.note = f"분기 시계열을 만들지 못했습니다 ({type(exc).__name__})."
+            quarters = None
+        else:
+            if quarters.usable:
+                before = len(registry)
+                registry.register_all(build_quarter_entries(quarters, stmt.provenance))
+                st_q.registered = len(registry) - before
+                st_q.summary = f"{len(quarters.points)}분기"
+            else:
+                st_q.status = "absent"
+                st_q.summary = f"{len(quarters.points)}분기"
+                st_q.note = (
+                    "분기가 4개 미만이라 추이 표를 만들지 않았습니다. "
+                    "아직 안 나온 정기보고서가 있습니다."
+                )
+                quarters = None
+
     # 사업보고서 **원문** — 한 번만 받아 여러 섹션에 쓴다 (5~8MB).
     # 실패해도 노트 생성을 막지 않는다.
     segments: SegmentBreakdown | None = None
@@ -1595,6 +1657,7 @@ def build_report(
         segment_profit=segment_profit,
         lenses=lenses,
         business=business,
+        quarters=quarters,
     )
 
     narration = None
@@ -1782,6 +1845,7 @@ def build_report(
         business=business,
         report_info=info,
         valuation=valuation,
+        quarters=quarters,
         info_error=info_error,
         estimates=estimates,
         revisions=revisions,
