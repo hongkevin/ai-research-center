@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   eventsUrl,
   fetchResult,
+  DuplicateDraftError,
   startJob,
   type JobRequest,
   type ViewModel,
@@ -55,7 +56,11 @@ export function useGeneration() {
   }, [phase]);
 
   const run = useCallback(
-    async (req: JobRequest, onStarted?: (cardId: string) => void) => {
+    async (
+      req: JobRequest,
+      onStarted?: (cardId: string) => void,
+      onDuplicate?: (cardId: string) => void,
+    ) => {
       close();
       setPhase("running");
       setSteps([]);
@@ -70,6 +75,12 @@ export function useGeneration() {
         jobId = started.jobId;
         onStarted?.(started.cardId);
       } catch (e) {
+        // 중복은 실패가 아니다 — 이미 있는 카드를 열면 된다.
+        if (e instanceof DuplicateDraftError) {
+          setPhase("idle");
+          onDuplicate?.(e.cardId);
+          return;
+        }
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
         return;

@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 from arc.store.cards import (
-    ATTENTION,
-    PUBLISHED,
+    DRAFT,
+    HANDOFF,
     REVIEW,
     Card,
     CardStore,
@@ -41,9 +41,21 @@ class TestAttention:
         vm = _vm(stages=[_stage("absent", note="단일 부문이라 전사 손익과 같습니다.")])
         assert attention_reasons(vm) == []
 
-    def test_blocked_gate_is_a_reason(self):
+    def test_blocked_gate_says_what_it_means(self):
+        """**`G0`는 내부 코드명이다.** 화면에 나가면 안 된다 (D51)."""
         vm = _vm(gate_passed=False, violations=[{"rule": "unregistered_number"}])
-        assert any("G0 차단" in r for r in attention_reasons(vm))
+        got = attention_reasons(vm)
+        assert any("내보낼 수 없습니다" in r and "1건" in r for r in got)
+        assert not any("G0" in r for r in got)
+
+    def test_the_gate_is_not_reported_twice(self):
+        """옛 문구는 「G0 차단 1건」과 「발간 전 점검 실패 — 차단 1건」을 둘 다 냈다."""
+        vm = _vm(
+            gate_passed=False,
+            violations=[{}],
+            stages=[_stage("failed", label="발간 전 점검", note="차단 1건 — 발간할 수 없습니다.")],
+        )
+        assert len(attention_reasons(vm)) == 1
 
     def test_failed_stage_is_a_reason(self):
         vm = _vm(stages=[_stage("failed", label="정기보고서", note="HTTP 500")])
@@ -60,7 +72,26 @@ class TestAttention:
                 )
             ]
         )
-        assert any("검산 불일치" in r for r in attention_reasons(vm))
+        got = attention_reasons(vm)
+        # **소수점 넷째 자리는 사람이 읽는 숫자가 아니다.**
+        assert any("8%" in r for r in got)
+        assert not any("8.2000" in r for r in got)
+        # 그리고 **뭘 하면 되는지**가 붙는다
+        assert any("확인하십시오" in r for r in got)
+
+    def test_internal_qa_stages_are_not_shown(self):
+        """「관점 분석」은 우리 내부 QA다. 시스템이 자기 사정을 문학적으로
+        말하는 문장이 카드에 뜨면 안 된다 (D51)."""
+        vm = _vm(
+            stages=[
+                _stage(
+                    "partial",
+                    label="관점 분석",
+                    checks=[{"label": "집중", "value": "가리지 못했다", "ok": False}],
+                )
+            ]
+        )
+        assert attention_reasons(vm) == []
 
     def test_coverage_note_alone_does_not_stop_a_card(self):
         """「미확인 계정」은 알림이지 멈춰 세울 일이 아니다."""
@@ -69,21 +100,46 @@ class TestAttention:
 
 
 class TestColumn:
-    def test_clean_goes_to_review(self):
-        assert column_for(_vm(), confirmed=False, published=False) == REVIEW
+    """**칸은 사람이 옮긴다** (D51).
 
-    def test_problem_goes_to_attention(self):
-        vm = _vm(gate_passed=False, violations=[{}])
-        assert column_for(vm, confirmed=False, published=False) == ATTENTION
+    예전에는 게이트 통과 여부로 자동 판정했다. 그러면 칸이 「기계의 상태」를
+    말하지 「내가 어디까지 봤는가」를 말하지 않는다. 어닝시즌에 여덟 종목이
+    굴러갈 때 RA가 알고 싶은 것은 후자다.
+    """
 
-    def test_confirming_moves_it_out(self):
-        """옮기는 노동을 만들지 않으면서 사람의 판단은 남긴다."""
-        vm = _vm(gate_passed=False, violations=[{}])
-        assert column_for(vm, confirmed=True, published=False) == REVIEW
+    def test_fresh_card_is_a_draft(self):
+        assert column_for(_vm(), confirmed=False, published=False) == DRAFT
 
-    def test_published_wins(self):
+    def test_a_problem_does_not_move_it_by_itself(self):
+        """게이트가 막혀도 칸은 그대로다 — 그건 **배지**로 낸다."""
         vm = _vm(gate_passed=False, violations=[{}])
-        assert column_for(vm, confirmed=False, published=True) == PUBLISHED
+        assert column_for(vm, confirmed=False, published=False) == DRAFT
+
+    def test_person_starts_review(self):
+        assert column_for(_vm(), confirmed=True, published=False) == REVIEW
+
+    def test_handoff_wins(self):
+        vm = _vm(gate_passed=False, violations=[{}])
+        assert column_for(vm, confirmed=False, published=True) == HANDOFF
+
+
+class TestLegacyColumns:
+    def test_old_names_are_migrated_on_read(self, tmp_path):
+        """저장된 카드가 예전 칸 이름을 들고 있다. **읽을 때 옮긴다.**"""
+        s = CardStore(tmp_path)
+        c = Card(id=s.new_id(), symbol="214450", year=2025, created_at=now_iso())
+        c.column = "attention"
+        s.save(c)
+        assert s.get(c.id).column == REVIEW
+
+    def test_old_running_column_is_not_still_running(self, tmp_path):
+        """예전 `running` 칸에 있던 카드는 생성이 끝났거나 중단된 것이다."""
+        s = CardStore(tmp_path)
+        c = Card(id=s.new_id(), symbol="214450", year=2025, created_at=now_iso())
+        c.column = "running"
+        s.save(c)
+        got = s.get(c.id)
+        assert got.column == DRAFT and got.running is False
 
 
 class TestStore:
