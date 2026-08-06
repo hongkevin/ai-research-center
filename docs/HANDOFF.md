@@ -119,7 +119,7 @@ React는 그 문자열을 `dangerouslySetInnerHTML`로 그대로 주입하고
 | 인증 | **Supabase(Google) 또는 HTTP Basic** — 설정된 쪽을 쓴다 (D42). Basic은 Supabase 확인 후 삭제 |
 | 저장소 | github.com/hongkevin/ai-research-center (**PUBLIC**) |
 | 화면 | `web/` — Next.js 16 · Tailwind v4 · shadcn/ui · **정적 익스포트** (D37) · **단계 레일** (D39) · **보드** (D40) · **리뷰 루프** (D41) · **발간은 카드에서** (D43) |
-| 테스트 | 624 통과 · ruff 클린 · eslint 클린 |
+| 테스트 | 682 통과 · ruff 클린 · eslint 클린 |
 | CI | 린트 · 테스트 · **프런트 빌드** · Docker 빌드+헬스체크+화면서빙 · **키 패턴 검사** |
 | 성능 | 결정론 3.0초 / LLM 30~35초 (US 리전 기준 실측 — 싱가포르 이전 후 미측정) |
 | 비용 | 건당 ~$0.005 (실측 $0.0055, `gpt-5.6-luna`) |
@@ -156,6 +156,10 @@ data/kr/dart.py           재무제표 (전체계정 → 주요계정 폴백, D2
 data/kr/dart_reports.py   정기보고서 주요정보 6종 (주식수·배당·감사·인력·지분·출자)
 data/kr/dart_document.py  사업보고서 원문 (ZIP·표 파싱·<TE> 셀)
 data/kr/dart_toc.py       공시 목차 → 수치마다 자기 절로 가는 뷰어 링크 (D44)
+data/kr/news_filter.py    기사 거르기 — 날짜·제목·소음·중복 (D47)
+ingest/convert.py         업로드 문서 → 마크다운 · 깨짐 탐지 (D48)
+ingest/prior.py           직전 노트에서 추정치·차례 읽기 (D48)
+store/notes.py            노트 지문 · 직전 대비 변화 (D46)
 data/kr/ksic.py           KSIC 코드 → 업종명 (중분류, 헤더의 「산업」)
 finmodel/metrics.py       지표 13종 · 마진 브리지 · 논지 생성
 finmodel/segments.py      부문별 매출 (원문에서 뽑고 매출액으로 검산, D28)
@@ -356,6 +360,12 @@ D39·D40·D41·D43·D44가 전부 같은 모양이었습니다. 새로 계산한
   마십시오** — 이 사실을 거기서 확인했습니다.
 - **`--header-h`를 헤더 여백과 함께 고치십시오.** 좌우 열이 sticky로 이 값만큼
   내려붙습니다. 어긋나면 스크롤할 때 열이 헤더 밑으로 파고듭니다.
+- **네이버 검색 API는 2026-07-31부터 NAVER API HUB(NCP)에서만 발급됩니다.**
+  주소·인증 헤더가 다릅니다(`NAVER_API_MODE`, 기본 `hub`). 옛 주소로 때리면
+  401 `errorCode 024`가 나는데, **키가 틀린 것처럼 보입니다** — 실제로 한 번
+  그렇게 오진했습니다.
+- **DART `corp_name`은 영문을 한글로 음차합니다** (`에이치디현대중공업(주)`).
+  기사·시세처럼 바깥과 맞출 때는 `stock_name`(`HD현대중공업`)을 쓰십시오.
 - **백그라운드 명령을 `| tail`로 파이프하면 실패가 숨습니다.** `docker build`가
   `command not found`로 죽었는데 파이프라인 종료코드가 `tail` 것이라 0으로
   보고됐습니다. 성공했다고 착각한 채 넘어갔던 자리입니다.
@@ -369,7 +379,7 @@ docs/HANDOFF.md 와 docs/decisions.md 읽고 이어가자.
 ```
 
 세부는 이 순서로 보면 됩니다:
-[decisions.md](decisions.md) D1~D44 →
+[decisions.md](decisions.md) D1~D48 →
 [corpus/FINDINGS.md](../corpus/FINDINGS.md)(왜 사람에게 묻는 쪽으로 돌았는가) →
 [research/01-benchmark-smic.md](research/01-benchmark-smic.md)(SMIC 갭 분석) →
 [DEPLOY.md](DEPLOY.md)(배포·제약)
