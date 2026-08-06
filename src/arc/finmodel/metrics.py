@@ -84,7 +84,79 @@ ACCOUNT_MAP: dict[str, dict[str, tuple[str, ...]]] = {
         "account_ids": ("ifrs-full_EquityAttributableToOwnersOfParent",),
         "names": (),
     },
+    # ── 재무상태표 세부 ─────────────────────────────────────────────
+    # 실제 증권사 리포트는 재무제표 3종을 통째로 싣는다(벤치마크 실측: 5쪽이
+    # 손익·재무상태·현금흐름·투자지표 4표). 우리는 이 계정들을 **이미 받고
+    # 있으면서 노트에 안 쓰고 있었다** — 삼성전기 2025 기준 BS 50계정·CF 30계정.
+    "current_assets": {
+        "account_ids": ("ifrs-full_CurrentAssets",),
+        "names": ("유동자산", "유동자산 합계"),
+    },
+    "cash": {
+        "account_ids": ("ifrs-full_CashAndCashEquivalents",),
+        "names": ("현금및현금성자산",),
+    },
+    "inventories": {
+        "account_ids": ("ifrs-full_Inventories",),
+        "names": ("재고자산",),
+    },
+    "receivables": {
+        "account_ids": ("ifrs-full_TradeAndOtherCurrentReceivables",),
+        "names": ("매출채권및기타채권", "매출채권"),
+    },
+    "ppe": {
+        "account_ids": ("ifrs-full_PropertyPlantAndEquipment",),
+        "names": ("유형자산",),
+    },
+    "current_liabilities": {
+        "account_ids": ("ifrs-full_CurrentLiabilities",),
+        "names": ("유동부채", "유동부채 합계"),
+    },
+    # ── 현금흐름표 ──────────────────────────────────────────────────
+    "cfo": {
+        "account_ids": ("ifrs-full_CashFlowsFromUsedInOperatingActivities",),
+        "names": ("영업활동순현금흐름", "영업활동현금흐름", "영업활동으로 인한 현금흐름"),
+    },
+    "cfi": {
+        "account_ids": ("ifrs-full_CashFlowsFromUsedInInvestingActivities",),
+        "names": ("투자활동순현금흐름", "투자활동현금흐름"),
+    },
+    "cff": {
+        "account_ids": ("ifrs-full_CashFlowsFromUsedInFinancingActivities",),
+        "names": ("재무활동순현금흐름", "재무활동현금흐름"),
+    },
+    # CAPEX. **EBITDA와 FCF가 여기서 나온다** — 벤치마크 투자지표 표의 필수 행이다.
+    "capex": {
+        "account_ids": (
+            "ifrs-full_PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+        ),
+        "names": ("유형자산의 취득",),
+    },
+    "depreciation": {
+        "account_ids": (
+            "ifrs-full_DepreciationAndAmortisationExpense",
+            "ifrs-full_AdjustmentsForDepreciationAndAmortisationExpense",
+        ),
+        "names": ("감가상각비", "감가상각비와 무형자산상각비", "유형자산감가상각비"),
+    },
 }
+
+# 재무상태표 표에 넣을 지표와 순서.
+BALANCE_SHEET_METRICS: tuple[str, ...] = (
+    "current_assets",
+    "cash",
+    "receivables",
+    "inventories",
+    "ppe",
+    "total_assets",
+    "current_liabilities",
+    "total_liabilities",
+    "total_equity",
+    "equity_parent",
+)
+
+# 현금흐름표 표에 넣을 지표와 순서.
+CASH_FLOW_METRICS: tuple[str, ...] = ("cfo", "cfi", "cff", "capex")
 
 # 손익 표에 넣을 지표와 순서. 재무상태표 계정이 손익 표에 들어가면 안 된다.
 INCOME_STATEMENT_METRICS: tuple[str, ...] = (
@@ -116,6 +188,17 @@ _LABELS = {
     "total_liabilities": "부채총계",
     "total_equity": "자본총계",
     "equity_parent": "지배주주지분",
+    "current_assets": "유동자산",
+    "cash": "현금및현금성자산",
+    "receivables": "매출채권",
+    "inventories": "재고자산",
+    "ppe": "유형자산",
+    "current_liabilities": "유동부채",
+    "cfo": "영업활동현금흐름",
+    "cfi": "투자활동현금흐름",
+    "cff": "재무활동현금흐름",
+    "capex": "유형자산 취득(CAPEX)",
+    "depreciation": "감가상각비",
 }
 
 # 주당 지표는 원 단위 금액이 아니라 '원/주'다. 조·억 표기를 쓰면 안 된다.
@@ -446,15 +529,13 @@ def build_entries(ms: MetricSet, prov: Provenance) -> list[NumberEntry]:
 
     # 원시 지표 — 당기·전기
     for key, mv in ms.values.items():
-        if key in _PER_SHARE:
-            # 주당 지표는 금액 규모가 아니라 원/주다
-            add(f"{key}_{y}a", mv.current, "원", fmt_per_share(mv.current), f"{mv.label} ({y}A)")
-            add(
-                f"{key}_{y - 1}a", mv.prior, "원", fmt_per_share(mv.prior), f"{mv.label} ({y - 1}A)"
-            )
-        else:
-            add(f"{key}_{y}a", mv.current, "원", fmt_krw(mv.current), f"{mv.label} ({y}A)")
-            add(f"{key}_{y - 1}a", mv.prior, "원", fmt_krw(mv.prior), f"{mv.label} ({y - 1}A)")
+        # **전전기까지 등록한다.** DART 응답이 3개년을 주는데(당기·전기·전전기)
+        # 그동안 두 해만 레지스트리에 넣어서, 노트가 3개년 표를 만들 수 없었다.
+        # 실제 증권사 리포트는 4개년(2년 실적 + 2년 추정)이 기본이다.
+        fmt = fmt_per_share if key in _PER_SHARE else fmt_krw
+        for offset, value in ((0, mv.current), (1, mv.prior), (2, mv.prior2)):
+            year = y - offset
+            add(f"{key}_{year}a", value, "원", fmt(value), f"{mv.label} ({year}A)")
 
     # YoY
     for key, mv in ms.values.items():
