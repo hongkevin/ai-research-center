@@ -69,10 +69,12 @@ from arc.finmodel.metrics import (
     CASH_FLOW_METRICS,
     INCOME_STATEMENT_METRICS,
     MetricSet,
+    borrowings,
     build_entries,
     build_margin_bridge,
     build_observations,
     extract_metrics,
+    fmt_krw,
 )
 from arc.finmodel.quarterly import build_quarter_entries, build_quarters
 from arc.finmodel.segment_profit import (
@@ -94,7 +96,7 @@ from arc.finmodel.valuation import (
     build_valuation_entries,
     build_valuation_observations,
 )
-from arc.llm.number_registry import NumberRegistry, mask_numbers
+from arc.llm.number_registry import NumberEntry, NumberRegistry, mask_numbers
 from arc.verify.g0 import G0Gate, GateResult
 
 TEMPLATE_NAME = "earnings_review.md.j2"
@@ -1431,6 +1433,66 @@ def build_report(
                         "ok": same,
                     }
                 )
+
+    # 순차입금 — **구성 계정을 단계에 남긴다** (D59). 차입금은 표준계정
+    # 코드가 없어 이름으로 모을 수밖에 없고, 놓치면 부채가 적어 보이는
+    # 방향으로 틀린다. 무엇을 더했는지 보이면 사람이 검산할 수 있다.
+    debt_total, debt_parts = borrowings(stmt)
+    if debt_parts:
+        st_debt = step("debt", "차입금")
+        cash = ms.get("cash")
+        equity = ms.get("total_equity")
+        net_debt = debt_total - cash if cash is not None else None
+        entries = [
+            NumberEntry(
+                key=f"total_debt_{fiscal_year}a",
+                value=debt_total,
+                unit="원",
+                display=fmt_krw(debt_total),
+                provenance=stmt.provenance,
+                label=f"총차입금 ({fiscal_year}A)",
+                formula=" + ".join(n for n, _ in debt_parts),
+            )
+        ]
+        if net_debt is not None:
+            entries.append(
+                NumberEntry(
+                    key=f"net_debt_{fiscal_year}a",
+                    value=net_debt,
+                    unit="원",
+                    display=fmt_krw(net_debt),
+                    provenance=stmt.provenance,
+                    label=f"순차입금 ({fiscal_year}A)",
+                    formula="총차입금 − 현금및현금성자산",
+                    inputs=[f"total_debt_{fiscal_year}a", f"cash_{fiscal_year}a"],
+                )
+            )
+            if equity:
+                ratio = round(net_debt / equity * 100, 1)
+                entries.append(
+                    NumberEntry(
+                        key=f"net_debt_ratio_{fiscal_year}a",
+                        value=ratio,
+                        unit="%",
+                        display=f"{ratio:+.1f}%",
+                        provenance=stmt.provenance,
+                        label=f"순차입금비율 ({fiscal_year}A)",
+                        formula="순차입금 / 자본총계",
+                        inputs=[f"net_debt_{fiscal_year}a", f"total_equity_{fiscal_year}a"],
+                    )
+                )
+        before = len(registry)
+        registry.register_all(entries)
+        st_debt.registered = len(registry) - before
+        st_debt.summary = f"{len(debt_parts)}개 계정 합산"
+        # **무엇을 더했는지 낸다.** 놓친 계정이 있으면 여기서 보인다.
+        st_debt.checks = [
+            {"label": name, "value": fmt_krw(value) or "—", "ok": True}
+            for name, value in debt_parts
+        ]
+        st_debt.note = (
+            "차입금은 표준계정 코드가 없어 계정명으로 모읍니다. 빠진 것이 있는지 확인해 주십시오."
+        )
 
     # 분기 시계열 — **호출 4번으로 8분기**. 각 보고서가 전년 동기 누적을
     # 함께 주므로 8번 부를 필요가 없다 (D57).
