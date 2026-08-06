@@ -207,6 +207,7 @@ class DartProvider(DataProvider):
         return Company(
             symbol=symbol,
             name=payload.get("corp_name", ""),
+            short_name=payload.get("stock_name") or None,
             market=market,
             corp_code=payload.get("corp_code"),
             industry=payload.get("induty_code"),
