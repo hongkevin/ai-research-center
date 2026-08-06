@@ -1595,6 +1595,31 @@ def build_report(
                     ),
                 )
             )
+        # 전사 EBITDA — **부문 주석이 유일한 경로다** (D54: DART 요약
+        # 현금흐름표에 감가상각비 조정 항목이 없다). **전 부문에 감가상각비가
+        # 있을 때만** 만든다 — 하나라도 빠지면 EBITDA가 과소계상된다.
+        if segment_profit is not None and segment_profit.usable:
+            das = [line.depreciation for line in segment_profit.lines]
+            op = ms.get("operating_income")
+            if op is not None and das and all(d is not None for d in das):
+                ebitda = op + sum(das)
+                registry.register_all(
+                    [
+                        NumberEntry(
+                            key=f"ebitda_{fiscal_year}a",
+                            value=ebitda,
+                            unit="원",
+                            display=fmt_krw(ebitda),
+                            provenance=section_provenance(
+                                stmt.provenance, segment_profit.section_title, stmt.rcept_no
+                            ),
+                            label=f"EBITDA ({fiscal_year}A)",
+                            formula="영업이익 + 부문별 감가상각비 합계",
+                            inputs=[f"operating_income_{fiscal_year}a"],
+                        )
+                    ]
+                )
+
         if st_sp is not None:
             st_sp.registered = len(registry) - before
             _fill_segment_profit_stage(st_sp, segment_profit)
