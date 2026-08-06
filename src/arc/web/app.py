@@ -50,7 +50,9 @@ from arc.pipeline.earnings_review import ReportResult, build_report, save_estima
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.cards import (
+    ATTENTION,
     PUBLISHED,
+    RUNNING,
     Card,
     CardStore,
     attention_reasons,
@@ -86,6 +88,29 @@ DRAFTS_DIR = REPO_ROOT / "drafts"
 log = logging.getLogger("arc.web")
 
 
+def _reap_running_cards() -> None:
+    """시작할 때 **「생성 중」에 갇힌 카드를 풀어 준다.**
+
+    작업 큐가 프로세스 메모리에 있어서(워커 1개 전제) 서버가 재시작하면
+    돌던 작업이 사라진다. 그런데 카드는 `running`으로 남아 보드에서 영영
+    「생성 중…」이다 — 실측으로 삼성전자 카드 하나가 그렇게 갇혔다.
+
+    지우지 않고 **확인 필요로 내려놓고 이유를 적는다.** 사람이 다시 돌릴지
+    지울지 고르면 된다. 조용히 지우면 무엇이 있었는지 알 수 없다.
+    """
+    cards = _open_cards()
+    if cards is None:
+        return
+    for card in cards.list():
+        if card.column != RUNNING:
+            continue
+        card.column = ATTENTION
+        card.error = card.error or "서버가 재시작돼 생성이 중단됐습니다. 다시 만들어 주십시오."
+        card.attention = card.attention or ["생성 중단"]
+        cards.save(card)
+        log.info("중단된 카드를 확인 필요로 옮겼습니다: %s %s", card.symbol, card.id)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     """시작할 때 corpCode를 **백그라운드로** 미리 받는다.
@@ -103,6 +128,7 @@ async def _lifespan(_app: FastAPI):
             log.warning("corpCode 캐시 준비 실패: %s", exc)
 
     threading.Thread(target=warm, daemon=True, name="arc-warm").start()
+    _reap_running_cards()
     yield
 
 
