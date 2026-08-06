@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import urllib.parse
 
 import httpx
 
@@ -36,7 +37,13 @@ class KrxPriceProvider(DataProvider):
     """금융위 주식시세정보 API 어댑터 — EOD 시세 전용."""
 
     def __init__(self, api_key: str | None = None, client: httpx.Client | None = None) -> None:
-        self.api_key = api_key or os.environ.get("KRX_API_KEY", "")
+        # **Encoding 키를 그대로 쓰면 안 된다** (D60). data.go.kr은 인증키를
+        # 두 형태로 준다 — Encoding(`%2F` 등이 박힌 것)과 Decoding. httpx가
+        # params를 다시 인코딩하므로 Encoding 키는 `%`가 `%25`가 되어
+        # `SERVICE_KEY_IS_NOT_REGISTERED_ERROR`(403)로 튕긴다.
+        # 어느 쪽을 넣어도 되게 **받는 쪽에서 풀어 준다.**
+        raw = api_key or os.environ.get("KRX_API_KEY", "")
+        self.api_key = urllib.parse.unquote(raw) if "%" in raw else raw
         if not self.api_key:
             raise ValueError("KRX_API_KEY가 설정되지 않았습니다 (.env 참조)")
         self._client = client or httpx.Client(base_url=BASE_URL, timeout=30.0)
