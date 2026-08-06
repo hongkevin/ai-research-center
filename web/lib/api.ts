@@ -100,6 +100,16 @@ export interface SegmentItem {
   share: string;
 }
 
+export interface NoteChange {
+  name: string;
+  kind: "actual" | "estimate" | "other";
+  previous: string;
+  current: string;
+  direction: string;
+  /** 이미 문자열로 굳어 온다 — 화면이 숫자를 다시 만들지 않는다. */
+  change: string;
+}
+
 export interface ViewModel {
   symbol: string;
   year: number;
@@ -132,6 +142,9 @@ export interface ViewModel {
   llm_model: string;
   llm_cost: number | null;
   published_path: string;
+  /** 직전 발간 노트 대비 변화 (D46). 비교 대상이 없으면 빈 목록. */
+  changes: NoteChange[];
+  changes_basis: string;
   notice: string;
   error: string;
 }

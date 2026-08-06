@@ -50,6 +50,14 @@ from arc.store.cards import (
     next_version,
     now_iso,
 )
+from arc.store.notes import (
+    NOTE_DATASET,
+    compare_notes,
+    facts_from_registry,
+    previous_note,
+    rank,
+)
+from arc.store.notes import to_rows as note_rows
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
 from arc.web.jobs import JobStore
@@ -150,6 +158,9 @@ class ViewModel:
     llm_model: str = ""
     llm_cost: float | None = None
     published_path: str = ""
+    # 직전 발간 노트 대비 무엇이 달라졌는가 (D46). 비교 대상이 없으면 빈 목록.
+    changes: list[dict] = field(default_factory=list)
+    changes_basis: str = ""
     notice: str = ""
     error: str = ""
 
@@ -181,6 +192,31 @@ def _shared_provider() -> DartProvider:
 
 def _search_provider() -> DartProvider:
     return _shared_provider()
+
+
+def _note_texts(r) -> dict[str, str]:
+    """숫자가 아닌 사실. **감사의견이 바뀌는 것은 어느 수치 변화보다 크다.**"""
+    out: dict[str, str] = {}
+    info = r.report_info
+    audit = info.audit if info is not None else None
+    if audit is not None and audit.opinion:
+        out["감사의견"] = audit.opinion
+        if audit.auditor:
+            out["감사인"] = audit.auditor
+    if r.segments is not None and r.segments.usable:
+        out["보고부문"] = " · ".join(x.name for x in r.segments.lines)
+    return out
+
+
+def _note_facts(r, published_at: dt.date):
+    return facts_from_registry(
+        r.registry,
+        symbol=r.symbol,
+        year=r.fiscal_year,
+        period=r.statement.period.value,
+        published_at=published_at,
+        texts=_note_texts(r),
+    )
 
 
 def _shown(registry: NumberRegistry, key: str) -> str:
@@ -398,6 +434,35 @@ def _generate(
         on_progress=on_progress,
     )
     vm = _to_view(r)
+
+    # 직전 발간 노트 대비 변화 (D46). **발간된 것만 비교 대상이다** — 만지작
+    # 거린 미리보기까지 세면 「직전」이 무엇인지 알 수 없다 (D27).
+    prev = previous_note(store, symbol, exclude=(r.fiscal_year, r.statement.period.value))
+    if prev is not None:
+        changes = rank(compare_notes(prev, _note_facts(r, published_at)))
+        vm.changes = [
+            {
+                "name": c.name,
+                "kind": c.kind,
+                "previous": c.previous,
+                "current": c.current,
+                "direction": c.direction,
+                # 화면이 숫자를 다시 만들지 않도록 **문자열로 굳혀서** 준다.
+                "change": (
+                    f"{c.change_abs:+.1f}pp"
+                    if c.change_abs is not None
+                    else (f"{c.change_pct:+.1f}%" if c.change_pct is not None else "")
+                ),
+            }
+            for c in changes
+        ]
+        basis = f"{prev.label} 노트 대비 · 발간 {prev.published_at}"
+        if prev.period != r.statement.period.value:
+            # 기간이 다르면 실적 금액은 빠진다. **왜 빠졌는지 안 쓰면**
+            # "매출이 왜 목록에 없지"가 된다.
+            basis += " · 기간이 달라 실적 금액은 빼고 비율·구성·추정만 비교했습니다"
+        vm.changes_basis = basis
+
     if news_error:
         vm.notice = (vm.notice + " " if vm.notice else "") + news_error
     if budget_exhausted:
@@ -417,6 +482,9 @@ def _generate(
     return vm, {
         "assembled": r.assembled,
         "registry": r.registry.dump(),
+        # 발간할 때 남길 노트 지문 (D46). 발간은 읽고 고친 뒤에 하는 일이라
+        # 그때까지 카드가 들고 있어야 한다 — 추정 스냅샷과 같은 이유다.
+        "note_facts": note_rows(_note_facts(r, published_at)),
         "estimate_snapshot": (
             {
                 "fiscal_year": est.fiscal_year,
@@ -435,8 +503,20 @@ def news_available() -> bool:
     return bool(os.environ.get("NAVER_CLIENT_ID") and os.environ.get("NAVER_CLIENT_SECRET"))
 
 
-def _search_news(symbol: str, limit: int = 12):
-    """종목의 최근 기사 스니펫. **회사명으로 찾는다** — 종목코드로는 안 걸린다.
+# 종목·날짜당 한 번만 부른다. 같은 종목을 하루에 여러 번 생성해도 API는
+# 한 번만 나간다 — 가정을 만지작거리며 다시 계산하는 게 이 도구의 일이라
+# 캐시가 없으면 호출이 그 횟수만큼 늘어난다. (워커 1개 전제, jobs.py와 같다)
+# 값은 (회사명, 원본 기사 목록). 회사명은 「검색어가 스쳤을 뿐인 기사」를
+# 거를 때 다시 필요하다.
+_NEWS_CACHE: dict[tuple[str, str], tuple[str, list]] = {}
+
+
+def _search_news(symbol: str, *, months: int = 3, limit: int = 10):
+    """종목의 최근 기사. **한 번 부르고 여기서 거른다.**
+
+    네이버 검색 API는 한 번에 100건을 최신순으로 준다. 페이지를 넘기지 않고
+    100건을 받아 `news_filter.select()`로 좁힌다 — 날짜 창 · 매체 · 소음 ·
+    회사 무관 · 중복을 차례로 걷어낸다. 호출은 종목당 1회다.
 
     본문은 가져오지 않는다(스니펫 전용, ARCHITECTURE §5.1). 우리가 하는 일은
     "무엇이 있었는지"를 링크와 함께 보여 주는 것이지 기사를 재생산하는 게 아니다.
@@ -444,9 +524,18 @@ def _search_news(symbol: str, limit: int = 12):
     if not news_available():
         return None
     from arc.data.kr.naver_news import NaverNewsProvider
+    from arc.data.kr.news_filter import plain_name, select
 
-    company = _shared_provider().get_company(symbol)
-    return NaverNewsProvider().get_news(company.name, limit=limit) or None
+    now = dt.datetime.now(dt.UTC)
+    ck = (symbol, now.date().isoformat())
+    cached = _NEWS_CACHE.get(ck)
+    if cached is None:
+        # **법인 표기를 떼고 검색한다.** 기사는 `(주)`를 안 쓴다.
+        name = plain_name(_shared_provider().get_company(symbol).name)
+        cached = (name, NaverNewsProvider().get_news(name, limit=100))
+        _NEWS_CACHE[ck] = cached
+    name, raw = cached
+    return select(raw, now=now, months=months, limit=limit, company=name) or None
 
 
 def _open_store() -> SnapshotStore | None:
@@ -601,6 +690,7 @@ def _land_card(
     card.assembled = doc.get("assembled", "")
     card.registry = doc.get("registry", [])
     card.estimate_snapshot = doc.get("estimate_snapshot", {})
+    card.note_facts = doc.get("note_facts", [])
     card.company = vm.company
     card.error = vm.error
     card.attention = attention_reasons(data)
@@ -1012,6 +1102,7 @@ def api_recompute(card_id: str, payload: dict):
     card.assembled = doc.get("assembled", "")
     card.registry = doc.get("registry", [])
     card.estimate_snapshot = doc.get("estimate_snapshot", {})
+    card.note_facts = doc.get("note_facts", [])
     card.attention = attention_reasons(card.vm)
     card.column = column_for(card.vm, confirmed=card.confirmed, published=False)
     card.versions.append(
@@ -1086,6 +1177,26 @@ def api_publish(card_id: str):
             rows,
             snapshot_at=dt.datetime.combine(published_at, dt.time.min, tzinfo=dt.UTC),
         )
+
+    # 노트 지문 — 다음 발간에서 「직전 대비 무엇이 달라졌는가」의 기준 (D46).
+    # 실패해도 발간은 성립한다. 파일은 이미 나갔다.
+    if store is not None and card.note_facts:
+        try:
+            store.save_snapshot(
+                NOTE_DATASET,
+                [
+                    dict(
+                        row,
+                        published_at=published_at.isoformat(),
+                        # 실제로 쓴 시각. 같은 날 두 번 발간해도 순서가 남는다.
+                        saved_at=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+                    )
+                    for row in card.note_facts
+                ],
+                snapshot_at=dt.datetime.combine(published_at, dt.time.min, tzinfo=dt.UTC),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("노트 지문을 남기지 못했습니다 (%s): %s", card.symbol, exc)
 
     card.published_path = str(path)
     card.vm["published_path"] = str(path)

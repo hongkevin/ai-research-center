@@ -76,6 +76,9 @@ class Card:
     # 발간할 때 추정 이력으로 남길 재료 (D27). 발간은 읽고 고친 뒤에 하는
     # 일이라 카드에 있어야 하고, 그러려면 그때까지 들고 있어야 한다.
     estimate_snapshot: dict = field(default_factory=dict)
+    # 발간할 때 남길 노트 지문 (D46) — 다음 노트가 「직전 대비 무엇이
+    # 달라졌는가」를 이 줄들과 비교해서 만든다.
+    note_facts: list[dict] = field(default_factory=list)
     published_path: str = ""
 
     def summary(self) -> dict:
