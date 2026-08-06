@@ -119,17 +119,42 @@
 {% endfor %}
 ## 4. 실적 분석
 
-{# 당기 vs 전기 비교. 전기는 당기 공시의 비교표시 값이다 (재작성 반영). #}
-| 항목 | {{ earnings.period_label }} | 전기 | 증감률 |
-|---|---|---|---|
+{# **3개년으로 낸다.** 한 해 비교로는 추세가 안 보이고, 실제 증권사 리포트는
+   4개년(실적 2 + 추정 2)이 기본이다. 전기·전전기는 당기 공시의 비교표시
+   값이라 재작성이 반영돼 있다. #}
+| 항목 | {{ earnings.years[0] }} | {{ earnings.years[1] }} | {{ earnings.years[2] }} | 증감률 |
+|---|---|---|---|---|
 {% for row in earnings.table %}
-| {{ row.label }} | {{ row.current }} | {{ row.prior }} | {{ row.yoy }} |
+| {{ row.label }} | {{ row.y2 }} | {{ row.y1 }} | {{ row.current }} | {{ row.yoy }} |
 {% endfor %}
 
 {{ earnings.narrative }}
 
+{% if earnings.balance_table %}
+### 4.1 재무상태
+
+{# 실제 리포트는 재무제표 3종을 통째로 싣는다. 우리는 이 계정들을 이미 받고
+   있으면서 노트에 안 쓰고 있었다. #}
+| 항목 | {{ earnings.years[0] }} | {{ earnings.years[1] }} | {{ earnings.years[2] }} |
+|---|---|---|---|
+{% for row in earnings.balance_table %}
+| {{ row.label }} | {{ row.y2 }} | {{ row.y1 }} | {{ row.current }} |
+{% endfor %}
+
+{% endif %}
+{% if earnings.cash_table %}
+### 4.2 현금흐름
+
+| 항목 | {{ earnings.years[0] }} | {{ earnings.years[1] }} | {{ earnings.years[2] }} |
+|---|---|---|---|
+{% for row in earnings.cash_table %}
+| {{ row.label }} | {{ row.y2 }} | {{ row.y1 }} | {{ row.current }} |
+{% endfor %}
+
+{% endif %}
+
 {% if earnings.segment_profit.table %}
-### 4.1 부문별 수익성
+### 4.3 부문별 수익성
 
 {# IFRS 8 「영업부문」 주석. 총계가 손익계산서의 매출액·영업이익과 맞는 것만
    싣는다 — 어긋나면 표를 통째로 내리고 사유만 남긴다 (D33). #}
@@ -155,7 +180,7 @@
 
 {% endif %}
 {% elif earnings.segment_profit.note %}
-### 4.1 부문별 수익성
+### 4.3 부문별 수익성
 
 {{ earnings.segment_profit.note }}
 

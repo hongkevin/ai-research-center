@@ -65,6 +65,8 @@ from arc.finmodel.lenses import (
     build_lenses,
 )
 from arc.finmodel.metrics import (
+    BALANCE_SHEET_METRICS,
+    CASH_FLOW_METRICS,
     INCOME_STATEMENT_METRICS,
     MetricSet,
     build_entries,
@@ -401,19 +403,42 @@ def compose_sections(
         )
 
     # 실적 테이블 — **손익 계정만.** 자산·부채·자본이 손익 표에 들어가면 안 된다.
-    rows = []
-    for key in INCOME_STATEMENT_METRICS:
-        mv = ms.values.get(key)
-        if mv is None:
-            continue
-        rows.append(
-            {
-                "label": mv.label,
-                "current": _ph(f"{key}_{y}a") if has(f"{key}_{y}a") else "—",
-                "prior": _ph(f"{key}_{y - 1}a") if has(f"{key}_{y - 1}a") else "—",
-                "yoy": _ph(f"{key}_yoy_{y}a") if has(f"{key}_yoy_{y}a") else "—",
-            }
-        )
+    #
+    # **3개년으로 낸다.** DART 응답이 당기·전기·전전기를 함께 주는데 두 해만
+    # 쓰고 있었다. 실제 증권사 리포트는 4개년(실적 2 + 추정 2)이 기본이다
+    # (벤치마크 실측: 재무제표 4종 × 4개년이 5쪽을 채운다).
+    def _series(keys: tuple[str, ...]) -> list[dict[str, str]]:
+        out: list[dict[str, str]] = []
+        for key in keys:
+            mv = ms.values.get(key)
+            if mv is None:
+                continue
+            cells = [
+                _ph(f"{key}_{year}a") if has(f"{key}_{year}a") else "—"
+                for year in (y - 2, y - 1, y)
+            ]
+            if all(c == "—" for c in cells):
+                continue
+            out.append(
+                {
+                    "label": mv.label,
+                    "y2": cells[0],
+                    "y1": cells[1],
+                    "current": cells[2],
+                    "prior": cells[1],
+                    "yoy": _ph(f"{key}_yoy_{y}a") if has(f"{key}_yoy_{y}a") else "—",
+                }
+            )
+        return out
+
+    rows = _series(INCOME_STATEMENT_METRICS)
+    balance_rows = _series(BALANCE_SHEET_METRICS)
+    cash_rows = _series(CASH_FLOW_METRICS)
+    # **`2024A` 표기를 쓴다.** 맨 연도(`2024`)는 G0가 미등록 숫자로 막는데
+    # 옳은 판정이다 — 그리고 실제 증권사 리포트도 실적/추정을 `A`/`F`로
+    # 가른다(벤치마크: `2024A 2025A 2026F 2027F`). 규칙과 관행이 같은 답을
+    # 가리킨다.
+    years = [f"{y - 2}A", f"{y - 1}A", f"{y}A"]
 
     narrative = (
         f"위 수치는 모두 {y}년 사업보고서({basis}재무제표)에서 확인된 값이며, "
@@ -439,7 +464,12 @@ def compose_sections(
         "investment_points": points,
         "earnings": {
             "period_label": f"{y}년",
+            "years": years,
             "table": rows,
+            # 재무제표 3종을 통째로 싣는다 — 이미 받고 있으면서 안 쓰던 것이다
+            # (삼성전기 2025 기준 재무상태표 50계정 · 현금흐름표 30계정).
+            "balance_table": balance_rows,
+            "cash_table": cash_rows,
             "segment_table": _segment_rows(y, p, segments),
             "segment_profit": _segment_profit_section(y, p, segment_profit),
             "narrative": narrative,
