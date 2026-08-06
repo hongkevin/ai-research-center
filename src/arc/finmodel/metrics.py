@@ -550,6 +550,36 @@ def build_entries(ms: MetricSet, prov: Provenance) -> list[NumberEntry]:
             inputs=[f"{key}_{y}a", f"{key}_{y - 1}a"],
         )
 
+    # ── 안정성 지표 ─────────────────────────────────────────────────
+    # 실제 증권사 리포트의 「주요 투자지표」 표에 성장성·수익성과 함께 서는
+    # 블록이다(코퍼스 189편 집계: 「안정성/유동비율/부채비율/순차입금」이
+    # 증권사 9% · 학생 0%). 재무상태표를 이제 읽으므로 계산할 수 있다.
+    #
+    # **순차입금은 아직 안 낸다.** 차입금 계정명이 회사마다 달라
+    # (`유동성장기차입금` · `사채 및 장기차입금`) 합산을 놓치면 **부채가 적어
+    # 보이는 방향으로** 틀린다. 틀린 순차입금은 없느니만 못하다.
+    for num, den, key, label, formula in (
+        (
+            "current_assets",
+            "current_liabilities",
+            "current_ratio",
+            "유동비율",
+            "유동자산 / 유동부채",
+        ),
+        ("total_liabilities", "total_equity", "debt_ratio", "부채비율", "부채총계 / 자본총계"),
+    ):
+        for year, getter in ((y, ms.get), (y - 1, ms.get_prior)):
+            v = margin(getter(num), getter(den))
+            add(
+                f"{key}_{year}a",
+                v,
+                "%",
+                fmt_pct(v),
+                f"{label} ({year}A)",
+                formula=formula,
+                inputs=[f"{num}_{year}a", f"{den}_{year}a"],
+            )
+
     # 매출 대비 비율 + 전년 대비 변화(pp)
     rev, rev_prior = ms.get("revenue"), ms.get_prior("revenue")
     for src, ratio, label in _MARGIN_SPECS:
