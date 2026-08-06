@@ -21,6 +21,8 @@ dependencies = [
     # 업로드 문서 → 마크다운 (D48). PDF는 실측 200편 추출 실패 0건.
     "pymupdf",
     "python-docx",
+    # 엑셀 내보내기 (D56). 모델에 붙여넣으려면 **숫자가 숫자여야** 한다.
+    "openpyxl",
 ]
 
 [project.scripts]
