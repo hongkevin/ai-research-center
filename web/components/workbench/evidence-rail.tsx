@@ -45,7 +45,10 @@ export function EvidenceRail({
                       e.preventDefault();
                       document
                         .getElementById(h.id)
-                        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        ?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
                     }}
                     className={`block text-muted-foreground hover:text-foreground ${
                       h.level === 3 ? "pl-3 text-[12px] opacity-80" : ""
@@ -55,6 +58,51 @@ export function EvidenceRail({
                   </a>
                 ))}
               </nav>
+            </CardContent>
+          </Card>
+        </RailSection>
+      )}
+
+      {/* **RA가 새 분기 노트를 열고 가장 먼저 묻는 것** — 지난번 내 노트에서
+          뭐가 바뀌었지. 목차 바로 밑에 둔다. */}
+      {vm.changes.length > 0 && (
+        <RailSection
+          title="직전 노트 대비"
+          count={vm.changes.length}
+          defaultOpen
+        >
+          <Card>
+            <CardContent className="py-3">
+              <Hint>{vm.changes_basis}</Hint>
+              <table className="mt-2 w-full text-[12px]">
+                <tbody>
+                  {vm.changes.map((c) => (
+                    <tr key={c.name} className="border-b last:border-b-0">
+                      <td className="py-1 pr-2 align-top">
+                        {c.direction === "변경" && (
+                          <Badge className="mr-1 border-transparent bg-bad/15 px-1 py-0 text-[10px] text-bad">
+                            변경
+                          </Badge>
+                        )}
+                        {c.name}
+                      </td>
+                      <td className="py-1 text-right align-top font-mono text-[11.5px] whitespace-nowrap text-muted-foreground">
+                        {c.previous}
+                      </td>
+                      <td className="py-1 pl-1.5 text-right align-top font-mono text-[11.5px] whitespace-nowrap text-num">
+                        {c.current}
+                      </td>
+                      <td
+                        className={`w-14 py-1 pl-2 text-right align-top font-mono text-[11.5px] whitespace-nowrap ${
+                          c.direction === "증가" ? "text-ok" : "text-bad"
+                        }`}
+                      >
+                        {c.change}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </CardContent>
           </Card>
         </RailSection>
@@ -72,9 +120,12 @@ export function EvidenceRail({
           <CardContent className="py-3">
             {vm.gate_passed ? (
               <>
-                <Badge className="bg-ok/15 text-ok border-transparent">● G0 통과</Badge>
+                <Badge className="bg-ok/15 text-ok border-transparent">
+                  ● G0 통과
+                </Badge>
                 <Hint>
-                  수치 정합성 · 컴플라이언스 · 필수 섹션 · 3중 디스클레이머를 모두 만족합니다.
+                  수치 정합성 · 컴플라이언스 · 필수 섹션 · 3중 디스클레이머를
+                  모두 만족합니다.
                 </Hint>
               </>
             ) : (
@@ -84,7 +135,10 @@ export function EvidenceRail({
                 </Badge>
                 <div className="mt-2.5 space-y-1.5">
                   {vm.violations.map((v, i) => (
-                    <div key={i} className="rounded-md bg-bad/10 px-2.5 py-1.5 text-[12.5px]">
+                    <div
+                      key={i}
+                      className="rounded-md bg-bad/10 px-2.5 py-1.5 text-[12.5px]"
+                    >
                       <b className="text-bad">{v.rule}</b>
                       {v.line ? ` · line ${v.line}` : ""}
                       <br />
@@ -112,11 +166,18 @@ export function EvidenceRail({
           <Card>
             <CardContent className="py-3">
               {vm.revisions.map((r, i) => (
-                <div key={i} className="flex justify-between text-[12.5px] py-1">
+                <div
+                  key={i}
+                  className="flex justify-between text-[12.5px] py-1"
+                >
                   <span>{r.label}</span>
                   <span
                     className={
-                      r.direction === "하향" ? "text-bad" : r.direction === "상향" ? "text-ok" : ""
+                      r.direction === "하향"
+                        ? "text-bad"
+                        : r.direction === "상향"
+                          ? "text-ok"
+                          : ""
                     }
                   >
                     {r.direction} {r.change}%
@@ -124,7 +185,8 @@ export function EvidenceRail({
                 </div>
               ))}
               <Hint>
-                직전 발간 대비. 조정 방향과 시점은 추정치 자체만큼 중요한 기록입니다.
+                직전 발간 대비. 조정 방향과 시점은 추정치 자체만큼 중요한
+                기록입니다.
               </Hint>
             </CardContent>
           </Card>
@@ -136,13 +198,18 @@ export function EvidenceRail({
           <Card>
             <CardContent className="py-3">
               {vm.bindings.map((b) => (
-                <div key={b.key} className="border-b py-1.5 text-[12px] last:border-b-0">
+                <div
+                  key={b.key}
+                  className="border-b py-1.5 text-[12px] last:border-b-0"
+                >
                   <div className="flex justify-between gap-2">
                     <b className="font-semibold">{b.label}</b>
                     <span>{b.value}</span>
                   </div>
                   {b.formula && (
-                    <div className="font-mono text-[11px] text-muted-foreground">{b.formula}</div>
+                    <div className="font-mono text-[11px] text-muted-foreground">
+                      {b.formula}
+                    </div>
                   )}
                   {b.document && (
                     <div className="font-mono text-[11px] text-muted-foreground">

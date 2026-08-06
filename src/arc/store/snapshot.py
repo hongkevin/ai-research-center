@@ -24,6 +24,8 @@ import pyarrow.parquet as pq
 
 _SNAPSHOT_PREFIX = "snapshot-"
 _TS_FORMAT = "%Y%m%dT%H%M%S%f"
+# 같은 시각 스냅샷의 조각 번호 구분자. 시각 형식에 없는 문자여야 한다.
+_PART_SEP = "__"
 
 
 class SnapshotStore:
@@ -57,7 +59,18 @@ class SnapshotStore:
 
         dataset_dir = self.base_dir / dataset
         dataset_dir.mkdir(parents=True, exist_ok=True)
-        path = dataset_dir / f"{_SNAPSHOT_PREFIX}{snapshot_at.strftime(_TS_FORMAT)}.parquet"
+        # **같은 시각에 두 번 저장될 수 있다.** 발간 스냅샷은 시각을 실행
+        # 시각이 아니라 **발간일**로 찍기 때문에(point-in-time), 하루에 두
+        # 종목을 발간하면 파일 이름이 같아진다. 예전에는 뒤엣것이 앞엣것을
+        # 덮어써서 **먼저 발간한 종목의 이력이 통째로 사라졌다** — 실측:
+        # 삼성물산을 낸 뒤 파마리서치를 내자 삼성물산 지문이 없어졌다.
+        # 시각은 의미이므로 그대로 두고, 파일 이름만 겹치지 않게 한다.
+        stamp = snapshot_at.strftime(_TS_FORMAT)
+        path = dataset_dir / f"{_SNAPSHOT_PREFIX}{stamp}.parquet"
+        n = 0
+        while path.exists():
+            n += 1
+            path = dataset_dir / f"{_SNAPSHOT_PREFIX}{stamp}{_PART_SEP}{n}.parquet"
         pq.write_table(table, path)
         return path
 
@@ -68,11 +81,12 @@ class SnapshotStore:
         dataset_dir = self.base_dir / dataset
         if not dataset_dir.exists():
             return []
-        out = []
+        seen: set[dt.datetime] = set()
         for p in sorted(dataset_dir.glob(f"{_SNAPSHOT_PREFIX}*.parquet")):
-            raw = p.stem.removeprefix(_SNAPSHOT_PREFIX)
-            out.append(dt.datetime.strptime(raw, _TS_FORMAT).replace(tzinfo=dt.UTC))
-        return out
+            # 같은 시각의 조각이 여럿일 수 있다 (`…-1.parquet`). 시각은 하나다.
+            raw = p.stem.removeprefix(_SNAPSHOT_PREFIX).split(_PART_SEP)[0]
+            seen.add(dt.datetime.strptime(raw, _TS_FORMAT).replace(tzinfo=dt.UTC))
+        return sorted(seen)
 
     def read_as_of(self, dataset: str, as_of: dt.datetime | None = None) -> list[dict]:
         """`as_of` 시점 이하 최신 스냅샷의 레코드를 반환한다 (point-in-time 조회).
@@ -85,9 +99,36 @@ class SnapshotStore:
         if not candidates:
             return []
         target = max(candidates)
-        path = self.base_dir / dataset / f"{_SNAPSHOT_PREFIX}{target.strftime(_TS_FORMAT)}.parquet"
+        # 그 시각의 **조각 전부**를 읽는다. 하나만 읽으면 같은 날 발간한 다른
+        # 종목이 보이지 않는다.
+        pattern = str(
+            self.base_dir / dataset / f"{_SNAPSHOT_PREFIX}{target.strftime(_TS_FORMAT)}*.parquet"
+        )
         with duckdb.connect() as con:
-            table = con.execute("SELECT * FROM read_parquet(?)", [str(path)]).fetch_arrow_table()
+            table = con.execute(
+                "SELECT * FROM read_parquet(?, union_by_name=true)", [pattern]
+            ).fetch_arrow_table()
+        return table.to_pylist()
+
+    def read_history(self, dataset: str) -> list[dict]:
+        """데이터셋의 **모든 스냅샷**을 합쳐 읽는다 (각 행에 snapshot_at 포함).
+
+        `read_as_of`는 스냅샷 **하나**를 통째로 돌려준다. 한 종목만 다룰 때는
+        맞지만, 여러 종목을 번갈아 발간하면 마지막 파일이 다른 종목 것이라
+        직전 이력을 못 찾는다 — 종목 A를 낸 뒤 B를 내면, A의 다음 노트가
+        "직전 발간 없음"이 된다. **종목별 이력에는 이쪽을 쓴다.**
+
+        as-of 재현(백테스트)에는 여전히 `read_as_of`가 맞다. 그쪽은 "그 시점에
+        알 수 있던 스냅샷 하나"를 묻는 질문이다.
+        """
+        dataset_dir = self.base_dir / dataset
+        if not dataset_dir.exists() or not self.list_snapshots(dataset):
+            return []
+        pattern = str(dataset_dir / f"{_SNAPSHOT_PREFIX}*.parquet")
+        with duckdb.connect() as con:
+            table = con.execute(
+                "SELECT * FROM read_parquet(?, union_by_name=true)", [pattern]
+            ).fetch_arrow_table()
         return table.to_pylist()
 
     def query(self, sql: str, params: list | None = None) -> list[dict]:

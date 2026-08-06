@@ -19,7 +19,6 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -41,6 +40,7 @@ from arc.data.kr.dart_document import (
 from arc.data.kr.dart_reports import DartReportProvider, PeriodicReportInfo
 from arc.data.kr.dart_toc import fetch_toc, locate
 from arc.data.kr.ksic import industry_name
+from arc.data.kr.news_filter import press_name
 from arc.finmodel.business import (
     BusinessProfile,
     build_business_entries,
@@ -990,9 +990,11 @@ def _header_rows(
 
 
 def _press_of(url: str) -> str:
-    """기사 URL → 매체. 도메인이 곧 매체다 — 검색 API가 이름을 주지 않는다."""
-    host = urlparse(url).netloc.removeprefix("www.")
-    return host or "—"
+    """기사 URL → 매체명. 아는 곳은 한글 이름, 모르는 곳은 도메인.
+
+    검색 API가 매체명을 주지 않아 도메인으로 가른다 (`data/kr/news_filter`).
+    """
+    return press_name(url) or "—"
 
 
 def link_to_sections(registry: NumberRegistry) -> int:
