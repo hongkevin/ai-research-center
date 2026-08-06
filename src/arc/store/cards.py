@@ -79,6 +79,9 @@ class Card:
     # 발간할 때 남길 노트 지문 (D46) — 다음 노트가 「직전 대비 무엇이
     # 달라졌는가」를 이 줄들과 비교해서 만든다.
     note_facts: list[dict] = field(default_factory=list)
+    # 사용자가 올린 직전 노트 (D48). 원문 마크다운 + 읽어낸 것.
+    # **여기 숫자는 본문에 안 들어간다** — 비교 패널과 구성 힌트에만 쓴다.
+    prior_note: dict = field(default_factory=dict)
     published_path: str = ""
 
     def summary(self) -> dict:

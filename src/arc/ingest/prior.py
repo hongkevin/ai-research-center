@@ -28,7 +28,9 @@ import json
 import re
 from dataclasses import dataclass, field
 
+from arc.finmodel.metrics import fmt_krw
 from arc.llm.client import Tier
+from arc.store.notes import NoteFacts
 
 # 노트에서 이만큼만 읽어 프롬프트에 넣는다. 리서치 노트의 추정 표는 앞쪽에
 # 있고, 뒤는 대개 재무제표 부록이다.
@@ -175,3 +177,53 @@ def _json_of(text: str) -> str:
         stripped = re.sub(r"^```[a-z]*\n?", "", stripped)
         stripped = re.sub(r"\n?```$", "", stripped)
     return stripped.strip()
+
+
+# 우리 레지스트리가 추정에 붙이는 라벨과 **같은 이름**이어야 비교가 물린다
+# (`finmodel/estimates.py`: `f"{label} ({y}E)"`).
+_METRIC_LABEL = {
+    "revenue": "매출액",
+    "operating_income": "영업이익",
+    "net_income": "당기순이익",
+}
+
+# 우리 기간과 절대 같지 않은 값. 같으면 `compare_notes`가 실적 금액까지
+# 비교하는데, 업로드 노트의 실적은 어느 기간인지 알 수 없다.
+UPLOAD_PERIOD = "UPLOAD"
+
+
+def as_facts(note: PriorNote, *, symbol: str, year: int) -> NoteFacts | None:
+    """직전 노트 → 비교용 지문. 추정치가 없으면 None.
+
+    **추정만 싣는다.** 업로드 노트의 실적치는 어느 기간(연간/분기/누적)인지
+    알 수 없어 비교하면 오독을 만든다. 추정은 연간 기준이라 안전하다.
+    """
+    if not note.estimates:
+        return None
+    values: dict[str, float] = {}
+    display: dict[str, str] = {}
+    units: dict[str, str] = {}
+    kinds: dict[str, str] = {}
+    for row in note.estimates:
+        y = row["year"]
+        for metric, label in _METRIC_LABEL.items():
+            value = row.get(metric)
+            if value is None:
+                continue
+            name = f"{label} ({y}E)"
+            values[name] = float(value)
+            display[name] = fmt_krw(int(value)) or str(value)
+            units[name] = "원"
+            kinds[name] = "estimate"
+    if not values:
+        return None
+    return NoteFacts(
+        symbol=symbol,
+        year=year,
+        period=UPLOAD_PERIOD,
+        published_at=note.source_name,
+        values=values,
+        display=display,
+        units=units,
+        kinds=kinds,
+    )

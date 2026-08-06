@@ -57,6 +57,8 @@ export default function Workbench() {
     period: "ANNUAL",
     llm: false,
     search: false,
+    prior_markdown: "",
+    prior_name: "",
     assume: "",
   });
   // 서버에 기사 검색 키가 있는가. 없으면 체크박스가 이유를 적고 잠긴다.
@@ -302,6 +304,18 @@ export default function Workbench() {
                 {/* **발간은 읽고 고친 뒤에 하는 일이다.** 한때 이 버튼이 초안
                     작성 폼에 있어서, 아무것도 안 만든 채로 「검토 완료」를 누를
                     수 있었다. */}
+                {/* 이 제품이 내는 것이 원래 마크다운이다. 사람이 그대로
+                    가져가 자기 도구에 붙일 수 있어야 한다 (D48). */}
+                {open.vm.gate_passed && (
+                  <a
+                    href={`/api/cards/${open.id}.md`}
+                    target="_blank"
+                    rel="noopener"
+                    className="text-[12px] text-muted-foreground hover:text-foreground"
+                  >
+                    Markdown으로 보기 ↗
+                  </a>
+                )}
                 {open.vm.gate_passed && !open.published_path && (
                   <Button
                     size="sm"

@@ -7,6 +7,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { CompanySearch } from "@/components/workbench/company-search";
 import { Hint, SectionLabel } from "@/components/workbench/section-label";
+import { PriorUpload } from "@/components/workbench/prior-upload";
 import { StageRail } from "@/components/workbench/stage-rail";
 import type { ViewModel } from "@/lib/api";
 import type { Step } from "@/lib/use-generation";
@@ -21,6 +22,9 @@ export interface FormState {
   llm: boolean;
   /** 최근 기사를 찾아 「최근 이슈」 절을 붙일 것인가 (D45). */
   search: boolean;
+  /** 업로드한 직전 노트 (D48). 숫자는 본문에 안 들어간다. */
+  prior_markdown: string;
+  prior_name: string;
   assume: string;
 }
 
@@ -209,6 +213,17 @@ export function GenerateForm({
             없습니다(연간 공시). 부문 손익과 재무제표는 그대로 나옵니다.
           </Hint>
         )}
+
+        <div className="mt-5">
+          <PriorUpload
+            value={state.prior_markdown}
+            name={state.prior_name}
+            disabled={busy}
+            onChange={(md, name) =>
+              onChange({ ...state, prior_markdown: md, prior_name: name })
+            }
+          />
+        </div>
 
         {/* 「문장까지 작성」이라고만 써 두면 누가 쓰는지가 안 보인다.
             AI가 하는 일과 하지 않는 일을 라벨에서 갈라 준다 — 수치는
