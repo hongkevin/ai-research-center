@@ -38,7 +38,7 @@ from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
 from arc.ingest.convert import ConvertError, convert
-from arc.ingest.prior import outline_of
+from arc.ingest.prior import UPLOAD_PERIOD, as_facts, outline_of, read_prior
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
@@ -376,6 +376,8 @@ def _generate(
     period: str = "ANNUAL",
     use_llm: bool,
     search: bool = False,
+    prior_markdown: str = "",
+    prior_name: str = "",
     overrides: dict[str, float],
     forward: list[dict[str, float]] | None = None,
     publish: bool = False,
@@ -416,6 +418,12 @@ def _generate(
             news_error = f"기사 검색 실패: {type(exc).__name__}"
             log.warning("뉴스 검색 실패 (%s): %s", symbol, exc)
 
+    # 사용자가 올린 직전 노트 (D48). 차례는 LLM 없이 나오므로 LLM이 꺼져
+    # 있어도 「구성 따라 쓰기」는 산다.
+    prior = None
+    if prior_markdown.strip():
+        prior = read_prior(client, prior_markdown, prior_name or "업로드 문서")
+
     # 저장소를 못 쓰면 **이력 없이 계속한다.** 볼륨이 안 붙었거나 경로가
     # 틀렸다고 생성이 죽으면 안 된다 — 추정 이력은 향상이지 필수가 아니다.
     store = _open_store()
@@ -431,6 +439,7 @@ def _generate(
         llm=client,
         store=store,
         news=news,
+        outline=prior.outline if prior is not None else None,
         assumptions=overrides or None,
         forward=forward or None,
         on_progress=on_progress,
@@ -440,6 +449,11 @@ def _generate(
     # 직전 발간 노트 대비 변화 (D46). **발간된 것만 비교 대상이다** — 만지작
     # 거린 미리보기까지 세면 「직전」이 무엇인지 알 수 없다 (D27).
     prev = previous_note(store, symbol, exclude=(r.fiscal_year, r.statement.period.value))
+    # **발간 이력이 없으면 업로드한 노트가 기준선이 된다** (D48). 첫 노트를
+    # 쓰는 사람에게 「직전 대비」가 비어 있는 것이 지금까지의 한계였다.
+    prior_facts = as_facts(prior, symbol=symbol, year=r.fiscal_year) if prior else None
+    if prev is None and prior_facts is not None:
+        prev = prior_facts
     if prev is not None:
         changes = rank(compare_notes(prev, _note_facts(r, published_at)))
         vm.changes = [
@@ -458,8 +472,12 @@ def _generate(
             }
             for c in changes
         ]
-        basis = f"{prev.label} 노트 대비 · 발간 {prev.published_at}"
-        if prev.period != r.statement.period.value:
+        if prev.period == UPLOAD_PERIOD:
+            basis = f"업로드한 노트 대비 — {prev.published_at}"
+            basis += " · 업로드 문서의 값은 우리가 검산하지 않았습니다"
+        else:
+            basis = f"{prev.label} 노트 대비 · 발간 {prev.published_at}"
+        if prev.period != UPLOAD_PERIOD and prev.period != r.statement.period.value:
             # 기간이 다르면 실적 금액은 빠진다. **왜 빠졌는지 안 쓰면**
             # "매출이 왜 목록에 없지"가 된다.
             basis += " · 기간이 달라 실적 금액은 빼고 비율·구성·추정만 비교했습니다"
@@ -487,6 +505,19 @@ def _generate(
         # 발간할 때 남길 노트 지문 (D46). 발간은 읽고 고친 뒤에 하는 일이라
         # 그때까지 카드가 들고 있어야 한다 — 추정 스냅샷과 같은 이유다.
         "note_facts": note_rows(_note_facts(r, published_at)),
+        "prior_note": (
+            {
+                "source_name": prior.source_name,
+                "outline": prior.outline,
+                "target_price": prior.target_price,
+                "rating": prior.rating,
+                "estimates": prior.estimates,
+                "problems": prior.problems,
+                "markdown": prior_markdown,
+            }
+            if prior is not None
+            else {}
+        ),
         "estimate_snapshot": (
             {
                 "fiscal_year": est.fiscal_year,
@@ -642,6 +673,8 @@ def api_start_job(payload: dict):
     period = str(payload.get("period", "ANNUAL"))
     use_llm = bool(payload.get("llm", False))
     search = bool(payload.get("search", False))
+    prior_markdown = str(payload.get("prior_markdown", "") or "")
+    prior_name = str(payload.get("prior_name", "") or "")
     publish = bool(payload.get("publish", False))
     try:
         symbol = _resolve_symbol(symbol)
@@ -678,6 +711,8 @@ def api_start_job(payload: dict):
                 period=period,
                 use_llm=use_llm,
                 search=search,
+                prior_markdown=prior_markdown,
+                prior_name=prior_name,
                 overrides=overrides,
                 publish=publish,
                 on_progress=job.emit,
@@ -709,6 +744,7 @@ def _land_card(
     card.registry = doc.get("registry", [])
     card.estimate_snapshot = doc.get("estimate_snapshot", {})
     card.note_facts = doc.get("note_facts", [])
+    card.prior_note = doc.get("prior_note", {})
     card.company = vm.company
     card.error = vm.error
     card.attention = attention_reasons(data)
@@ -1166,6 +1202,7 @@ def api_recompute(card_id: str, payload: dict):
     card.registry = doc.get("registry", [])
     card.estimate_snapshot = doc.get("estimate_snapshot", {})
     card.note_facts = doc.get("note_facts", [])
+    card.prior_note = doc.get("prior_note", {})
     card.attention = attention_reasons(card.vm)
     card.column = column_for(card.vm, confirmed=card.confirmed, published=False)
     card.versions.append(

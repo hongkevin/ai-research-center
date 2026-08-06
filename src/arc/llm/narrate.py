@@ -151,11 +151,17 @@ def build_user_prompt(
     basis: str,
     registry: NumberRegistry,
     thesis: str | None = None,
+    outline: list[str] | None = None,
 ) -> str:
     """카탈로그(크기 없음) + 논지 + 과업 지시.
 
     `thesis`는 결정적 코드가 뽑아낸 관찰이다. 이게 없으면 LLM이 쓸 수 있는
     것이 재무 기계학뿐이라 지표를 하나씩 읊는 글이 된다.
+
+    `outline`은 **사용자가 올린 직전 노트의 차례**다([D48](../../../docs/decisions.md#d48)).
+    하우스마다 리포트 구성이 다르고, RA는 자기 형식과 다른 초안을 다시 짜야
+    한다. 차례를 주면 그 순서와 강조점에 맞춰 쓴다 — **숫자는 여전히
+    카탈로그에서만 나온다.**
     """
     lines = []
     for e in registry.catalog():
@@ -164,6 +170,14 @@ def build_user_prompt(
     head = f"# 대상\n{company_name} · {fiscal_year}년 연간 실적 ({basis}재무제표)\n\n"
     if thesis:
         head += f"# 확인된 관찰 (결정적 계산 결과 — 이것을 논지의 축으로 삼으십시오)\n{thesis}\n\n"
+    if outline:
+        head += (
+            "# 이 독자가 쓰는 리포트 구성 (직전 노트의 차례)\n"
+            + "\n".join(f"- {s}" for s in outline[:12])
+            + "\n\n이 순서와 강조점에 맞춰 쓰십시오. **차례를 그대로 제목으로 쓰지는 "
+            "마십시오** — 아래 과업이 요구하는 섹션에 담되, 이 독자가 중요하게 "
+            "보는 것이 무엇인지의 단서로 쓰십시오.\n\n"
+        )
     return (
         head
         + "# 수치 카탈로그 (크기는 제공하지 않습니다. 키와 방향만 쓰십시오)\n"
@@ -226,10 +240,11 @@ def narrate(
     basis: str,
     registry: NumberRegistry,
     thesis: str | None = None,
+    outline: list[str] | None = None,
     max_attempts: int = 2,
 ) -> NarrationResult:
     """LLM으로 섹션 본문을 만든다. 실패 시 problems를 채워 반환한다."""
-    user = build_user_prompt(company_name, fiscal_year, basis, registry, thesis)
+    user = build_user_prompt(company_name, fiscal_year, basis, registry, thesis, outline)
     problems: list[str] = []
     last: Completion | None = None
 

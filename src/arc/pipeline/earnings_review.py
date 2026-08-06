@@ -1213,6 +1213,8 @@ def build_report(
     with_segments: bool = True,
     # 최근 기사 스니펫. **주면 미검증 레인이 하나 더 열린다** (D45).
     news: list[NewsItem] | None = None,
+    # 사용자가 올린 직전 노트의 섹션 차례 (D48). 있으면 그 구성에 맞춰 쓴다.
+    outline: list[str] | None = None,
     on_progress: Callable[[str, str], None] | None = None,
 ) -> ReportResult:
     """S1 → S6b 관통.
@@ -1557,6 +1559,7 @@ def build_report(
             basis=basis,
             registry=registry,
             thesis="\n".join(f"- {o}" for o in obs) if obs else None,
+            outline=outline,
         )
         if narration.used_llm:
             # 결정론 골격 위에 LLM 문장만 덮는다. 표·가정·디스클레이머는 그대로.

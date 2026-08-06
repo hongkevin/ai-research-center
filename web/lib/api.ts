@@ -376,6 +376,32 @@ export async function getCompany(symbol: string): Promise<CompanyInfo | null> {
   return r.ok ? r.json() : null;
 }
 
+export interface Converted {
+  markdown: string;
+  source_name: string;
+  kind: string;
+  pages: number;
+  chars: number;
+  warnings: string[];
+  outline: string[];
+}
+
+/**
+ * 업로드 문서 → 마크다운. **저장하지 않고 돌려만 준다.**
+ *
+ * 오래된 PDF는 글자가 부분적으로 깨져 나올 수 있는데 통계로는 정상 문서와
+ * 안 갈린다. 그래서 변환 결과를 사람이 보고 넘긴다 (D48).
+ */
+export async function convertFile(
+  file: File,
+): Promise<Converted | { error: string }> {
+  const body = new FormData();
+  body.append("file", file);
+  const r = await api("/api/convert", { method: "POST", body });
+  const d = await r.json().catch(() => ({}));
+  return r.ok ? d : { error: d.error ?? `HTTP ${r.status}` };
+}
+
 export interface JobRequest {
   symbol: string;
   year: number;
@@ -383,6 +409,9 @@ export interface JobRequest {
   llm: boolean;
   /** 최근 기사를 찾아 「최근 이슈」 절을 붙일 것인가 (D45). */
   search: boolean;
+  /** 업로드한 직전 노트의 마크다운 (D48). 숫자는 본문에 안 들어간다. */
+  prior_markdown: string;
+  prior_name: string;
   assume: string;
   publish: boolean;
 }
