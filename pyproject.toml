@@ -18,6 +18,9 @@ dependencies = [
     "python-dotenv",
     "typer>=0.12",
     "markdown-it-py",
+    # 업로드 문서 → 마크다운 (D48). PDF는 실측 200편 추출 실패 0건.
+    "pymupdf",
+    "python-docx",
 ]
 
 [project.scripts]
