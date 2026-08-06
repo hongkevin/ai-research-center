@@ -75,7 +75,10 @@ class KrxPriceProvider(DataProvider):
                 break
             page_no += 1
         # API는 단축코드 like 검색이므로 정확히 일치하는 종목만 남긴다
-        return [p for p in points if p.symbol == symbol]
+        # **날짜순으로 세운다.** API는 최신순으로 주는데 그대로 돌려주면
+        # 부르는 쪽이 `points[-1]`을 최신으로 알고 집어 **가장 오래된 값**을
+        # 쓴다 — 실측으로 08-05 대신 07-20을 썼다.
+        return sorted((p for p in points if p.symbol == symbol), key=lambda p: p.date)
 
     @staticmethod
     def _check_body(payload: dict) -> dict:

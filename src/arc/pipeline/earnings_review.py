@@ -15,6 +15,7 @@ S4가 아직 LLM이 아닌 이유: 게이트·계산·조립이 먼저 검증돼
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -98,6 +99,8 @@ from arc.finmodel.valuation import (
 )
 from arc.llm.number_registry import NumberEntry, NumberRegistry, mask_numbers
 from arc.verify.g0 import G0Gate, GateResult
+
+log = logging.getLogger("arc.pipeline")
 
 TEMPLATE_NAME = "earnings_review.md.j2"
 
@@ -934,6 +937,14 @@ def _method_notes(
                 "주가는 공시된 주당배당금과 배당수익률에서 역산한 값이며 특정일 종가가 아니다. "
                 "시가총액·PER·PBR은 참고치다."
             )
+        elif valuation.price_date:
+            # **어느 날 종가인지 밝힌다.** 밸류에이션은 언제 찍은 값이냐에
+            # 따라 달라진다 — 날짜 없는 PER은 검증할 수 없다.
+            notes.append(
+                f"주가는 {valuation.price_date} 종가(금융위 주식시세정보)이며, "
+                "시가총액·PER·PBR은 그 시점 기준이다. 실적은 사업연도 기준이라 "
+                "두 시점이 다르다."
+            )
         if valuation.has_preferred and valuation.market_cap is not None:
             notes.append("우선주가 있어 보통주 주가로 계산한 시가총액은 실제와 다를 수 있다.")
         if valuation.shares_issued and not valuation.shares_reconciled:
@@ -1047,7 +1058,11 @@ def _header_rows(
     # 주가는 **배당에서 역산한 값**이라 늘 있지는 않다 (D19). 없으면 두 줄이
     # 통째로 빠진다 — 시세 피드가 붙기 전까지는 그게 정직하다.
     if valuation is not None and valuation.has_price_anchor:
-        label = "역산 주가" if valuation.is_implied else "주가"
+        label = (
+            "역산 주가"
+            if valuation.is_implied
+            else (f"주가 ({valuation.price_date})" if valuation.price_date else "주가")
+        )
         rows.append({"label": "시가총액", "value": _ph(f"market_cap_{y}a")})
         rows.append({"label": label, "value": _ph(f"price_{y}a")})
 
@@ -1069,6 +1084,38 @@ def _shares_detail(sh) -> str:
         return body
     gap = issued - (treasury or 0) - out
     return f"{body} (계산상 {issued - (treasury or 0):,}, 차이 {gap:+,}주)"
+
+
+# 시세 조회는 종목·날짜당 한 번이면 된다. 가정을 바꿔 다시 계산할 때마다
+# 부르면 호출이 그만큼 는다 (뉴스 캐시와 같은 이유).
+_PRICE_CACHE: dict[tuple[str, str], tuple[int | None, str | None]] = {}
+
+
+def _close_price(symbol: str, as_of: dt.date | None) -> tuple[int | None, str | None]:
+    """가장 최근 EOD 종가와 그 날짜. 키가 없거나 실패하면 `(None, None)`.
+
+    **실패해도 노트는 나온다.** 시세는 향상이지 전제가 아니다 — 키가 없는
+    환경에서는 배당 역산 앵커로 물러난다(D19).
+    """
+    if not os.environ.get("KRX_API_KEY"):
+        return None, None
+    day = as_of or dt.datetime.now(dt.UTC).date()
+    ck = (symbol, day.isoformat())
+    if ck in _PRICE_CACHE:
+        return _PRICE_CACHE[ck]
+    got: tuple[int | None, str | None] = (None, None)
+    try:
+        from arc.data.kr.krx_price import KrxPriceProvider
+
+        # 휴장·연휴를 감안해 넉넉히 본다. 마지막 거래일을 쓴다.
+        points = KrxPriceProvider().get_prices(symbol, day - dt.timedelta(days=20), day)
+        if points:
+            last = points[-1]
+            got = (int(last.close), last.date.isoformat())
+    except Exception as exc:  # noqa: BLE001 — 시세가 없어도 노트는 나온다
+        log.warning("시세를 읽지 못했습니다 (%s): %s", symbol, exc)
+    _PRICE_CACHE[ck] = got
+    return got
 
 
 def _press_of(url: str) -> str:
@@ -1373,7 +1420,11 @@ def build_report(
             st.status = "failed"
             st.note = info_error
         else:
-            valuation = build_valuation(ms, info)
+            # **실제 종가를 쓴다.** 배당 역산은 특정일 종가가 아니라 회계연도
+            # 전체를 뭉갠 값이다 (D19 → D60). 시세가 없으면 예전처럼 역산으로
+            # 물러난다 — 키가 없는 환경에서도 노트는 나와야 한다.
+            close_price, close_date = _close_price(symbol, published_at)
+            valuation = build_valuation(ms, info, close_price=close_price, close_date=close_date)
             registry.register_all(build_valuation_entries(valuation, info, stmt.provenance))
             st.registered = len(registry) - before
             got = [
