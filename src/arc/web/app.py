@@ -32,11 +32,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
+from arc.ingest.convert import ConvertError, convert
+from arc.ingest.prior import outline_of
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
@@ -861,6 +863,51 @@ def api_company_reports(symbol: str, back_days: int = 900):
             for d in ([unread_preliminary(ds)] if unread_preliminary(ds) else [])
         ],
     }
+
+
+@app.post("/api/convert")
+async def api_convert(request: Request):
+    """업로드 문서 → 마크다운. **저장하지 않고 돌려만 준다.**
+
+    변환 결과를 사람이 먼저 본다. 오래된 PDF는 글자가 부분적으로 깨져 나올 수
+    있는데(실측: 2009년 리포트에서 「매출액」이 「매춗액」으로) 통계로는 정상
+    문서와 안 갈린다. 자동 판정을 붙여 거짓 경고를 내느니 **보고 넘기게** 한다.
+    """
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return JSONResponse({"error": "파일이 없습니다."}, status_code=400)
+    data = await upload.read()
+    try:
+        got = convert(data, getattr(upload, "filename", "") or "upload")
+    except ConvertError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    return {
+        "markdown": got.markdown,
+        "source_name": got.source_name,
+        "kind": got.kind,
+        "pages": got.pages,
+        "chars": got.chars,
+        "warnings": got.warnings,
+        "outline": outline_of(got.markdown),
+    }
+
+
+@app.get("/api/cards/{card_id}.md", response_class=PlainTextResponse)
+def api_card_markdown(card_id: str):
+    """노트를 **마크다운 원문**으로. 화면 주소에 `.md`를 붙이면 나온다.
+
+    이 제품이 내는 것이 원래 마크다운이다. 사람이 그걸 그대로 가져가 자기
+    도구에 붙일 수 있어야 한다 — 발간 파일을 찾아 들어가지 않고.
+    """
+    _, card, err = _load_card(card_id)
+    if err is not None:
+        return PlainTextResponse("찾을 수 없습니다.", status_code=404)
+    if not card.assembled:
+        return PlainTextResponse("아직 본문이 없습니다.", status_code=409)
+    registry = NumberRegistry.load(card.registry)
+    return registry.render_text(card.assembled)
 
 
 @app.get("/api/health")
