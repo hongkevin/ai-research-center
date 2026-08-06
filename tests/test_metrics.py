@@ -44,9 +44,11 @@ class TestStabilityRatios:
         got = self._entries(current_assets=200, current_liabilities=100)
         assert got["current_ratio_2025a"].value == 200.0
 
-    def test_debt_ratio(self):
+    def test_debt_ratio_is_left_to_valuation(self):
+        """**한 수치는 하나의 원천만 갖는다.** `valuation.py`가 이미 만든다 —
+        두 곳에서 만들면 레지스트리가 중복 키로 막는다(실제로 막혔다)."""
         got = self._entries(total_liabilities=50, total_equity=100)
-        assert got["debt_ratio_2025a"].value == 50.0
+        assert "debt_ratio_2025a" not in got
 
     def test_missing_denominator_makes_no_entry(self):
         """분모가 없으면 만들지 않는다. 0으로 채우면 거짓이 된다."""
@@ -54,8 +56,8 @@ class TestStabilityRatios:
 
     def test_formula_is_recorded(self):
         """감사 추적 — 어떻게 나온 값인지 남아야 한다."""
-        got = self._entries(total_liabilities=50, total_equity=100)
-        assert got["debt_ratio_2025a"].formula == "부채총계 / 자본총계"
+        got = self._entries(current_assets=200, current_liabilities=100)
+        assert got["current_ratio_2025a"].formula == "유동자산 / 유동부채"
 
     def test_net_debt_is_not_guessed(self):
         """**순차입금은 아직 안 낸다.** 차입금 계정명이 회사마다 달라

@@ -214,6 +214,36 @@ _MARGIN_SPECS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+# 차입금으로 세는 계정. **표준계정 코드가 없어 이름으로 모은다** —
+# 회사마다 다르다: `유동성장기차입금`·`사채 및 장기차입금`·`유동성전환사채`.
+_DEBT_WORDS = ("차입", "사채")
+# 이자비용·이자지급은 차입금이 아니다
+_DEBT_EXCLUDE = ("이자", "상환", "차입금의")
+
+
+def borrowings(stmt) -> tuple[int, list[tuple[str, int]]]:
+    """재무상태표의 총차입금과 **그 구성**.
+
+    구성을 함께 돌려주는 것이 이 함수의 요점이다. 차입금은 표준계정 코드가
+    없어 이름으로 모을 수밖에 없는데, 놓치면 **부채가 적어 보이는 방향으로**
+    틀린다. 그래서 무엇을 더했는지 화면에 낸다 — 사람이 보면 안다.
+
+    실측(5사): 삼성전기 3건 · 삼성물산 2건(`사채 및 장기차입금`) ·
+    삼성전자 3건 · HMM 2건 · 파마리서치 5건(`유동성전환사채` 포함).
+    """
+    parts: list[tuple[str, int]] = []
+    for item in stmt.items:
+        if item.statement_type != "BS" or item.amount is None:
+            continue
+        name = item.account_name
+        if not any(w in name for w in _DEBT_WORDS):
+            continue
+        if any(w in name for w in _DEBT_EXCLUDE):
+            continue
+        parts.append((name, item.amount))
+    return sum(v for _, v in parts), parts
+
+
 def _norm(s: str) -> str:
     """계정명 정규화 — 공백·중점 제거."""
     return re.sub(r"[\s·・]", "", s or "")
@@ -555,9 +585,12 @@ def build_entries(ms: MetricSet, prov: Provenance) -> list[NumberEntry]:
     # 블록이다(코퍼스 189편 집계: 「안정성/유동비율/부채비율/순차입금」이
     # 증권사 9% · 학생 0%). 재무상태표를 이제 읽으므로 계산할 수 있다.
     #
-    # **순차입금은 아직 안 낸다.** 차입금 계정명이 회사마다 달라
-    # (`유동성장기차입금` · `사채 및 장기차입금`) 합산을 놓치면 **부채가 적어
-    # 보이는 방향으로** 틀린다. 틀린 순차입금은 없느니만 못하다.
+    # **부채비율은 여기서 만들지 않는다** — `valuation.py`가 이미
+    # `debt_ratio_{y}a`로 등록한다. 두 곳에서 만들면 레지스트리가 중복 키로
+    # 막는다(실제로 막혔다). **한 수치는 하나의 원천만 갖는다.**
+    #
+    # 순차입금은 계정명이 회사마다 달라 파이프라인이 구성 계정을 함께
+    # 보여주며 만든다(D59) — 여기서 조용히 만들면 검산할 수 없다.
     for num, den, key, label, formula in (
         (
             "current_assets",
@@ -566,7 +599,6 @@ def build_entries(ms: MetricSet, prov: Provenance) -> list[NumberEntry]:
             "유동비율",
             "유동자산 / 유동부채",
         ),
-        ("total_liabilities", "total_equity", "debt_ratio", "부채비율", "부채총계 / 자본총계"),
     ):
         for year, getter in ((y, ms.get), (y - 1, ms.get_prior)):
             v = margin(getter(num), getter(den))
