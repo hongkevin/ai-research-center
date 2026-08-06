@@ -7,7 +7,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { CompanySearch } from "@/components/workbench/company-search";
 import { Hint, SectionLabel } from "@/components/workbench/section-label";
-import { PriorUpload } from "@/components/workbench/prior-upload";
 import { hasPeriodicInfo, periodKey, type PeriodCode } from "@/lib/periods";
 import type { Filing, Preliminary } from "@/lib/api";
 
@@ -57,6 +56,8 @@ export function GenerateForm({
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     onChange({ ...state, [k]: v });
 
+  const prior = state.prior_name;
+
   // 평소엔 최신만 보인다. 과거 재현이 필요할 때만 목록을 연다.
   const [picking, setPicking] = useState(false);
   const current = filings.find(
@@ -65,6 +66,23 @@ export function GenerateForm({
 
   return (
     <div>
+      {prior && (
+        <div className="mb-5 flex items-center justify-between gap-2 rounded-md border px-3 py-2">
+          <span className="min-w-0 truncate text-[12px]">
+            <span className="text-muted-foreground">이어쓰기 · </span>
+            {prior}
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              onChange({ ...state, prior_markdown: "", prior_name: "" })
+            }
+            className="flex-none text-[11.5px] text-muted-foreground hover:text-bad"
+          >
+            해제
+          </button>
+        </div>
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -178,17 +196,6 @@ export function GenerateForm({
             없습니다(연간 공시). 부문 손익과 재무제표는 그대로 나옵니다.
           </Hint>
         )}
-
-        <div className="mt-5">
-          <PriorUpload
-            value={state.prior_markdown}
-            name={state.prior_name}
-            disabled={busy}
-            onChange={(md, name) =>
-              onChange({ ...state, prior_markdown: md, prior_name: name })
-            }
-          />
-        </div>
 
         {/* 「문장까지 작성」이라고만 써 두면 누가 쓰는지가 안 보인다.
             AI가 하는 일과 하지 않는 일을 라벨에서 갈라 준다 — 수치는
