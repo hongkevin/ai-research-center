@@ -86,7 +86,7 @@ def _write_matrix(ws, rows: list[tuple[str, dict[int, float], str]], years: list
         ws.column_dimensions[chr(64 + c)].width = 15
 
 
-def _collect(registry: list[dict]) -> tuple[dict, dict, list[int]]:
+def collect_series(registry: list[dict]) -> tuple[dict, dict, list[int]]:
     """레지스트리 → {지표: {연도: 값}} · {지표: (라벨, 단위)} · 연도 목록."""
     values: dict[str, dict[int, float]] = defaultdict(dict)
     meta: dict[str, tuple[str, str]] = {}
@@ -141,7 +141,7 @@ def note_to_xlsx(
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
-    values, meta, years = _collect(registry)
+    values, meta, years = collect_series(registry)
     wb = Workbook()
     wb.remove(wb.active)
 

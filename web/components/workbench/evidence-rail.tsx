@@ -6,6 +6,7 @@ import type { Heading } from "@/components/note/note-body";
 import { Assumptions } from "@/components/workbench/assumptions";
 import { RailSection } from "@/components/workbench/rail-section";
 import { Hint } from "@/components/workbench/section-label";
+import { ModelFill } from "@/components/workbench/model-fill";
 import { RevisionHistory } from "@/components/workbench/revision-history";
 import type { Revision, ViewModel } from "@/lib/api";
 
@@ -43,12 +44,10 @@ export function EvidenceRail({
                     href={`#${h.id}`}
                     onClick={(e) => {
                       e.preventDefault();
-                      document
-                        .getElementById(h.id)
-                        ?.scrollIntoView({
-                          behavior: "smooth",
-                          block: "start",
-                        });
+                      document.getElementById(h.id)?.scrollIntoView({
+                        behavior: "smooth",
+                        block: "start",
+                      });
                     }}
                     className={`block text-muted-foreground hover:text-foreground ${
                       h.level === 3 ? "pl-3 text-[12px] opacity-80" : ""
@@ -103,6 +102,18 @@ export function EvidenceRail({
                   ))}
                 </tbody>
               </table>
+            </CardContent>
+          </Card>
+        </RailSection>
+      )}
+
+      {/* **모델 관리가 RA 업무의 중심이다** (D55). 우리가 검산한 숫자를
+          그 사람의 모델에 넣어 준다 — 수식은 건드리지 않고. */}
+      {cardId && vm.gate_passed && (
+        <RailSection title="모델 채우기" count="Excel">
+          <Card>
+            <CardContent className="py-3">
+              <ModelFill cardId={cardId} />
             </CardContent>
           </Card>
         </RailSection>
