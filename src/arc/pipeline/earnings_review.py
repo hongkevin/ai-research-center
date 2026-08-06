@@ -989,6 +989,22 @@ def _header_rows(
     return rows
 
 
+def _shares_detail(sh) -> str:
+    """주식수 검산 결과를 **숫자로** 보여준다.
+
+    「불일치」 한 마디로는 어디를 볼지 알 수 없다. 발행·자기주식·유통을 나란히
+    놓고 차이를 적으면 사람이 어느 칸이 이상한지 바로 안다.
+    """
+    issued, treasury, out = sh.issued, sh.treasury, sh.outstanding
+    if issued is None or out is None:
+        return "일치" if sh.reconciled else "확인 불가"
+    body = f"{issued:,} − {treasury or 0:,} = {out:,}"
+    if sh.reconciled:
+        return body
+    gap = issued - (treasury or 0) - out
+    return f"{body} (계산상 {issued - (treasury or 0):,}, 차이 {gap:+,}주)"
+
+
 def _press_of(url: str) -> str:
     """기사 URL → 매체명. 아는 곳은 한글 이름, 모르는 곳은 도메인.
 
@@ -1310,19 +1326,37 @@ def build_report(
             # **무엇을 못 받았는지는 이미 알고 있다.** 조용히 넘기면 커버리지
             # 문제가 숨는다 — 어댑터가 `unavailable`에 남긴 것을 그대로 낸다.
             if info.unavailable:
-                st.status = "partial"
-                # **영어 필드명을 그대로 내보내면 안 된다.** 화면에 `shares,
-                # dividend, workforce`가 그대로 찍히고 있었다.
-                st.note = "받지 못한 것: " + ", ".join(
-                    _INFO_LABEL.get(k, k) for k in info.unavailable
+                # **분기·반기에는 이 6종이 아예 없다** — 연간 공시다. 정상
+                # 부재를 `partial`로 두면 카드가 늘 「확인 필요」가 된다
+                # (D39: `absent`와 `failed`를 반드시 구분한다).
+                if not got and period is not PeriodType.ANNUAL:
+                    st.status = "absent"
+                    st.note = (
+                        "주식수·배당·감사의견·인력·지분·출자는 사업보고서에만 실립니다. "
+                        "분기·반기보고서에는 원래 없습니다."
+                    )
+                else:
+                    st.status = "partial"
+                    # **영어 필드명을 그대로 내보내면 안 된다.** 화면에 `shares,
+                    # dividend, workforce`가 그대로 찍히고 있었다.
+                    st.note = "받지 못한 것: " + ", ".join(
+                        _INFO_LABEL.get(k, k) for k in info.unavailable
+                    )
+            # **없는 것과 틀린 것을 구분한다.** `shares_reconciled`는 기본값이
+            # `False`라, 주식수를 아예 못 받아도 「불일치」로 나왔다 — 실측:
+            # 삼성전기 카드가 「0/6종」인데 「발행주식 − 자기주식 = 유통주식
+            # 불일치」를 띄웠다. 검산할 자료가 없으면 검산 결과도 없다.
+            st.checks = []
+            if info.shares is not None:
+                sh = info.shares
+                st.checks.append(
+                    {
+                        "label": "발행주식 − 자기주식 = 유통주식",
+                        # **숫자를 보여준다.** 「불일치」만 보면 어디를 볼지 모른다.
+                        "value": _shares_detail(sh),
+                        "ok": sh.reconciled,
+                    }
                 )
-            st.checks = [
-                {
-                    "label": "발행주식 − 자기주식 = 유통주식",
-                    "value": "일치" if valuation.shares_reconciled else "불일치",
-                    "ok": valuation.shares_reconciled,
-                },
-            ]
             # EPS 교차검증 — 재무제표 희석EPS vs 배당공시 주당순이익
             if valuation.eps_stmt is not None and valuation.eps_disclosed is not None:
                 same = valuation.eps_stmt == valuation.eps_disclosed
