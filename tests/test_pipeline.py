@@ -383,3 +383,75 @@ class TestPeriodicInfoCheck:
 
         got = _shares_detail(Sh())
         assert "95,000" in got and "+5,000주" in got
+
+
+class TestHeaderRows:
+    """헤더는 **줄마다 따로 확인한다** (D63).
+
+    실측: 분기 카드에서 KRX 종가는 있는데 주식수가 0/6종이라 `market_cap`이
+    등록되지 않았고, 헤더가 그 플레이스홀더를 참조해 게이트가
+    `unknown_placeholder`로 막았다. D61에서 주가 출처를 배당 공시에서 시세로
+    옮기며 생긴 회귀다 — 전에는 주가와 주식수가 같은 공시에서 함께 왔다.
+    """
+
+    def _rows(self, registered: set[str], *, implied: bool = False):
+        import datetime as dt
+
+        from arc.data.base import (
+            Company,
+            ConsolidationType,
+            Market,
+            PeriodType,
+            Provenance,
+        )
+        from arc.finmodel.metrics import MetricSet
+        from arc.finmodel.valuation import ValuationSet
+        from arc.pipeline.earnings_review import _header_rows
+
+        v = ValuationSet(fiscal_year=2026)
+        v.price = 49_000
+        v.is_implied = implied
+        v.price_date = None if implied else "2026-08-05"
+        company = Company(
+            symbol="489790",
+            name="한화비전(주)",
+            market=Market.KOSPI,
+            provenance=Provenance(
+                source="opendart", retrieved_at=dt.datetime(2026, 8, 6, tzinfo=dt.UTC)
+            ),
+        )
+        return _header_rows(
+            company,
+            MetricSet(fiscal_year=2026),
+            published_at=dt.date(2026, 8, 6),
+            period=PeriodType.Q1,
+            consolidation=ConsolidationType.CONSOLIDATED,
+            valuation=v,
+            info=None,
+            statement=None,
+            has=registered.__contains__,
+        )
+
+    def test_price_without_market_cap_does_not_emit_the_missing_row(self):
+        """**주가가 있다고 시가총액이 있는 것은 아니다** — 시가총액에는
+        발행주식수가 필요한데 그건 사업보고서에만 실린다."""
+        labels = [r["label"] for r in self._rows({"price_2026a"})]
+        assert any("주가" in x for x in labels)
+        assert "시가총액" not in labels
+
+    def test_both_rows_when_both_registered(self):
+        labels = [r["label"] for r in self._rows({"price_2026a", "market_cap_2026a"})]
+        assert "시가총액" in labels and any("주가" in x for x in labels)
+
+    def test_neither_row_when_nothing_registered(self):
+        labels = [r["label"] for r in self._rows(set())]
+        assert "시가총액" not in labels and not any("주가" in x for x in labels)
+
+    def test_price_date_is_shown(self):
+        """날짜 없는 PER은 검증할 수 없다 (D61)."""
+        labels = [r["label"] for r in self._rows({"price_2026a"})]
+        assert "주가 (2026-08-05)" in labels
+
+    def test_implied_price_says_so(self):
+        labels = [r["label"] for r in self._rows({"price_2026a"}, implied=True)]
+        assert "역산 주가" in labels
