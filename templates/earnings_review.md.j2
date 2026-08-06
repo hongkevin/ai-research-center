@@ -130,8 +130,21 @@
 
 {{ earnings.narrative }}
 
+{% if earnings.quarter_table %}
+### 4.1 분기 추이
+
+{# **누적에서 뺀 단독 분기다.** DART는 누적만 주므로 1Q는 그대로, 이후는
+   직전 누적을 뺀다. 한 칸이라도 비면 그 분기를 만들지 않는다 (D57).
+
+   표를 여기서 `for`로 돌리지 않는다 — `trim_blocks`가 블록 태그 뒤 개행을
+   먹어 표가 한 줄로 붙는다. 열 수가 가변인 표는 파이썬이 만든다. #}
+{{ earnings.quarter_table }}
+
+분기 수치는 정기보고서의 누적 금액에서 직전 누적을 빼서 산출했습니다. 4분기는 연간에서 3분기 누적을 뺀 값이라 결산 조정이 그대로 반영됩니다.
+
+{% endif %}
 {% if earnings.balance_table %}
-### 4.1 재무상태
+### 4.2 재무상태
 
 {# 실제 리포트는 재무제표 3종을 통째로 싣는다. 우리는 이 계정들을 이미 받고
    있으면서 노트에 안 쓰고 있었다. #}
@@ -143,7 +156,7 @@
 
 {% endif %}
 {% if earnings.cash_table %}
-### 4.2 현금흐름
+### 4.3 현금흐름
 
 | 항목 | {{ earnings.years[0] }} | {{ earnings.years[1] }} | {{ earnings.years[2] }} |
 |---|---|---|---|
@@ -154,7 +167,7 @@
 {% endif %}
 
 {% if earnings.segment_profit.table %}
-### 4.3 부문별 수익성
+### 4.4 부문별 수익성
 
 {# IFRS 8 「영업부문」 주석. 총계가 손익계산서의 매출액·영업이익과 맞는 것만
    싣는다 — 어긋나면 표를 통째로 내리고 사유만 남긴다 (D33). #}
@@ -180,7 +193,7 @@
 
 {% endif %}
 {% elif earnings.segment_profit.note %}
-### 4.3 부문별 수익성
+### 4.4 부문별 수익성
 
 {{ earnings.segment_profit.note }}
 

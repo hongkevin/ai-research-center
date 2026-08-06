@@ -53,7 +53,15 @@ from arc.ingest.prior import (
 )
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
-from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
+from arc.render.charts import (
+    Slice,
+    legend,
+    margin_line,
+    palette,
+    quarter_bars,
+    segment_bar,
+    trend_bars,
+)
 from arc.render.docx import markdown_to_docx
 from arc.render.html import binding_rows, render_html
 from arc.render.xlsx import note_to_xlsx
@@ -194,6 +202,10 @@ class ViewModel:
     segment_items: list[dict] = field(default_factory=list)
     trend_chart: str = ""
     trend_legend: str = ""
+    # 분기 추이 — **차트 그리기는 RA의 업무 카테고리다** (D55 동료 인풋).
+    quarter_chart: str = ""
+    quarter_margin_chart: str = ""
+    quarter_note: str = ""
     trend_note: str = ""  # 해가 모자랄 때 왜 그런지
     industry_context: bool = False  # 미검증 레인이 있었는가
     llm_used: bool = False
@@ -399,6 +411,21 @@ def _to_view(r: ReportResult) -> ViewModel:
                 "분기·반기보고서에는 전전기 손익이 공시되지 않아 "
                 f"{len(years)}개년만 그렸습니다. 3개년은 사업보고서에서 나옵니다."
             )
+
+    # 분기 막대 + 이익률 선. **비율은 막대가 아니라 선이다** — 크기가 아니라
+    # 수준이라, 막대로 그리면 8%와 9%가 거의 같아 보인다.
+    q = getattr(r, "quarters", None)
+    if q is not None and q.points:
+        labels = [x.label for x in q.points]
+        rev = [None if v is None else float(v) for v in q.metric_row("revenue")]
+        op = q.metric_row("operating_income")
+        v.quarter_chart = quarter_bars(labels, rev, highlight_from=max(len(labels) - 4, 0))
+        margins = [
+            None if (o is None or not rv) else round(o / rv * 100, 1)
+            for o, rv in zip(op, q.metric_row("revenue"), strict=False)
+        ]
+        v.quarter_margin_chart = margin_line(labels, margins)
+        v.quarter_note = "막대는 매출, 선은 영업이익률입니다. 최근 4개 분기가 진합니다."
 
     n = r.narration
     if n is not None:
