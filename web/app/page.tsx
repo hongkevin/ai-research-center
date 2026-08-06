@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { PenLineIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -179,6 +180,11 @@ export default function Workbench() {
     })();
   }, [phase, runningId]);
 
+  // **생성 중인 카드는 `vm`이 빈 객체다.** 그걸 모르고 근거 패널을 그리면
+  // `vm.changes.length`에서 터져 화면 전체가 죽는다 (D49에서 카드를 바로 열게
+  // 만들면서 낸 회귀 — 브라우저가 "This page couldn't load"를 띄웠다).
+  const ready = !!open && Object.keys(open.vm ?? {}).length > 0;
+
   function openCompose() {
     setStep("choose");
     setUploaded(null);
@@ -322,7 +328,7 @@ export default function Workbench() {
                 ? "리포트 초안 작성"
                 : step === "confirm"
                   ? "올린 문서를 확인하십시오"
-                  : "초안 작성"}
+                  : "대상과 범위"}
             </DialogTitle>
           </DialogHeader>
 
@@ -408,7 +414,7 @@ export default function Workbench() {
                     수 있었다. */}
                 {/* 이 제품이 내는 것이 원래 마크다운이다. 사람이 그대로
                     가져가 자기 도구에 붙일 수 있어야 한다 (D48). */}
-                {open.vm.gate_passed && (
+                {ready && open.vm.gate_passed && (
                   <a
                     href={`/api/cards/${open.id}.md`}
                     target="_blank"
@@ -418,7 +424,7 @@ export default function Workbench() {
                     Markdown으로 보기 ↗
                   </a>
                 )}
-                {open.vm.gate_passed && !open.published_path && (
+                {ready && open.vm.gate_passed && !open.published_path && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -437,7 +443,18 @@ export default function Workbench() {
                   {publishing}
                 </p>
               )}
-              {open.vm.gate_passed && editable.length === 0 && (
+              {!ready && (
+                <div className="max-w-[860px] rounded-lg border p-6">
+                  <p className="text-[14px] font-medium">
+                    {open.company || open.symbol} 초안을 만들고 있습니다.
+                  </p>
+                  <p className="mt-1.5 text-[13px] text-muted-foreground">
+                    오른쪽에서 어느 단계까지 왔는지 볼 수 있습니다. 이 화면을
+                    떠나도 생성은 계속되고 보드에 카드로 남습니다.
+                  </p>
+                </div>
+              )}
+              {ready && open.vm.gate_passed && editable.length === 0 && (
                 <Alert className="mb-4 max-w-[860px] border-warn">
                   <AlertTitle>이 카드는 편집할 수 없습니다</AlertTitle>
                   <AlertDescription>
@@ -448,13 +465,15 @@ export default function Workbench() {
                   </AlertDescription>
                 </Alert>
               )}
-              <CenterColumn
-                vm={open.vm}
-                error=""
-                onHeadings={onHeadings}
-                onEditSection={startEditing}
-                editableSections={editable.map((s) => s.title)}
-              />
+              {ready && (
+                <CenterColumn
+                  vm={open.vm}
+                  error=""
+                  onHeadings={onHeadings}
+                  onEditSection={startEditing}
+                  editableSections={editable.map((s) => s.title)}
+                />
+              )}
             </>
           ) : error ? (
             <Alert variant="destructive" className="max-w-[860px]">
@@ -471,7 +490,7 @@ export default function Workbench() {
                 </span>
                 {cards.length > 0 && (
                   <Button size="sm" onClick={() => openCompose()}>
-                    + 초안 작성
+                    <PenLineIcon className="size-3.5" />새 리포트
                   </Button>
                 )}
               </div>
@@ -497,7 +516,7 @@ export default function Workbench() {
                     함께 올려 그 구성으로 쓰고 직전 추정과 비교합니다.
                   </p>
                   <Button className="mt-6" onClick={() => openCompose()}>
-                    첫 리포트 초안 작성
+                    <PenLineIcon className="size-4" />첫 리포트 작성
                   </Button>
                 </div>
               )}
@@ -516,7 +535,7 @@ export default function Workbench() {
               elapsed={elapsed}
             />
           )}
-          {open && !open.vm.error && (
+          {ready && !open.vm.error && (
             <EvidenceRail
               vm={open.vm}
               headings={headings}
