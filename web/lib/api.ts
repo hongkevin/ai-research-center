@@ -458,6 +458,56 @@ export function downloadUrl(
   return `${BASE}/api/cards/${cardId}/download?format=${format}`;
 }
 
+export interface FillSummary {
+  written: {
+    sheet: string;
+    cell: string;
+    label: string;
+    year: number;
+    before: unknown;
+    after: number;
+  }[];
+  skipped: { sheet: string; cell: string; label: string; reason: string }[];
+}
+
+/**
+ * 엑셀 모델에 공시 실적을 채워 **사본을 내려받는다** (D62).
+ *
+ * 채운 내역은 `X-Arc-Fill-Summary` 헤더로 온다 — 파일만 주면 무엇이
+ * 바뀌었는지 알 수 없다.
+ */
+export async function fillModel(
+  cardId: string,
+  file: File,
+  unit: number,
+): Promise<{ summary: FillSummary } | { error: string }> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("unit", String(unit));
+  const r = await api(`/api/cards/${cardId}/fill-model`, {
+    method: "POST",
+    body,
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    return { error: d.error ?? `HTTP ${r.status}` };
+  }
+  const raw = r.headers.get("X-Arc-Fill-Summary");
+  const blob = await r.blob();
+  // 브라우저가 내려받게 한다 — 사본이므로 원본은 그대로다.
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = file.name.replace(/\.(xlsx|xlsm)$/i, "") + "_ARC업데이트.xlsx";
+  a.click();
+  URL.revokeObjectURL(url);
+  return {
+    summary: raw
+      ? (JSON.parse(decodeURIComponent(raw)) as FillSummary)
+      : { written: [], skipped: [] },
+  };
+}
+
 export interface Capabilities {
   llm_key: boolean;
   news_key: boolean;

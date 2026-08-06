@@ -44,6 +44,7 @@ from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
 from arc.ingest.convert import ConvertError, convert
+from arc.ingest.model_fill import fill_model
 from arc.ingest.prior import (
     UPLOAD_PERIOD,
     as_facts,
@@ -64,7 +65,7 @@ from arc.render.charts import (
 )
 from arc.render.docx import markdown_to_docx
 from arc.render.html import binding_rows, render_html
-from arc.render.xlsx import note_to_xlsx
+from arc.render.xlsx import collect_series, note_to_xlsx
 from arc.store.cards import (
     DRAFT,
     HANDOFF,
@@ -1121,6 +1122,86 @@ def _attachment(filename: str) -> dict[str, str]:
     """한글 파일명은 `filename*`(RFC 5987)로 보내야 안 깨진다."""
     quoted = urllib.parse.quote(filename)
     return {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
+
+
+@app.post("/api/cards/{card_id}/fill-model")
+async def api_fill_model(card_id: str, request: Request):
+    """올린 **엑셀 모델**에 이 카드의 공시 실적을 채워 돌려준다 (D62).
+
+    **남의 파일에 쓰는 일이다.** 수식 셀은 건드리지 않고, 원본을 고치지 않고
+    사본을 주며, 무엇을 어디에 썼는지 전부 돌려준다.
+
+    `unit`은 모델의 단위 — 백만원 모델이면 `1000000`. 기본은 원 단위다.
+    """
+    _, card, err = _load_card(card_id)
+    if err is not None:
+        return err
+    if not card.registry:
+        return JSONResponse({"error": "이 카드에는 수치가 없습니다."}, status_code=409)
+
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return JSONResponse({"error": "엑셀 파일이 없습니다."}, status_code=400)
+    raw = await upload.read()
+    name = getattr(upload, "filename", "") or "model.xlsx"
+    if not name.lower().endswith((".xlsx", ".xlsm")):
+        return JSONResponse(
+            {"error": "엑셀(.xlsx · .xlsm)만 됩니다. 구형 .xls는 변환해 주십시오."},
+            status_code=400,
+        )
+    try:
+        unit = float(form.get("unit") or 1)
+    except (TypeError, ValueError):
+        unit = 1.0
+
+    values, _, _ = collect_series(card.registry)
+    try:
+        got = fill_model(raw, values, unit=unit or 1.0)
+    except Exception as exc:  # noqa: BLE001 — 손상된 파일 형태가 다양하다
+        log.warning("모델 채우기 실패 (%s): %s", card_id, exc)
+        return JSONResponse(
+            {"error": f"엑셀을 열지 못했습니다: {type(exc).__name__}"}, status_code=400
+        )
+
+    if not got.usable:
+        return JSONResponse(
+            {
+                "error": "채울 자리를 찾지 못했습니다. 행 라벨(매출액·영업이익 등)과 "
+                "연도 머리행(2025A 등)이 있는 시트인지 확인해 주십시오.",
+                "sheets": got.sheets_scanned,
+            },
+            status_code=422,
+        )
+
+    # 채운 내역을 헤더로 함께 준다 — 파일만 주면 무엇이 바뀌었는지 알 수 없다.
+    summary = json.dumps(
+        {
+            "written": [
+                {
+                    "sheet": w.sheet,
+                    "cell": w.cell,
+                    "label": w.label,
+                    "year": w.year,
+                    "before": w.before,
+                    "after": w.after,
+                }
+                for w in got.written
+            ],
+            "skipped": [
+                {"sheet": s.sheet, "cell": s.cell, "label": s.label, "reason": s.reason}
+                for s in got.skipped
+            ],
+        },
+        ensure_ascii=False,
+    )
+    headers = _attachment(name.rsplit(".", 1)[0] + "_ARC업데이트.xlsx")
+    headers["X-Arc-Fill-Summary"] = urllib.parse.quote(summary)
+    return Response(
+        got.data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 @app.get("/api/health")
