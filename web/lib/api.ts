@@ -447,7 +447,10 @@ export interface JobRequest {
  * `<a download>` 대신 그냥 링크로 연다 — 서버가 `Content-Disposition`을
  * 붙이므로 브라우저가 알아서 내려받고, 한글 파일명도 안 깨진다.
  */
-export function downloadUrl(cardId: string, format: "md" | "docx"): string {
+export function downloadUrl(
+  cardId: string,
+  format: "md" | "docx" | "xlsx",
+): string {
   return `${BASE}/api/cards/${cardId}/download?format=${format}`;
 }
 

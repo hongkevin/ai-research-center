@@ -433,6 +433,15 @@ export default function Workbench() {
                     >
                       Word 내려받기
                     </a>
+                    {/* **엑셀은 모델에 붙여넣기 위한 것이다** (D56).
+                        노트의 「11조 3,145억원」은 사람이 읽는 문자열이라
+                        모델에서 못 쓴다 — 이 파일은 숫자가 숫자다. */}
+                    <a
+                      href={downloadUrl(open.id, "xlsx")}
+                      className="rounded border px-2 py-1 hover:border-num/50 hover:text-num"
+                    >
+                      Excel 내려받기
+                    </a>
                     <a
                       href={downloadUrl(open.id, "md")}
                       className="rounded border px-2 py-1 text-muted-foreground hover:border-num/50 hover:text-num"

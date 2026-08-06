@@ -56,6 +56,7 @@ from arc.pipeline.earnings_review import ReportResult, build_report, save_estima
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
 from arc.render.docx import markdown_to_docx
 from arc.render.html import binding_rows, render_html
+from arc.render.xlsx import note_to_xlsx
 from arc.store.cards import (
     DRAFT,
     HANDOFF,
@@ -1057,6 +1058,24 @@ def api_download(card_id: str, format: str = "md"):
             media_type="text/markdown; charset=utf-8",
             headers=_attachment(_download_name(card, "md")),
         )
+    if format == "xlsx":
+        try:
+            data = note_to_xlsx(
+                card.registry,
+                company=card.company,
+                symbol=card.symbol,
+                market=str(card.vm.get("market") or ""),
+                basis=str(card.vm.get("basis") or ""),
+                period_label=f"{card.year} {card.period}",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("엑셀 변환 실패 (%s): %s", card_id, exc)
+            return JSONResponse({"error": f"엑셀 변환에 실패했습니다: {exc}"}, status_code=500)
+        return Response(
+            data,
+            media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+            headers=_attachment(_download_name(card, "xlsx")),
+        )
     if format == "docx":
         try:
             data = markdown_to_docx(rendered, title=f"{card.company} {card.year}")
@@ -1068,7 +1087,7 @@ def api_download(card_id: str, format: str = "md"):
             media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
             headers=_attachment(_download_name(card, "docx")),
         )
-    return JSONResponse({"error": "md 또는 docx만 됩니다."}, status_code=400)
+    return JSONResponse({"error": "md · docx · xlsx만 됩니다."}, status_code=400)
 
 
 def _attachment(filename: str) -> dict[str, str]:
