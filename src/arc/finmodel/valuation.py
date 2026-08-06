@@ -79,6 +79,9 @@ class ValuationSet:
     # 가격 (역산 앵커)
     price: int | None = None
     is_implied: bool = True  # 시세 어댑터가 붙으면 False
+    price_date: str | None = None  # 실제 종가일 (ISO). 역산이면 None
+    # 역산 주가와 실제 종가의 괴리(%). **둘 다 있을 때만 잰다** — Q7의 질문이다.
+    implied_gap_pct: float | None = None
     market_cap: int | None = None
     per: float | None = None
     pbr: float | None = None
@@ -101,11 +104,22 @@ class ValuationSet:
         return self.price is not None
 
 
-def build_valuation(ms: MetricSet, info: PeriodicReportInfo) -> ValuationSet:
+def build_valuation(
+    ms: MetricSet,
+    info: PeriodicReportInfo,
+    *,
+    close_price: int | None = None,
+    close_date: str | None = None,
+) -> ValuationSet:
     """지표 + 정기보고서 주요정보 → 밸류에이션 지표.
 
     **추정하지 않는다.** 입력이 없으면 해당 지표를 비우고 `unavailable`에
     이유를 남긴다.
+
+    `close_price`가 오면 **그것을 쓴다** — 배당 역산은 특정일 종가가 아니라
+    회계연도 전체를 뭉갠 값이라([D19](../../../docs/decisions.md#d19)) 시세가
+    있으면 언제나 그쪽이 낫다. 다만 역산값도 버리지 않고 **둘의 괴리를 재서**
+    남긴다([D60](../../../docs/decisions.md#d60)).
     """
     v = ValuationSet(fiscal_year=ms.fiscal_year)
     shares, div = info.shares, info.dividend
@@ -157,10 +171,19 @@ def build_valuation(ms: MetricSet, info: PeriodicReportInfo) -> ValuationSet:
     else:
         v.unavailable.append("배당 공시")
 
+    # **실제 종가가 있으면 그것을 쓴다.** 역산값은 괴리를 재는 데 남긴다.
+    implied = v.price
+    if close_price:
+        if implied:
+            v.implied_gap_pct = (implied - close_price) / close_price * 100.0
+        v.price = close_price
+        v.is_implied = False
+        v.price_date = close_date
+
     if v.eps_stmt and v.eps_disclosed:
         v.eps_gap_pct = (v.eps_stmt - v.eps_disclosed) / abs(v.eps_disclosed) * 100.0
 
-    # 가격 기반 — 역산 앵커라 정확한 시세가 아니다
+    # 가격 기반. `is_implied`면 역산 앵커라 정확한 시세가 아니다.
     if v.price is not None:
         if v.shares_issued:
             v.market_cap = v.price * v.shares_issued

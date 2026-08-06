@@ -358,3 +358,42 @@ class TestMergeRisks:
     def test_never_returns_empty(self):
         """리스크가 하나도 없으면 템플릿에 빈 목록이 남는다."""
         assert merge_risks([], None, None)
+
+
+class TestRealClosePrice:
+    """실제 종가 (D60).
+
+    배당 역산 앵커(D19)는 회계연도 전체를 뭉갠 값이라 특정일 종가가 아니다.
+    실측 6종목: 역산이 실제 종가 대비 **중앙값 -32.9% · 범위 -80.7%~+8.8%**.
+    쓸 수 없는 값이었다.
+    """
+
+    def test_close_price_replaces_the_implied_anchor(self):
+        v = build_valuation(_metrics(), _info(), close_price=80_000, close_date="2026-08-05")
+        assert v.price == 80_000
+        assert v.is_implied is False
+        assert v.price_date == "2026-08-05"
+
+    def test_gap_against_the_implied_anchor_is_measured(self):
+        """**역산값을 버리지 않고 괴리를 잰다** — 그게 Q7의 질문이었다."""
+        # 역산 = dps 10 / yield 2.0 × 100 = 500
+        v = build_valuation(_metrics(), _info(), close_price=1_000, close_date="2026-08-05")
+        assert v.implied_gap_pct == pytest.approx(-50.0)
+
+    def test_falls_back_to_implied_without_a_price(self):
+        """키가 없는 환경에서도 노트는 나와야 한다."""
+        v = build_valuation(_metrics(), _info())
+        assert v.is_implied is True
+        assert v.price_date is None
+        assert v.implied_gap_pct is None
+
+    def test_no_gap_when_there_is_nothing_to_compare(self):
+        """배당 공시가 없으면 역산값이 없다. 괴리도 없다."""
+        v = build_valuation(
+            _metrics(), _info(dividend=None), close_price=1_000, close_date="2026-08-05"
+        )
+        assert v.price == 1_000 and v.implied_gap_pct is None
+
+    def test_multiples_use_the_real_price(self):
+        v = build_valuation(_metrics(), _info(), close_price=1_000, close_date="2026-08-05")
+        assert v.market_cap == 1_000 * 100  # 발행주식 100주
