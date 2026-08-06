@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { eventsUrl, fetchResult, startJob, type JobRequest, type ViewModel } from "./api";
+import {
+  eventsUrl,
+  fetchResult,
+  startJob,
+  type JobRequest,
+  type ViewModel,
+} from "./api";
 
 /**
  * 생성 한 건의 수명 — 시작 → 진행 스트림 → 결과.
@@ -49,7 +55,7 @@ export function useGeneration() {
   }, [phase]);
 
   const run = useCallback(
-    async (req: JobRequest) => {
+    async (req: JobRequest, onStarted?: (cardId: string) => void) => {
       close();
       setPhase("running");
       setSteps([]);
@@ -60,7 +66,9 @@ export function useGeneration() {
 
       let jobId: string;
       try {
-        jobId = await startJob(req);
+        const started = await startJob(req);
+        jobId = started.jobId;
+        onStarted?.(started.cardId);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
         setPhase("error");
