@@ -1014,6 +1014,7 @@ def _header_rows(
     valuation: ValuationSet | None,
     info: PeriodicReportInfo | None,
     statement: FinancialStatement | None,
+    has: Callable[[str], bool] = lambda _key: True,
 ) -> list[dict[str, str]]:
     """헤더 표 — **못 채우는 줄은 만들지 않는다.**
 
@@ -1055,16 +1056,21 @@ def _header_rows(
             }
         )
 
-    # 주가는 **배당에서 역산한 값**이라 늘 있지는 않다 (D19). 없으면 두 줄이
-    # 통째로 빠진다 — 시세 피드가 붙기 전까지는 그게 정직하다.
-    if valuation is not None and valuation.has_price_anchor:
-        label = (
-            "역산 주가"
-            if valuation.is_implied
-            else (f"주가 ({valuation.price_date})" if valuation.price_date else "주가")
-        )
-        rows.append({"label": "시가총액", "value": _ph(f"market_cap_{y}a")})
-        rows.append({"label": label, "value": _ph(f"price_{y}a")})
+    # **줄마다 따로 확인한다.** 주가가 있다고 시가총액이 있는 것은 아니다 —
+    # 시가총액에는 발행주식수가 필요한데, 그건 사업보고서에만 실린다. 실측:
+    # 분기 카드에서 KRX 종가는 있는데 주식수가 0/6종이라 `market_cap`이
+    # 등록되지 않았고, 헤더가 그 플레이스홀더를 참조해 게이트가 막았다.
+    # (D61에서 주가 출처를 배당 공시에서 시세로 옮기며 생긴 회귀다.)
+    if valuation is not None:
+        if has(f"market_cap_{y}a"):
+            rows.append({"label": "시가총액", "value": _ph(f"market_cap_{y}a")})
+        if has(f"price_{y}a"):
+            label = (
+                "역산 주가"
+                if valuation.is_implied
+                else (f"주가 ({valuation.price_date})" if valuation.price_date else "주가")
+            )
+            rows.append({"label": label, "value": _ph(f"price_{y}a")})
 
     rows.append({"label": "작성일", "value": published_at.isoformat()})
     return rows
@@ -1186,6 +1192,7 @@ def assemble(
         valuation=valuation,
         info=info,
         statement=statement,
+        has=(registry.__contains__ if registry is not None else (lambda _key: True)),
     )
 
     def render(sources: list[dict[str, str]]) -> str:
