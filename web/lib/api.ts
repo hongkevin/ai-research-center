@@ -149,16 +149,30 @@ export interface ViewModel {
   error: string;
 }
 
-/** 보드의 칸. 순서가 곧 왼→오. */
-export const COLUMNS = ["running", "attention", "review", "published"] as const;
+/**
+ * 보드의 칸. 순서가 곧 왼→오 (D51).
+ *
+ * 넷에서 셋으로 줄였다. 「수집됨」은 1.5초 머무는 곳이라 칸이 아니라 카드
+ * 스피너였고, 「확인 필요」는 칸이 아니라 **속성**이었다 — 검토 중인 카드가
+ * 확인이 필요할 수도 아닐 수도 있다.
+ *
+ * 종착점이 「발간」이 아닌 이유: 조사분석자료는 공표 전 심의가 법정 절차이고
+ * 해외 RMS도 애널리스트 → 어소시에이트 → Supervisory Analyst → 컴플라이언스로
+ * 간다. **RA는 발간 권한이 없다.**
+ */
+export const COLUMNS = ["draft", "review", "handoff"] as const;
 export type Column = (typeof COLUMNS)[number];
 
 export const COLUMN_LABEL: Record<Column, string> = {
-  running: "수집됨",
-  // 카드가 실제로 쌓이는 곳. 다른 데서 못 하는 일(1차 공시 대조)이 여기 있다.
-  attention: "확인 필요",
-  review: "검토 대기",
-  published: "발간됨",
+  draft: "초안",
+  review: "검토 중",
+  handoff: "넘김",
+};
+
+export const COLUMN_HINT: Record<Column, string> = {
+  draft: "기계가 만들어 놓은 것. 아직 안 봤습니다",
+  review: "읽고 고치는 중",
+  handoff: "확정해서 내보낸 것",
 };
 
 /** 목록용 — 본문(60KB)이 빠져 있다. */
@@ -168,6 +182,8 @@ export interface CardSummary {
   year: number;
   created_at: string;
   column: Column;
+  /** 생성 중인가. **칸이 아니라 카드의 상태다** (D51). */
+  running: boolean;
   confirmed: boolean;
   company: string;
   attention: string[];
@@ -476,6 +492,12 @@ export async function searchCompanies(
  * 카드 id가 필요한 이유: 진행 표시를 **그 카드에** 붙여야 한다. 예전에는
  * 진행 표시가 생성 폼에 붙어 있어서 두 건을 돌리면 마지막 것만 보였다 (D49).
  */
+export class DuplicateDraftError extends Error {
+  constructor(readonly cardId: string) {
+    super("같은 보고서로 만든 초안이 이미 있습니다.");
+  }
+}
+
 export async function startJob(
   req: JobRequest,
 ): Promise<{ jobId: string; cardId: string }> {
@@ -484,6 +506,11 @@ export async function startJob(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
+  // 같은 보고서 초안이 이미 있으면 새로 만들지 않고 **그것을 연다** (D51).
+  if (r.status === 409) {
+    const d = await r.json().catch(() => ({}));
+    if (d.existing_card_id) throw new DuplicateDraftError(d.existing_card_id);
+  }
   if (!r.ok) await fail(r);
   const d = await r.json();
   return { jobId: d.job_id, cardId: d.card_id ?? "" };

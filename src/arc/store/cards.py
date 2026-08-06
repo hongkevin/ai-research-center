@@ -34,12 +34,29 @@ from pathlib import Path
 
 log = logging.getLogger("arc.store.cards")
 
-# 칸. 순서가 곧 보드의 왼→오다.
-RUNNING = "running"  # 수집됨 — 생성 중
-ATTENTION = "attention"  # 확인 필요 — 카드가 실제로 쌓이는 곳
-REVIEW = "review"  # 검토 대기
-PUBLISHED = "published"  # 발간됨 (D27의 그 발간)
-COLUMNS = (RUNNING, ATTENTION, REVIEW, PUBLISHED)
+# 칸. 순서가 곧 보드의 왼→오다 (D51).
+#
+# 넷이었다가 셋으로 줄였다:
+#
+# * `수집됨`은 칸이 아니었다 — 1.5초 머무는 곳은 칸이 아니라 **카드 위
+#   스피너**다. 칸반의 칸은 일이 *머무는* 곳이어야 한다.
+# * `확인 필요`도 칸이 아니라 **속성**이었다. 검토 중인 카드가 확인이 필요할
+#   수도 아닐 수도 있는데, 다른 칸으로 두면 「검토는 하는데 게이트가 막힌
+#   카드」가 갈 곳이 없다. 배지로 내린다.
+#
+# **종착점이 「발간」이 아닌 이유**: 조사분석자료는 공표 전 심의가 법정
+# 절차이고(금투협 IR·조사분석 업무처리강령), 해외 RMS도 애널리스트 초안 →
+# 어소시에이트 → Supervisory Analyst → 컴플라이언스로 간다. **RA는 발간
+# 권한이 없다.** RA의 종착점은 「넘김」이다.
+DRAFT = "draft"  # 초안 — 기계가 만들어 놨고 아직 사람이 안 봤다
+REVIEW = "review"  # 검토 중 — 사람이 열어서 읽고 고치는 중
+HANDOFF = "handoff"  # 넘김 — 확정해서 내보냈다 (D27의 그 발간)
+COLUMNS = (DRAFT, REVIEW, HANDOFF)
+
+# 예전 이름. 저장된 카드가 이 값을 들고 있어서 읽을 때 옮겨 준다.
+_LEGACY_COLUMN = {"running": DRAFT, "attention": REVIEW, "published": HANDOFF}
+RUNNING = "running"  # 생성 중 — 칸이 아니라 카드의 상태다
+PUBLISHED = HANDOFF  # 옛 이름 (import 호환)
 
 _ID_RE = re.compile(r"^[a-f0-9]{16}$")
 
@@ -54,7 +71,9 @@ class Card:
     # 어느 정기보고서로 만들었나. 가정을 바꿔 **다시 계산**하려면 있어야 한다.
     period: str = "ANNUAL"
     created_at: str = ""  # ISO8601 UTC
-    column: str = RUNNING
+    column: str = DRAFT
+    # **생성 중은 칸이 아니라 상태다** (D51). 1.5초 머무는 곳은 칸이 아니다.
+    running: bool = False
     confirmed: bool = False  # 사람이 「확인함」을 눌렀는가
     company: str = ""
     attention: list[str] = field(default_factory=list)  # 확인이 필요한 이유
@@ -93,9 +112,13 @@ class Card:
             "period": self.period,
             "created_at": self.created_at,
             "column": self.column,
+            "running": self.running,
             "confirmed": self.confirmed,
             "company": self.company,
-            "attention": self.attention,
+            # **저장된 문구를 쓰지 않고 지금 다시 계산한다.** 생성 시점에
+            # 굳혀 두면 문구를 고쳐도 이미 만든 카드에는 영영 옛말이 남는다
+            # (실측으로 밟았다 — D51에서 문구를 고쳤는데 보드가 안 바뀌었다).
+            "attention": attention_reasons(self.vm) if self.vm else self.attention,
             "error": self.error,
             "gate_passed": bool(self.vm.get("gate_passed")),
             "registry_size": self.vm.get("registry_size", 0),
@@ -115,48 +138,89 @@ def next_version(current: str) -> str:
     return f"v{major}.{minor + 1}"
 
 
-def attention_reasons(vm: dict) -> list[str]:
-    """**기계가 이미 아는 것에서만 뽑는다.** 새로 추론하지 않는다.
+# 검산 항목 → **그래서 뭘 하면 되는가**. 이게 없으면 「불일치」만 보고 끝난다.
+_WHAT_TO_DO = {
+    "부문별 매출": "사업보고서 부문 표를 확인하십시오. 내부거래가 섞이면 합계가 어긋납니다.",
+    "부문별 손익": "영업부문 주석의 총계 열을 확인하십시오.",
+    "주식수·배당·지분 등": "발행주식·자기주식 공시를 확인하십시오.",
+    "재무제표": "연결/별도 기준이 섞였는지 확인하십시오.",
+}
 
-    `absent`(정상 부재)는 이유가 아니다 — 단일 부문 회사에 부문 손익이 없는
-    것은 정상이고(D33), 그걸 확인 필요로 올리면 보드가 늘 빨갛다.
+# 화면에 올리지 않는 단계. 우리 내부 QA이지 RA가 할 일이 아니다.
+_INTERNAL_ONLY = ("관점 분석", "출처 링크", "사업 이해")
+
+
+def attention_reasons(vm: dict) -> list[str]:
+    """이 카드에서 **사람이 봐야 하는 것**. 없으면 빈 목록.
+
+    옛 문구는 이랬다:
+
+        G0 차단 1건 — 발간할 수 없습니다
+        부문별 매출 검산 불일치 — 부문 합계 vs 손익계산서 매출액 -31.8011%
+        발간 전 점검 실패 — 차단 1건 — 발간할 수 없습니다.
+        관점 분석 검산 불일치 — 집중 부문 매출과 지분 구조를 확인하지 못해
+                             무엇에 기대고 있는지 가리지 못했다.
+
+    문제가 넷이었다. `G0`는 내부 코드명이고, 1번과 3번은 **같은 사건을 두 번**
+    말하고, 소수점 넷째 자리는 사람이 읽는 숫자가 아니고, 마지막 줄은 시스템이
+    자기 사정을 문학적으로 말한다. 그리고 전부 **「그래서 뭘 해야 하나」가 없다.**
+
+    **`absent`(정상 부재)는 이유가 아니다** — 단일 부문 회사에 부문 손익이 없는
+    것은 정상이고(D33), 그걸 올리면 보드가 늘 빨갛다.
     """
-    out: list[str] = []
     if vm.get("error"):
-        out.append(f"생성 실패 — {vm['error']}")
-        return out
+        return [f"생성이 중단됐습니다 — {vm['error']}"]
+
+    out: list[str] = []
     if not vm.get("gate_passed"):
         n = len(vm.get("violations") or [])
-        out.append(f"G0 차단 {n}건 — 발간할 수 없습니다")
+        out.append(
+            f"내보낼 수 없습니다 — 본문에 출처 없는 숫자가 {n}건 있습니다"
+            if n
+            else "내보낼 수 없습니다 — 발간 전 점검을 통과하지 못했습니다"
+        )
+
     for s in vm.get("stages") or []:
+        label = str(s.get("label") or "")
+        # 게이트는 위에서 이미 한 번 말했다. 두 번 쓰지 않는다.
+        if label.startswith("발간 전 점검") or label in _INTERNAL_ONLY:
+            continue
         if s.get("status") == "failed":
-            out.append(f"{s.get('label')} 실패 — {s.get('note') or '사유 미상'}")
+            note = str(s.get("note") or "").split(" — ")[0]
+            out.append(f"{label}을(를) 가져오지 못했습니다{f' — {note}' if note else ''}")
         elif s.get("status") == "partial":
-            # 검산이 어긋난 것만 올린다. 「미확인 계정」 같은 커버리지 알림은
-            # 카드를 멈춰 세울 일이 아니다.
             bad = [c for c in (s.get("checks") or []) if not c.get("ok")]
-            if bad:
-                first = bad[0]
-                out.append(
-                    f"{s.get('label')} 검산 불일치 — {first.get('label')} {first.get('value')}"
-                )
+            if not bad:
+                continue
+            gap = _readable_gap(str(bad[0].get("value") or ""))
+            todo = _WHAT_TO_DO.get(label, "")
+            head = f"{label} 합계가 {gap} 어긋납니다" if gap else f"{label} 검산이 맞지 않습니다"
+            out.append(f"{head}{f' — {todo}' if todo else ''}")
     return out
 
 
+def _readable_gap(value: str) -> str:
+    """`-31.8011%` → `32%`. **소수점 넷째 자리는 사람이 읽는 숫자가 아니다.**"""
+    m = re.search(r"-?\d+(?:\.\d+)?", value)
+    if m is None:
+        return ""
+    n = abs(float(m.group()))
+    return f"{n:.0f}%" if "%" in value else f"{n:,.0f}"
+
+
 def column_for(vm: dict, *, confirmed: bool, published: bool) -> str:
-    """카드가 어느 칸에 있어야 하는가. **자동 판정한다.**
+    """카드가 어느 칸에 있어야 하는가.
 
-    옮기는 것이 일이 되면 아무도 안 옮기고 보드는 버려진다. 대신 사람의 판단은
-    남긴다 — `confirmed`(「확인함」) 한 번으로 확인 필요를 벗어난다.
+    **사람이 옮긴다.** 예전에는 게이트 통과 여부로 자동 판정했는데, 그러면
+    칸이 「기계의 상태」를 말하지 「내가 어디까지 봤는가」를 말하지 않는다.
+    어닝시즌에 여덟 종목이 굴러갈 때 RA가 알고 싶은 것은 후자다
+    (`research/06-ra-workflow.md`: 애널리스트 3~4명 보조 · 여러 종목 동시).
 
-    수동으로 카드를 옮기는 것은 **열어두되 지금 만들지 않는다** (D40). 자동
-    판정이 틀리는 경우가 실제로 얼마나 되는지 보고 나서 붙이는 편이 낫다.
+    확인이 필요한지는 칸이 아니라 **배지**로 낸다 — `attention_reasons()`.
     """
     if published:
-        return PUBLISHED
-    if attention_reasons(vm) and not confirmed:
-        return ATTENTION
-    return REVIEW
+        return HANDOFF
+    return REVIEW if confirmed else DRAFT
 
 
 class CardStore:
@@ -189,14 +253,14 @@ class CardStore:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        return Card(**raw)
+        return _migrate(Card(**raw))
 
     def list(self) -> list[Card]:
         """최신순. 깨진 파일 하나가 목록 전체를 막지 않게 한다."""
         cards: list[Card] = []
         for p in self.dir.glob("*.json"):
             try:
-                cards.append(Card(**json.loads(p.read_text(encoding="utf-8"))))
+                cards.append(_migrate(Card(**json.loads(p.read_text(encoding="utf-8")))))
             except (OSError, ValueError, TypeError) as exc:
                 log.warning("카드를 읽지 못했습니다 (%s): %s", p.name, exc)
         cards.sort(key=lambda c: c.created_at, reverse=True)
@@ -209,6 +273,15 @@ class CardStore:
         except OSError:
             return False
         return True
+
+
+def _migrate(card: Card) -> Card:
+    """예전 칸 이름을 지금 것으로. **저장된 카드를 고쳐 쓰지 않는다** — 읽을 때만."""
+    if card.column in _LEGACY_COLUMN:
+        # 예전 `running` 칸에 있던 것은 생성이 끝났거나 중단된 것이다.
+        card.running = False
+        card.column = _LEGACY_COLUMN[card.column]
+    return card
 
 
 def now_iso() -> str:

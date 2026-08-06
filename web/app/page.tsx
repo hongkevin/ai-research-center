@@ -203,12 +203,20 @@ export default function Workbench() {
     // 다른 카드를 본다 (D40이 노린 것인데 폼이 화면을 붙들고 있었다).
     setComposing(false);
     setRunningId("");
-    void run({ ...form, symbol: symbolOf(form.symbol), publish }, (id) => {
-      setRunningId(id);
-      // **그 카드를 바로 연다.** 안 그러면 생성 30초 동안 단계 레일이 어디에도
-      // 없다 — 보드에는 「생성 중…」 한 줄뿐이다.
-      if (id) void openCard(id);
-    });
+    void run(
+      { ...form, symbol: symbolOf(form.symbol), publish },
+      (id) => {
+        setRunningId(id);
+        // **그 카드를 바로 연다.** 안 그러면 생성 30초 동안 단계 레일이 어디에도
+        // 없다 — 보드에는 「생성 중…」 한 줄뿐이다.
+        if (id) void openCard(id);
+      },
+      // 같은 보고서가 이미 있으면 새로 만들지 않고 그 카드를 연다.
+      (cardId) => {
+        setComposing(false);
+        void openCard(cardId);
+      },
+    );
   }
 
   // 편집기를 열면 그 섹션을 화면 위쪽으로 끌어온다. 시트가 아래 절반을

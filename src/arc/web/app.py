@@ -50,9 +50,8 @@ from arc.pipeline.earnings_review import ReportResult, build_report, save_estima
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
 from arc.render.html import binding_rows, render_html
 from arc.store.cards import (
-    ATTENTION,
-    PUBLISHED,
-    RUNNING,
+    DRAFT,
+    HANDOFF,
     Card,
     CardStore,
     attention_reasons,
@@ -102,11 +101,12 @@ def _reap_running_cards() -> None:
     if cards is None:
         return
     for card in cards.list():
-        if card.column != RUNNING:
+        if not card.running:
             continue
-        card.column = ATTENTION
+        card.running = False
+        card.column = DRAFT
         card.error = card.error or "서버가 재시작돼 생성이 중단됐습니다. 다시 만들어 주십시오."
-        card.attention = card.attention or ["생성 중단"]
+        card.attention = card.attention or ["생성이 중단됐습니다 — 다시 만들어 주십시오"]
         cards.save(card)
         log.info("중단된 카드를 확인 필요로 옮겼습니다: %s %s", card.symbol, card.id)
 
@@ -714,9 +714,29 @@ def api_start_job(payload: dict):
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
+    # **같은 보고서를 두 번 만들지 않는다** (D51). RA는 한 종목에 초안 두
+    # 개를 동시에 굴리지 않는다 — 보드에 같은 카드가 둘이면 어느 쪽이 최신인지
+    # 알 수 없고, 고쳐 놓은 쪽을 버리게 된다. 이미 있으면 그 카드를 돌려준다.
+    cards = _open_cards()
+    if cards is not None:
+        for existing in cards.list():
+            if (
+                existing.symbol == symbol
+                and existing.year == year
+                and existing.period == period
+                and existing.column != HANDOFF
+            ):
+                return JSONResponse(
+                    {
+                        "error": "같은 보고서로 만든 초안이 이미 있습니다.",
+                        "existing_card_id": existing.id,
+                        "existing_column": existing.column,
+                    },
+                    status_code=409,
+                )
+
     # 카드를 **먼저** 만든다. 생성이 30초 걸려도 보드에는 바로 나타나야
     # "입력 → 대기 → 툭"을 벗어난다 — 사람은 기다리지 않고 다른 일을 한다.
-    cards = _open_cards()
     card_id = ""
     if cards is not None:
         card_id = cards.new_id()
@@ -727,7 +747,8 @@ def api_start_job(payload: dict):
                 year=year,
                 period=period,
                 created_at=now_iso(),
-                column="running",
+                column=DRAFT,
+                running=True,
                 # **이름을 먼저 채운다.** 생성이 30초 걸리는데 그동안 보드에
                 # 종목코드만 떠 있으면 무슨 카드인지 알 수 없다. corpCode가
                 # 프로세스에 캐시돼 있어 실측 52~115ms다.
@@ -780,6 +801,7 @@ def _land_card(
     card.company = vm.company
     card.error = vm.error
     card.attention = attention_reasons(data)
+    card.running = False
     card.column = column_for(data, confirmed=card.confirmed, published=bool(vm.published_path))
     cards.save(card)
 
@@ -1350,7 +1372,7 @@ def api_publish(card_id: str):
 
     card.published_path = str(path)
     card.vm["published_path"] = str(path)
-    card.column = PUBLISHED
+    card.column = HANDOFF
     cards.save(card)
     return {"published_path": str(path), "version": card.version}
 

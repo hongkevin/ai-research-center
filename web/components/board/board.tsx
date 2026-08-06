@@ -6,6 +6,7 @@ import { Hint } from "@/components/workbench/section-label";
 import {
   COLUMNS,
   COLUMN_LABEL,
+  COLUMN_HINT,
   type CardSummary,
   type Column,
 } from "@/lib/api";
@@ -29,10 +30,9 @@ import { cn } from "@/lib/utils";
  */
 
 const TONE: Record<Column, string> = {
-  running: "text-muted-foreground",
-  attention: "text-bad",
+  draft: "text-muted-foreground",
   review: "text-warn",
-  published: "text-ok",
+  handoff: "text-ok",
 };
 
 export function Board({
@@ -47,7 +47,7 @@ export function Board({
   onDelete: (id: string) => void;
 }) {
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="grid gap-4 md:grid-cols-3">
       {COLUMNS.map((col) => {
         const inCol = cards.filter((c) => c.column === col);
         return (
@@ -58,6 +58,9 @@ export function Board({
                 {inCol.length}
               </span>
             </h2>
+            <p className="mb-2 text-[11.5px] text-muted-foreground">
+              {COLUMN_HINT[col]}
+            </p>
             <div className="space-y-2">
               {inCol.map((c) => (
                 <CardTile
@@ -87,12 +90,16 @@ function CardTile({
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  const running = card.column === "running";
+  // **생성 중은 칸이 아니라 카드의 상태다** (D51). 1.5초 머무는 곳은 칸이
+  // 아니라 스피너다.
+  const running = card.running;
+  const blocked = card.attention.length > 0;
   return (
     <div
       className={cn(
         "rounded-lg border bg-card p-2.5",
-        card.column === "attention" && "border-bad/40",
+        blocked && "border-bad/40",
+        running && "opacity-70",
       )}
     >
       <button
@@ -112,7 +119,11 @@ function CardTile({
         <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
           {card.symbol}
           {running ? (
-            <span className="ml-1.5">· 생성 중…</span>
+            <span className="ml-1.5 inline-flex items-center gap-1">
+              ·{" "}
+              <span className="inline-block size-2 animate-spin rounded-full border border-current border-t-transparent" />
+              만드는 중
+            </span>
           ) : (
             <span className="ml-1.5">
               · 수치 <span className="text-num">{card.registry_size}</span>건 ·
@@ -131,19 +142,20 @@ function CardTile({
         ))}
       </button>
 
-      {card.column === "attention" && (
+      {/* 칸을 옮기는 것은 **사람**이다. 열어서 보기 시작하면 검토 중으로. */}
+      {card.column === "draft" && !running && (
         <Button
           size="sm"
           variant="outline"
           className="mt-2 h-7 w-full text-[12px]"
           onClick={() => onConfirm(card.id)}
         >
-          확인함
+          검토 시작
         </Button>
       )}
-      {card.column === "published" && (
+      {card.column === "handoff" && (
         <Badge className="mt-1.5 border-transparent bg-ok/15 text-ok">
-          ● 발간됨
+          ● 넘김
         </Badge>
       )}
       {!running && (
