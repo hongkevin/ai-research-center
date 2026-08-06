@@ -343,3 +343,43 @@ class TestStageReports:
         r = self._report()
         gate_stage = next(s for s in r.stages if s.key == "gate")
         assert (gate_stage.status == "failed") is not r.gate.passed
+
+
+class TestPeriodicInfoCheck:
+    """**없는 것과 틀린 것을 구분한다** (D39·D52).
+
+    실측: 삼성전기 분기 카드가 「0/6종」인데 「발행주식 − 자기주식 = 유통주식
+    불일치」를 띄웠다. `shares_reconciled`의 기본값이 `False`라 자료를 아예
+    못 받아도 어긋난 것처럼 보였다. RA는 있지도 않은 불일치를 찾으러 갔다.
+    """
+
+    def test_no_share_data_means_no_check(self):
+        """검산할 자료가 없으면 **검산 결과도 없다.**"""
+        from arc.pipeline.earnings_review import _shares_detail
+
+        class Sh:
+            issued = treasury = outstanding = None
+            reconciled = False
+
+        assert _shares_detail(Sh()) == "확인 불가"
+
+    def test_matching_shares_show_the_numbers(self):
+        """「일치」만 쓰면 무엇이 일치했는지 모른다."""
+        from arc.pipeline.earnings_review import _shares_detail
+
+        class Sh:
+            issued, treasury, outstanding = 77_600_680, 2_053_430, 75_547_250
+            reconciled = True
+
+        assert _shares_detail(Sh()) == "77,600,680 − 2,053,430 = 75,547,250"
+
+    def test_mismatch_shows_the_gap_so_it_can_be_acted_on(self):
+        """「불일치」 한 마디로는 어디를 볼지 알 수 없다. 차이를 적는다."""
+        from arc.pipeline.earnings_review import _shares_detail
+
+        class Sh:
+            issued, treasury, outstanding = 100_000, 5_000, 90_000
+            reconciled = False
+
+        got = _shares_detail(Sh())
+        assert "95,000" in got and "+5,000주" in got
