@@ -38,7 +38,13 @@ from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
 from arc.ingest.convert import ConvertError, convert
-from arc.ingest.prior import UPLOAD_PERIOD, as_facts, outline_of, read_prior
+from arc.ingest.prior import (
+    UPLOAD_PERIOD,
+    as_facts,
+    detect_symbol,
+    outline_of,
+    read_prior,
+)
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import Slice, legend, palette, segment_bar, trend_bars
@@ -919,6 +925,23 @@ async def api_convert(request: Request):
     except ConvertError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
+    # **회사를 먼저 읽어 준다.** 올리자마자 종목코드를 다시 치게 하면 업로드가
+    # 편의가 아니라 일이 하나 는 것이다. 실측 적중 92%라 **사람이 확인**한다.
+    company: dict | None = None
+    try:
+        provider = _shared_provider()
+        symbol = detect_symbol(got.markdown, frozenset(provider.load_corp_codes()))
+        if symbol:
+            c = provider.get_company(symbol)
+            company = {
+                "symbol": symbol,
+                "name": c.name,
+                "short_name": c.short_name or c.name,
+                "market": c.market.value,
+            }
+    except Exception as exc:  # noqa: BLE001 — 못 읽어도 변환은 성립한다
+        log.warning("업로드 문서에서 종목을 읽지 못했습니다: %s", exc)
+
     return {
         "markdown": got.markdown,
         "source_name": got.source_name,
@@ -927,6 +950,7 @@ async def api_convert(request: Request):
         "chars": got.chars,
         "warnings": got.warnings,
         "outline": outline_of(got.markdown),
+        "company": company,
     }
 
 

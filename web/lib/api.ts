@@ -376,6 +376,13 @@ export async function getCompany(symbol: string): Promise<CompanyInfo | null> {
   return r.ok ? r.json() : null;
 }
 
+export interface DetectedCompany {
+  symbol: string;
+  name: string;
+  short_name: string;
+  market: string;
+}
+
 export interface Converted {
   markdown: string;
   source_name: string;
@@ -384,6 +391,8 @@ export interface Converted {
   chars: number;
   warnings: string[];
   outline: string[];
+  /** 문서에서 읽어낸 종목. 실측 적중 92%라 **사람이 확인한다**. */
+  company: DetectedCompany | null;
 }
 
 /**

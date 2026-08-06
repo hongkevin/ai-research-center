@@ -12,6 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StageRail } from "@/components/workbench/stage-rail";
+import { StartChoice } from "@/components/workbench/start-choice";
+import { UploadConfirm } from "@/components/workbench/upload-confirm";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { SectionEditor } from "@/components/note/section-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -43,6 +45,7 @@ import {
   type Filing,
   type Preliminary,
   type CardDetail,
+  type Converted,
   type CardSummary,
   type ViewModel,
 } from "@/lib/api";
@@ -71,7 +74,10 @@ export default function Workbench() {
   // 서버에 기사 검색 키가 있는가. 없으면 체크박스가 이유를 적고 잠긴다.
   const [newsAvailable, setNewsAvailable] = useState(false);
   // 생성은 상주 패널이 아니라 행동이다 (D49).
+  // 세 걸음: 어디서 시작할지 → (올렸으면) 확인 → 폼 (D50).
   const [composing, setComposing] = useState(false);
+  const [step, setStep] = useState<"choose" | "confirm" | "form">("choose");
+  const [uploaded, setUploaded] = useState<Converted | null>(null);
   // 지금 돌고 있는 카드. 진행 표시를 그 카드에만 붙인다.
   const [runningId, setRunningId] = useState("");
   const [filings, setFilings] = useState<Filing[]>([]);
@@ -172,6 +178,17 @@ export default function Workbench() {
       setRunningId("");
     })();
   }, [phase, runningId]);
+
+  function openCompose() {
+    setStep("choose");
+    setUploaded(null);
+    setComposing(true);
+  }
+
+  function closeCompose(open: boolean) {
+    setComposing(open);
+    if (!open) setStep("choose");
+  }
 
   function submit(publish: boolean) {
     setHeadings([]);
@@ -290,21 +307,69 @@ export default function Workbench() {
       {/* **보드가 집이다.** 폼이 왼쪽에 상주하던 것은 「입력 → 대기 → 툭」
           시절의 잔재다. 카드가 객체가 된 뒤로(D40) 생성은 상주 패널이 아니라
           **행동**이어야 한다 (D49). */}
-      <Dialog open={composing} onOpenChange={setComposing}>
-        <DialogContent className="max-h-[86dvh] w-full max-w-[560px] overflow-y-auto sm:max-w-[560px]">
+      <Dialog open={composing} onOpenChange={closeCompose}>
+        <DialogContent
+          className={cn(
+            "max-h-[86dvh] w-full overflow-y-auto",
+            step === "choose"
+              ? "max-w-[720px] sm:max-w-[720px]"
+              : "max-w-[560px] sm:max-w-[560px]",
+          )}
+        >
           <DialogHeader>
-            <DialogTitle>새 노트</DialogTitle>
+            <DialogTitle>
+              {step === "choose"
+                ? "리포트 초안 작성"
+                : step === "confirm"
+                  ? "올린 문서를 확인하십시오"
+                  : "초안 작성"}
+            </DialogTitle>
           </DialogHeader>
-          <GenerateForm
-            state={form}
-            onChange={setForm}
-            onSubmit={submit}
-            busy={busy}
-            filings={filings}
-            loadingFilings={loadingFilings}
-            preliminary={preliminary}
-            newsAvailable={newsAvailable}
-          />
+
+          {step === "choose" && (
+            <StartChoice
+              onContinue={(c) => {
+                setUploaded(c);
+                setStep("confirm");
+              }}
+              onFresh={() => setStep("form")}
+            />
+          )}
+
+          {step === "confirm" && uploaded && (
+            <UploadConfirm
+              file={uploaded}
+              onReject={() => {
+                setUploaded(null);
+                setStep("choose");
+              }}
+              onAccept={() => {
+                // 읽어낸 종목을 폼에 채워 둔다 — 다시 치게 하면 업로드가
+                // 편의가 아니라 일이 하나 는 것이다.
+                const c = uploaded.company;
+                setForm((f) => ({
+                  ...f,
+                  symbol: c ? `${c.short_name} (${c.symbol})` : f.symbol,
+                  prior_markdown: uploaded.markdown,
+                  prior_name: uploaded.source_name,
+                }));
+                setStep("form");
+              }}
+            />
+          )}
+
+          {step === "form" && (
+            <GenerateForm
+              state={form}
+              onChange={setForm}
+              onSubmit={submit}
+              busy={busy}
+              filings={filings}
+              loadingFilings={loadingFilings}
+              preliminary={preliminary}
+              newsAvailable={newsAvailable}
+            />
+          )}
         </DialogContent>
       </Dialog>
 
@@ -401,12 +466,12 @@ export default function Workbench() {
               <div className="mb-5 flex items-baseline justify-between gap-3">
                 <span className="text-[13px] text-muted-foreground">
                   {cards.length > 0
-                    ? `노트 ${cards.length}건`
-                    : "아직 만든 노트가 없습니다."}
+                    ? `리포트 ${cards.length}건`
+                    : "아직 작성한 리포트가 없습니다."}
                 </span>
                 {cards.length > 0 && (
-                  <Button size="sm" onClick={() => setComposing(true)}>
-                    + 새 노트
+                  <Button size="sm" onClick={() => openCompose()}>
+                    + 초안 작성
                   </Button>
                 )}
               </div>
@@ -431,8 +496,8 @@ export default function Workbench() {
                     공시에서 수치를 읽어 초안을 만듭니다. 쓰던 리포트가 있으면
                     함께 올려 그 구성으로 쓰고 직전 추정과 비교합니다.
                   </p>
-                  <Button className="mt-6" onClick={() => setComposing(true)}>
-                    노트 만들기
+                  <Button className="mt-6" onClick={() => openCompose()}>
+                    첫 리포트 초안 작성
                   </Button>
                 </div>
               )}
