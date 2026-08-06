@@ -3,7 +3,12 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/workbench/section-label";
-import { COLUMNS, COLUMN_LABEL, type CardSummary, type Column } from "@/lib/api";
+import {
+  COLUMNS,
+  COLUMN_LABEL,
+  type CardSummary,
+  type Column,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -41,16 +46,6 @@ export function Board({
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
-  if (cards.length === 0) {
-    return (
-      <p className="py-16 text-center text-[13px] text-muted-foreground">
-        왼쪽에서 종목을 생성하면 카드가 여기에 쌓입니다.
-        <br />
-        생성은 <b>1.5초</b>에 검증된 수치를 채우고, 문장은 그 뒤에 붙습니다.
-      </p>
-    );
-  }
-
   return (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
       {COLUMNS.map((col) => {
@@ -59,7 +54,9 @@ export function Board({
           <section key={col} className="min-w-0">
             <h2 className="mb-2.5 flex items-baseline gap-1.5 text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
               <span className={TONE[col]}>{COLUMN_LABEL[col]}</span>
-              <span className="font-mono normal-case tracking-normal">{inCol.length}</span>
+              <span className="font-mono normal-case tracking-normal">
+                {inCol.length}
+              </span>
             </h2>
             <div className="space-y-2">
               {inCol.map((c) => (
@@ -118,14 +115,17 @@ function CardTile({
             <span className="ml-1.5">· 생성 중…</span>
           ) : (
             <span className="ml-1.5">
-              · 수치 <span className="text-num">{card.registry_size}</span>건 · 단계{" "}
-              {card.stage_count}
+              · 수치 <span className="text-num">{card.registry_size}</span>건 ·
+              단계 {card.stage_count}
             </span>
           )}
         </div>
 
         {card.attention.map((a, i) => (
-          <div key={i} className="mt-1.5 rounded-md bg-bad/10 px-2 py-1 text-[11.5px]">
+          <div
+            key={i}
+            className="mt-1.5 rounded-md bg-bad/10 px-2 py-1 text-[11.5px]"
+          >
             {a}
           </div>
         ))}
@@ -142,7 +142,9 @@ function CardTile({
         </Button>
       )}
       {card.column === "published" && (
-        <Badge className="mt-1.5 border-transparent bg-ok/15 text-ok">● 발간됨</Badge>
+        <Badge className="mt-1.5 border-transparent bg-ok/15 text-ok">
+          ● 발간됨
+        </Badge>
       )}
       {!running && (
         <button
@@ -160,9 +162,9 @@ function CardTile({
 export function BoardHint() {
   return (
     <Hint>
-      「확인 필요」는 <b>기계가 이미 아는 것</b>에서만 자동으로 판정합니다 — 게이트 차단,
-      검산 불일치, 단계 실패. <b>정상적으로 없는 것</b>(단일 부문 회사의 부문 손익 등)은
-      올라오지 않습니다.
+      「확인 필요」는 <b>기계가 이미 아는 것</b>에서만 자동으로 판정합니다 —
+      게이트 차단, 검산 불일치, 단계 실패. <b>정상적으로 없는 것</b>(단일 부문
+      회사의 부문 손익 등)은 올라오지 않습니다.
     </Hint>
   );
 }

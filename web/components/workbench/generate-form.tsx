@@ -8,9 +8,6 @@ import { Label } from "@/components/ui/label";
 import { CompanySearch } from "@/components/workbench/company-search";
 import { Hint, SectionLabel } from "@/components/workbench/section-label";
 import { PriorUpload } from "@/components/workbench/prior-upload";
-import { StageRail } from "@/components/workbench/stage-rail";
-import type { ViewModel } from "@/lib/api";
-import type { Step } from "@/lib/use-generation";
 import { hasPeriodicInfo, periodKey, type PeriodCode } from "@/lib/periods";
 import type { Filing, Preliminary } from "@/lib/api";
 
@@ -40,33 +37,22 @@ export function GenerateForm({
   onChange,
   onSubmit,
   busy,
-  steps,
-  elapsed,
-  vm,
   filings,
   loadingFilings,
   preliminary,
-  collapsed = false,
-  onExpand,
   newsAvailable = false,
 }: {
   state: FormState;
   onChange: (s: FormState) => void;
   onSubmit: (publish: boolean) => void;
   busy: boolean;
-  steps: Step[];
-  elapsed: number;
-  vm: ViewModel | null;
   /** DART가 준 실제 정기보고서 목록. 회사를 고르기 전에는 비어 있다. */
   filings: Filing[];
   /** DART 조회는 시간이 걸린다. 아무 말 없이 잠겨 있으면 고장으로 읽힌다. */
   loadingFilings: boolean;
   preliminary: Preliminary | null;
-  /** 카드를 보는 중에는 접는다 — 생성 폼은 보드에서만 필요하다. */
-  collapsed?: boolean;
   /** 서버에 기사 검색 키가 있는가. 없으면 체크박스를 잠근다. */
   newsAvailable?: boolean;
-  onExpand?: () => void;
 }) {
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     onChange({ ...state, [k]: v });
@@ -77,29 +63,8 @@ export function GenerateForm({
     (f) => f.year === state.year && f.period === state.period,
   );
 
-  if (collapsed) {
-    return (
-      <div className="space-y-6">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onExpand}
-          className="w-full"
-        >
-          + 새 초안
-        </Button>
-        <StageRail
-          stages={vm?.stages ?? []}
-          steps={steps}
-          running={busy}
-          elapsed={elapsed}
-        />
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-8">
+    <div>
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -284,14 +249,6 @@ export function GenerateForm({
           발간합니다.
         </Hint>
       </form>
-
-      {/* 진행 표시와 단계 기록은 같은 것의 두 상태다 — 흘러가다가 그 자리에 남는다 */}
-      <StageRail
-        stages={vm && !vm.error ? vm.stages : []}
-        steps={steps}
-        running={busy}
-        elapsed={elapsed}
-      />
     </div>
   );
 }

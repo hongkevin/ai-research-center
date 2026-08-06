@@ -5,6 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 import { Board, BoardHint } from "@/components/board/board";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { StageRail } from "@/components/workbench/stage-rail";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { SectionEditor } from "@/components/note/section-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -63,6 +70,10 @@ export default function Workbench() {
   });
   // 서버에 기사 검색 키가 있는가. 없으면 체크박스가 이유를 적고 잠긴다.
   const [newsAvailable, setNewsAvailable] = useState(false);
+  // 생성은 상주 패널이 아니라 행동이다 (D49).
+  const [composing, setComposing] = useState(false);
+  // 지금 돌고 있는 카드. 진행 표시를 그 카드에만 붙인다.
+  const [runningId, setRunningId] = useState("");
   const [filings, setFilings] = useState<Filing[]>([]);
   const [loadingFilings, setLoadingFilings] = useState(false);
   const [preliminary, setPreliminary] = useState<Preliminary | null>(null);
@@ -71,7 +82,7 @@ export default function Workbench() {
   const [open, setOpen] = useState<CardDetail | null>(null);
   const [sections, setSections] = useState<DocSection[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
-  const { phase, steps, vm, error, elapsed, run } = useGeneration();
+  const { phase, steps, error, elapsed, run } = useGeneration();
 
   const busy = phase === "running";
   const [signedIn, setSignedIn] = useState<boolean | null>(
@@ -150,10 +161,31 @@ export default function Workbench() {
     void getCapabilities().then((c) => setNewsAvailable(c.news_key));
   }, []);
 
+  // 생성이 끝나면 열려 있는 그 카드를 다시 읽는다 — 레일 자리에 본문이 온다.
+  useEffect(() => {
+    if (phase === "running" || !runningId) return;
+    const id = runningId;
+    // **effect 본문에서 바로 setState하면 연쇄 렌더가 난다.** 비동기 뒤로 넘긴다
+    // (같은 규칙을 이 파일에서 이미 두 번 밟았다).
+    void (async () => {
+      await openCard(id);
+      setRunningId("");
+    })();
+  }, [phase, runningId]);
+
   function submit(publish: boolean) {
     setHeadings([]);
     setOpen(null);
-    run({ ...form, symbol: symbolOf(form.symbol), publish });
+    // **폼을 닫는다.** 카드가 보드에 바로 나타나므로 사람은 기다리지 않고
+    // 다른 카드를 본다 (D40이 노린 것인데 폼이 화면을 붙들고 있었다).
+    setComposing(false);
+    setRunningId("");
+    void run({ ...form, symbol: symbolOf(form.symbol), publish }, (id) => {
+      setRunningId(id);
+      // **그 카드를 바로 연다.** 안 그러면 생성 30초 동안 단계 레일이 어디에도
+      // 없다 — 보드에는 「생성 중…」 한 줄뿐이다.
+      if (id) void openCard(id);
+    });
   }
 
   // 편집기를 열면 그 섹션을 화면 위쪽으로 끌어온다. 시트가 아래 절반을
@@ -205,9 +237,6 @@ export default function Workbench() {
     setCards(await listCards());
   }
 
-  // 열린 카드가 있으면 그것을, 없으면 방금 생성한 것을 본다
-  const shown: ViewModel | null = open ? open.vm : vm;
-
   // 세션을 확인하는 동안은 아무것도 그리지 않는다 — 빈 보드가 잠깐 보이면
   // 카드가 사라진 것처럼 읽힌다.
   if (signedIn === null) return null;
@@ -258,25 +287,33 @@ export default function Workbench() {
         </div>
       </header>
 
-      <div className="grid items-start xl:grid-cols-[320px_minmax(0,1fr)_360px]">
-        <div className="border-b px-7 py-8 xl:sticky xl:top-(--header-h) xl:border-r xl:border-b-0">
+      {/* **보드가 집이다.** 폼이 왼쪽에 상주하던 것은 「입력 → 대기 → 툭」
+          시절의 잔재다. 카드가 객체가 된 뒤로(D40) 생성은 상주 패널이 아니라
+          **행동**이어야 한다 (D49). */}
+      <Dialog open={composing} onOpenChange={setComposing}>
+        <DialogContent className="max-h-[86dvh] w-full max-w-[560px] overflow-y-auto sm:max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>새 노트</DialogTitle>
+          </DialogHeader>
           <GenerateForm
             state={form}
             onChange={setForm}
             onSubmit={submit}
             busy={busy}
-            steps={steps}
-            elapsed={elapsed}
-            vm={shown}
             filings={filings}
             loadingFilings={loadingFilings}
             preliminary={preliminary}
-            collapsed={open !== null}
             newsAvailable={newsAvailable}
-            onExpand={() => setOpen(null)}
           />
-        </div>
+        </DialogContent>
+      </Dialog>
 
+      <div
+        className={cn(
+          "grid items-start",
+          open && "xl:grid-cols-[minmax(0,1fr)_360px]",
+        )}
+      >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
           {open ? (
             <>
@@ -361,18 +398,59 @@ export default function Workbench() {
             </Alert>
           ) : (
             <>
-              <Board
-                cards={cards}
-                onOpen={openCard}
-                onConfirm={confirm}
-                onDelete={remove}
-              />
-              <BoardHint />
+              <div className="mb-5 flex items-baseline justify-between gap-3">
+                <span className="text-[13px] text-muted-foreground">
+                  {cards.length > 0
+                    ? `노트 ${cards.length}건`
+                    : "아직 만든 노트가 없습니다."}
+                </span>
+                {cards.length > 0 && (
+                  <Button size="sm" onClick={() => setComposing(true)}>
+                    + 새 노트
+                  </Button>
+                )}
+              </div>
+              {cards.length > 0 ? (
+                <>
+                  <Board
+                    cards={cards}
+                    onOpen={openCard}
+                    onConfirm={confirm}
+                    onDelete={remove}
+                  />
+                  <BoardHint />
+                </>
+              ) : (
+                /* **비어 있을 때는 큰 버튼 하나만.** 처음 온 사람에게
+                   보여줄 것은 빈 칸반이 아니라 할 일이다. */
+                <div className="py-20 text-center">
+                  <p className="text-[15px] font-medium">
+                    종목 하나로 시작합니다.
+                  </p>
+                  <p className="mx-auto mt-2 max-w-[420px] text-[13px] leading-[1.8] text-muted-foreground">
+                    공시에서 수치를 읽어 초안을 만듭니다. 쓰던 리포트가 있으면
+                    함께 올려 그 구성으로 쓰고 직전 추정과 비교합니다.
+                  </p>
+                  <Button className="mt-6" onClick={() => setComposing(true)}>
+                    노트 만들기
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </div>
 
         <div className="border-t px-7 py-8 xl:sticky xl:top-(--header-h) xl:max-h-[calc(100vh-var(--header-h))] xl:overflow-y-auto xl:border-t-0 xl:border-l">
+          {/* **단계 레일은 카드 것이다.** 폼 안에 있을 때는 마지막 생성 하나만
+              보였다 — 두 건을 동시에 돌리면 나머지는 진단을 볼 수 없었다. */}
+          {open && (
+            <StageRail
+              stages={open.vm.stages ?? []}
+              steps={open.id === runningId ? steps : []}
+              running={busy && open.id === runningId}
+              elapsed={elapsed}
+            />
+          )}
           {open && !open.vm.error && (
             <EvidenceRail
               vm={open.vm}

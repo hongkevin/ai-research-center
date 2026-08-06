@@ -461,7 +461,15 @@ export async function searchCompanies(
   return d.results ?? [];
 }
 
-export async function startJob(req: JobRequest): Promise<string> {
+/**
+ * 생성 시작. `job_id`와 **카드 id**를 함께 돌려준다.
+ *
+ * 카드 id가 필요한 이유: 진행 표시를 **그 카드에** 붙여야 한다. 예전에는
+ * 진행 표시가 생성 폼에 붙어 있어서 두 건을 돌리면 마지막 것만 보였다 (D49).
+ */
+export async function startJob(
+  req: JobRequest,
+): Promise<{ jobId: string; cardId: string }> {
   const r = await api(`/api/jobs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -469,7 +477,7 @@ export async function startJob(req: JobRequest): Promise<string> {
   });
   if (!r.ok) await fail(r);
   const d = await r.json();
-  return d.job_id;
+  return { jobId: d.job_id, cardId: d.card_id ?? "" };
 }
 
 export async function fetchResult(jobId: string): Promise<ViewModel> {
