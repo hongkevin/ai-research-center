@@ -1,4 +1,21 @@
-"""리서치 채팅의 답변 — 카드를 근거로만 말하고, 항목마다 출처를 낸다.
+"""리서치 채팅의 답변 — **레인 셋**. 확인된 사실 · 그것을 읽은 분석 · 기사 힌트.
+
+왜 하나가 아니라 셋인가
+-----------------------
+처음에는 레인이 하나였고, 근거에 없는 것은 전부 "확인할 수 있는 근거가
+없습니다"로 떨어졌다. 실측에서 그 결과가 나왔다 — 부문 표를 통째로 주고도
+"어디가 제일 버는지 모릅니다"로 끝났다. 담을 자리가 없어서지 몰라서가 아니었다.
+
+RA가 듣고 싶은 것은 성격이 다른 셋이고, **신뢰 수준도 셋이 다르다.**
+
+    사실(facts)     공시 수치. 항목마다 출처가 붙고 숫자는 레지스트리가 만든다
+    분석(analysis)  그 사실들을 연결해 읽은 것. 새 사실은 없고 근거는 위와 같다
+    힌트(hints)     기사에서 온 추측. 검증한 것이 아니라 **되짚을 수 있는** 것
+
+**셋을 한 문자열로 합치지 않는다.** 합치면 화면이 「⚠ 미검증」 배지를 붙일
+자리를 잃고, 세 번째 레인의 문장이 첫 번째 레인의 신뢰도로 읽힌다. 그것이
+[D31](../../../docs/decisions.md#d31)·[D45](../../../docs/decisions.md#d45)가
+경계한 바로 그 사고다. `text`는 검증 레인만 담고 `hints`는 따로 나간다.
 
 이 파일이 지키는 것 셋
 ----------------------
@@ -16,20 +33,30 @@
 카드 본문(`assembled`)의 숫자는 이미 플레이스홀더이고, 카탈로그는 키·라벨·
 단위만 준다(`narrate.py`·`revise.py`와 같은 규칙). 그래서 LLM이 답을 써도
 **숫자는 구조적으로 지어낼 수 없다** — 지어내면 게이트가 그 문장을 버린다.
+
+분석 레인이 크기를 못 봐서 벙어리가 되는 자리는 `observations.py`가 메운다 —
+결정적 코드가 **순서**를 계산해 넘긴다. 순서는 크기가 아니다.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from arc.chat.evidence import CardRef
 from arc.chat.guard import NO_EVIDENCE, POLICY_REFUSAL, asks_for_opinion, check_answer
+from arc.chat.hints import Hint, HintResult, build_hints
+from arc.chat.observations import rank_observations
 from arc.chat.retrieval import Retrieval, retrieve
+from arc.data.base import NewsItem
 from arc.llm.client import LLMClient, Tier
 from arc.llm.narrate import parse_response
 from arc.store.cards import Card
+
+# 회사명 → 기사. **주입한다** — 키가 없는 환경에서 테스트가 돌아야 하고,
+# 넣지 않으면 힌트 레인이 통째로 꺼진다 (D45: 못 하면 못 한다고 쓴다).
+NewsFetcher = Callable[[str], list[NewsItem]]
 
 SYSTEM_PROMPT = """\
 당신은 한국 증권사 리서치센터의 애널리스트를 돕는 리서치 어시스턴트입니다.
@@ -77,11 +104,32 @@ SYSTEM_PROMPT = """\
 
 주어진 카드 꼬리표만 쓸 수 있습니다. 없는 꼬리표를 쓰면 문장이 버려집니다.
 
+## 두 부분으로 나눠 씁니다
+
+**`facts` — 확인된 사실.** 질문이 물은 수치를 그대로 전달합니다. 해석을 섞지
+마십시오. 2~4문장, 또는 항목이 여럿이면 `- ` 목록.
+
+    매출은 {{num:c1.revenue_2026a}}, 전년 대비 {{num:c1.revenue_yoy_2026a}} 변동했다 [c1]
+
+**`analysis` — 그 사실들을 읽은 것.** 여기서는 **자신 있게 씁니다.** 다만
+자신감의 대상은 판단이 아니라 **읽기**입니다.
+
+- 서로 다른 지표를 **연결**하십시오. 하나씩 읊는 글은 실패입니다.
+  "외형보다 이익이 빠르게 늘어 영업 레버리지가 작동했다 [c1]"
+- 「확인된 관찰」에 순서가 주어졌으면 그것을 근거로 쓰십시오. 순서는
+  결정적 코드가 계산한 사실입니다.
+- **"추가 확인이 필요하다"를 쓰지 마십시오.** 실사 보고서 어투입니다. 같은
+  불확실성은 "관건은 ~다", "~에서 갈린다"로 씁니다.
+- 근거에 없는 사실을 만들지 마십시오. 연결과 해석은 하되 **재료는 위와 같습니다.**
+- 2~4문장.
+
+**크기 비교는 함부로 하지 마십시오.** 카탈로그는 크기를 주지 않습니다. 순서가
+「확인된 관찰」에 주어진 것만 비교할 수 있고, 없으면 `unanswered`에 적습니다.
+"크게", "소폭", "급격히" 같은 정도 표현도 금지입니다.
+
 ## 쓰는 법
 
-- 결론을 먼저 씁니다. 질문에 대한 답이 첫 문장입니다.
-- 근거에 있는 말로 씁니다. 근거를 해석해 새 주장을 만들지 마십시오.
-- 3~6문장. 목록이 읽기 좋으면 `- `로 씁니다.
+- 결론을 먼저 씁니다. 질문에 대한 답이 `facts`의 첫 문장입니다.
 - 근거가 서로 다른 카드에서 왔으면 어느 카드의 얘기인지 분명히 씁니다.
 
 ## 출력 형식
@@ -89,7 +137,8 @@ SYSTEM_PROMPT = """\
 아래 JSON만 출력하십시오. 코드펜스나 설명을 붙이지 마십시오.
 
 {
-  "answer": "답변 본문",
+  "facts": "확인된 수치 전달",
+  "analysis": "그 수치를 읽은 것",
   "unanswered": ["근거가 없어 답하지 못한 것"]
 }
 
@@ -120,9 +169,16 @@ class Source:
 
 @dataclass
 class Answer:
-    """질의응답 1건의 결과."""
+    """질의응답 1건의 결과. **레인 셋이 섞이지 않은 채로** 나간다."""
 
+    # 검증 레인 = `facts` + `analysis`. 여기 숫자는 전부 레지스트리가 만들었고
+    # 게이트를 통과했다. 화면은 이것을 그대로 본문으로 쓴다.
     text: str
+    facts: str = ""
+    analysis: str = ""
+    # **미검증 레인.** 절대 `text`에 합치지 않는다 — 합치면 배지를 붙일 자리가
+    # 없어지고 기사에서 온 말이 공시에서 온 말처럼 읽힌다 (D31·D45).
+    hints: list[Hint] = field(default_factory=list)
     sources: list[Source] = field(default_factory=list)
     unanswered: list[str] = field(default_factory=list)
     # **확신도가 아니다.** "이 답변의 문장이 근거에 연결돼 있는가"라는 사실
@@ -151,6 +207,14 @@ def build_prompt(retrieval: Retrieval) -> str:
         parts.append("# 근거 발췌 (카드 본문. 숫자는 플레이스홀더로 들어 있습니다)")
         for p in retrieval.passages:
             parts.append(f"\n## [{p.tag}] {p.section}\n{p.text}")
+        parts.append("")
+
+    # 결정적 코드가 계산한 순서. 크기를 안 주면서 비교를 가능하게 하는 유일한
+    # 재료다 (`observations.py`).
+    ranks = rank_observations(retrieval.registry, retrieval.keys)
+    if ranks:
+        parts.append("# 확인된 관찰 (결정적 계산 결과 — 이것은 사실입니다)")
+        parts.extend(f"- {line}" for line in ranks)
         parts.append("")
 
     lines = []
@@ -227,13 +291,24 @@ def _sources_for(retrieval: Retrieval, keys: list[str], markers: list[str]) -> l
     return out
 
 
-def _no_evidence(question: str, retrieval: Retrieval) -> Answer:
+def _no_evidence(question: str, retrieval: Retrieval, hint: HintResult | None = None) -> Answer:
+    """공시 근거가 없다. **그래도 힌트 레인은 살아 있을 수 있다.**
+
+    「공시에서 확인할 수 없다」와 「아무것도 말할 게 없다」는 다르다. 수주·계약·
+    규제처럼 공시에 아직 없는 것을 물었을 때가 기사 힌트가 가장 쓸모 있는
+    순간이고, 그것이 미검증 표시를 달고 나가는 한 정직하다.
+    """
     reason = retrieval.reason or "질문과 겹치는 근거가 카드에 없습니다."
+    hint = hint or HintResult()
     return Answer(
         text=f"{NO_EVIDENCE} {reason}",
+        hints=hint.hints,
         unanswered=[question],
         grounded=False,
-        problems=[reason],
+        used_llm=hint.used_llm,
+        model=hint.model,
+        cost_usd=hint.cost_usd,
+        problems=[reason, *hint.problems],
     )
 
 
@@ -242,6 +317,7 @@ def answer_question(
     cards: Sequence[Card],
     *,
     client: LLMClient | None = None,
+    news: NewsFetcher | None = None,
     max_cards: int = 2,
     max_passages: int = 8,
     max_attempts: int = 2,
@@ -251,6 +327,10 @@ def answer_question(
 
     `client`가 없으면 **문장을 만들지 않고** 찾은 근거만 돌려준다. 키 없는
     환경에서도 검색·출처는 그대로 동작해야 한다.
+
+    `news`를 넣으면 **세 번째 레인**이 열린다 — 기사에서 온 힌트. 호출은
+    검증 레인과 분리된다(D31). 넣지 않으면 그 레인은 꺼진 채로 있고, 그
+    사실이 `problems`에 남는다.
     """
     refusal = asks_for_opinion(question)
     if refusal:
@@ -258,7 +338,9 @@ def answer_question(
 
     retrieval = retrieve(question, cards, max_cards=max_cards, max_passages=max_passages)
     if retrieval.empty:
-        return _no_evidence(question, retrieval)
+        if client is None:
+            return _no_evidence(question, retrieval)
+        return _no_evidence(question, retrieval, _hints_lane(question, retrieval, client, news))
 
     if client is None:
         return Answer(
@@ -298,24 +380,31 @@ def answer_question(
                 unanswered=[question],
                 problems=[f"{type(exc).__name__}: {exc}"],
             )
-        if str(payload.get("answer") or "").strip():
+        if str(payload.get("facts") or "").strip():
             problems = []
             break
-        problems = ["answer가 비어 있습니다."]
+        problems = ["facts가 비어 있습니다."]
         payload = {}
 
-    raw = str(payload.get("answer") or "").strip()
-    if not raw:
+    facts_raw = str(payload.get("facts") or "").strip()
+    if not facts_raw:
         return Answer(
             text=f"{NO_EVIDENCE} 서술 레이어가 답을 만들지 못했습니다.",
             cards=retrieval.cards,
             unanswered=[question],
             problems=problems,
         )
+    analysis_raw = str(payload.get("analysis") or "").strip()
 
-    verdict = check_answer(raw, retrieval)
+    # **두 레인을 따로 검사한다.** 분석이 걸려도 사실은 남아야 한다 — 사실이
+    # 이 답변의 값어치이고, 해석 하나 때문에 그것까지 버릴 이유가 없다.
+    verdict = check_answer(facts_raw, retrieval)
+    analysis_verdict = check_answer(analysis_raw, retrieval) if analysis_raw else None
     model = last.model if last else ""
     cost = last.cost_usd if last else None
+
+    if analysis_verdict is not None and analysis_verdict.refused and not verdict.refused:
+        verdict.refused = analysis_verdict.refused
 
     if verdict.refused:
         return Answer(
@@ -345,18 +434,61 @@ def answer_question(
             f"«{', '.join(retrieval.unmatched)}» — 카드에서 해당 근거를 찾지 못했습니다."
         )
 
-    sources = _sources_for(retrieval, verdict.keys, verdict.markers)
-    return Answer(
+    keys = list(verdict.keys)
+    markers = list(verdict.markers)
+    rejected = list(verdict.rejected)
+    unsourced = list(verdict.unsourced)
+    analysis = ""
+    if analysis_verdict is not None:
+        keys += [k for k in analysis_verdict.keys if k not in keys]
+        markers += [m for m in analysis_verdict.markers if m not in markers]
+        rejected += analysis_verdict.rejected
+        unsourced += analysis_verdict.unsourced
         # 마지막에 치환한다. 조사 교정도 여기서 함께 일어난다 (D23).
-        text=retrieval.registry.render_text(verdict.text),
+        analysis = retrieval.registry.render_text(analysis_verdict.text)
+
+    facts = retrieval.registry.render_text(verdict.text)
+    hint = _hints_lane(question, retrieval, client, news)
+
+    sources = _sources_for(retrieval, keys, markers)
+    return Answer(
+        # **검증 레인만** 담는다. 힌트는 `hints`로 따로 나간다.
+        text="\n\n".join(p for p in (facts, analysis) if p),
+        facts=facts,
+        analysis=analysis,
+        hints=hint.hints,
         sources=sources,
         unanswered=list(dict.fromkeys(unanswered)),
         grounded=bool(sources),
-        rejected=verdict.rejected,
-        unsourced=verdict.unsourced,
+        rejected=rejected,
+        unsourced=unsourced,
         cards=retrieval.cards,
         used_llm=True,
         model=model,
-        cost_usd=cost,
-        problems=problems,
+        # 두 레인의 호출을 합산한다. 화면에 한 질문의 값이 나와야 한다.
+        cost_usd=_add(cost, hint.cost_usd),
+        problems=problems + hint.problems,
     )
+
+
+def _add(a: float | None, b: float | None) -> float | None:
+    return None if a is None and b is None else (a or 0.0) + (b or 0.0)
+
+
+def _hints_lane(
+    question: str,
+    retrieval: Retrieval,
+    client: LLMClient,
+    news: NewsFetcher | None,
+) -> HintResult:
+    """세 번째 레인. **실패해도 앞의 두 레인을 막지 않는다.**"""
+    if news is None:
+        return HintResult(problems=["기사 검색이 연결되지 않아 힌트 레인은 꺼져 있습니다."])
+    if retrieval.subject is None:
+        return HintResult(problems=["어느 회사인지 가리지 못해 기사를 찾지 않았습니다."])
+    company = retrieval.subject.company
+    try:
+        items = news(company)
+    except Exception as exc:  # noqa: BLE001 — 어댑터별 예외가 다르다
+        return HintResult(problems=[f"기사 조회 실패: {type(exc).__name__}: {exc}"])
+    return build_hints(client, question=question, company=company, items=items)

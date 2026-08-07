@@ -16,9 +16,11 @@ import datetime as dt
 import io
 import os
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 import httpx
 
@@ -38,6 +40,23 @@ from arc.data.base import (
 
 BASE_URL = "https://opendart.fss.or.kr/api"
 SOURCE = "opendart"
+
+# corpCode.xml 디스크 캐시 (D69). 하루면 충분하다 — 신규 상장은 그날 안 쓴다.
+CORP_CODE_CACHE_TTL = dt.timedelta(hours=24)
+
+# **요청 사이 최소 간격.** 일 20,000건 한도와 별개로 OpenDART는 순간 요청률에
+# WAF가 걸린다 (아래 DartBlockedError 참조). 0.25초면 초당 4건으로, 전 상장사
+# 3,981건을 돌려도 17분이다 — 어차피 그럴 일이 없으니 체감 비용이 없다.
+MIN_REQUEST_INTERVAL = 0.25
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _cache_dir() -> Path:
+    """corpCode 캐시 위치. `ARC_STORE_DIR`을 따른다 (web/app.py와 같은 규칙)."""
+    base = os.environ.get("ARC_STORE_DIR") or (_REPO_ROOT / ".arc-store")
+    return Path(base) / "cache"
+
 
 # DART 정기보고서 코드 (reprt_code)
 _REPRT_CODE: dict[PeriodType, str] = {
@@ -79,13 +98,37 @@ class DartRateLimitError(DartError):
     """일 20,000건 한도 초과 (status '020'). 재시도해도 소용없다 — 즉시 중단."""
 
 
+class DartBlockedError(Exception):
+    """**연결 자체가 거부된다 — IP가 차단된 상태다.**
+
+    실제로 밟았다 (D69). company.json을 6워커로 병렬 호출하자 OpenDART가 IP를
+    끊었고, 그 뒤 `corpCode.xml`까지 TCP 연결이 거부(curl HTTP 000)됐다. 40분
+    넘게 안 풀렸다. **일 한도는 20%도 안 썼다** — 한도가 아니라 요청률이다.
+
+    당시 코드가 차단을 증폭시켰다. `_request`가 `httpx.TransportError`를 재시도
+    대상으로 잡는데 연결 거부(`ConnectError`·`RemoteProtocolError`)가 전부 그
+    하위 클래스다. 즉 **막힌 뒤에도 4번씩 더 두드렸다.** 그래서 전송 오류는
+    재시도 예산을 따로 짧게 준다 (`transport_retries`, 기본 1회).
+
+    이 예외를 보면 **재시도하지 말고 기다려야 한다.** 자동 해제형이라 보통
+    수십 분~24시간이면 풀리는데, 계속 두드리면 연장된다. 핫스팟으로 IP를 바꾸면
+    당장은 되지만 해법이 아니다 — 통신사 공유 IP라 남까지 막고, 배포 환경엔
+    핫스팟이 없다.
+    """
+
+
 class DartProvider(DataProvider):
     """OpenDART 어댑터.
 
-    일 20,000건 한도를 고려한 재시도 정책:
-      - 네트워크 오류·5xx·429 → 지수 백오프로 최대 max_retries회 재시도
+    재시도 정책 — **무엇이 재시도로 풀리는가로 가른다.**
+      - 5xx·429 → 서버가 "나중에 오라"고 한 것이다. 지수 백오프로 max_retries회.
+      - 전송 오류(연결 거부·프로토콜 오류) → 재시도로 안 풀린다. transport_retries
+        (기본 1)회만 보고 DartBlockedError로 즉시 중단한다. 여기서 계속 두드리면
+        차단이 연장된다 (DartBlockedError 독스트링 참조).
       - status '020'(사용한도 초과) → 재시도 없이 DartRateLimitError
         (재시도는 한도만 더 소모한다)
+
+    그리고 **요청률을 스스로 제한한다** — 동시연결 2, 요청 간 최소 0.25초.
     """
 
     def __init__(
@@ -94,23 +137,50 @@ class DartProvider(DataProvider):
         client: httpx.Client | None = None,
         max_retries: int = 3,
         backoff_base: float = 1.0,
+        transport_retries: int = 1,
+        min_interval: float = MIN_REQUEST_INTERVAL,
+        cache_dir: str | Path | None = None,
     ) -> None:
         self.api_key = api_key or os.environ.get("DART_API_KEY", "")
         if not self.api_key:
             raise ValueError("DART_API_KEY가 설정되지 않았습니다 (.env 참조)")
-        self._client = client or httpx.Client(base_url=BASE_URL, timeout=30.0)
+        # 동시연결을 2로 묶는다. 부르는 쪽이 ThreadPoolExecutor를 쓰더라도
+        # 소켓이 그 이상 열리지 않는다 — 병렬 호출로 차단당한 것이 D69다.
+        self._client = client or httpx.Client(
+            base_url=BASE_URL,
+            timeout=30.0,
+            limits=httpx.Limits(max_connections=2, max_keepalive_connections=2),
+        )
         self.max_retries = max_retries
         self.backoff_base = backoff_base
+        self.transport_retries = transport_retries
+        self.min_interval = min_interval
         self._corp_code_map: dict[str, dict[str, str]] | None = None  # stock_code → entry
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else None
+        self._lock = threading.Lock()  # 요청 간격을 스레드 간에도 지킨다
+        self._last_request_at = 0.0
 
     # ------------------------------------------------------------------ HTTP
 
+    def _throttle(self) -> None:
+        """요청 간 최소 간격을 지킨다. **차단당하지 않는 것이 가장 싼 재시도다.**"""
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            wait = self._last_request_at + self.min_interval - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request_at = time.monotonic()
+
     def _request(self, path: str, params: dict[str, str]) -> httpx.Response:
-        """단순 재시도 래퍼. 429/5xx/전송오류만 재시도한다."""
+        """재시도 래퍼. **429/5xx와 전송 오류를 다르게 다룬다** (D69)."""
         params = {"crtfc_key": self.api_key, **params}
         last_exc: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        transport_failures = 0
+        attempt = 0
+        while True:
             try:
+                self._throttle()
                 resp = self._client.get(f"/{path}", params=params)
                 if resp.status_code == 429 or resp.status_code >= 500:
                     raise httpx.HTTPStatusError(
@@ -120,14 +190,26 @@ class DartProvider(DataProvider):
                     )
                 resp.raise_for_status()
                 return resp
-            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
-                if isinstance(exc, httpx.HTTPStatusError):
-                    code = exc.response.status_code
-                    if code != 429 and code < 500:
-                        raise  # 4xx(429 제외)는 재시도 무의미
+            except httpx.HTTPStatusError as exc:
+                code = exc.response.status_code
+                if code != 429 and code < 500:
+                    raise  # 4xx(429 제외)는 재시도 무의미
                 last_exc = exc
-                if attempt < self.max_retries:
-                    time.sleep(self.backoff_base * (2**attempt))
+                if attempt >= self.max_retries:
+                    break
+            except httpx.TransportError as exc:
+                # **연결이 거부되는 것은 재시도로 안 풀린다.** 예산을 따로 짧게
+                # 주고, 다 쓰면 "기다려라"라고 말하는 예외로 바꾼다.
+                transport_failures += 1
+                last_exc = exc
+                if transport_failures > self.transport_retries:
+                    raise DartBlockedError(
+                        f"OpenDART 연결이 거부됐다 ({type(exc).__name__}). "
+                        "요청률 초과로 IP가 차단된 상태일 수 있다 — **재시도하지 말고 "
+                        "기다려라.** 보통 수십 분~24시간이면 자동 해제된다."
+                    ) from exc
+            attempt += 1
+            time.sleep(self.backoff_base * (2 ** (attempt - 1)))
         assert last_exc is not None
         raise last_exc
 
@@ -145,16 +227,51 @@ class DartProvider(DataProvider):
 
     # ------------------------------------------------------- corpCode.xml
 
-    def load_corp_codes(self) -> dict[str, dict[str, str]]:
-        """corpCode.xml zip을 내려받아 {종목코드: {corp_code, corp_name, ...}} 매핑 생성.
+    def corp_code_cache_path(self) -> Path:
+        return (self._cache_dir or _cache_dir()) / "corpcode.zip"
 
-        상장사(stock_code가 있는 항목)만 보관한다. 결과는 인스턴스에 캐시.
+    def load_corp_codes(self) -> dict[str, dict[str, str]]:
+        """corpCode.xml zip → {종목코드: {corp_code, corp_name, ...}} 매핑.
+
+        상장사(stock_code가 있는 항목)만 보관한다.
+
+        **디스크에 캐시한다 (D69).** 전에는 인스턴스 메모리에만 있어서 프로세스가
+        새로 뜰 때마다 수 MB zip을 다시 받았다 — 테스트 한 번, 웹 워커 재시작
+        한 번, CLI 한 번마다. 이게 요청률 차단을 부르는 가장 흔한 경로였다.
+        캐시가 24시간 안이면 네트워크를 아예 건드리지 않는다.
+
+        캐시를 못 읽거나 못 쓰는 것은 **실패가 아니다** — 네트워크로 넘어간다.
         """
         if self._corp_code_map is not None:
             return self._corp_code_map
-        resp = self._request("corpCode.xml", {})
-        self._corp_code_map = self.parse_corp_code_zip(resp.content)
+
+        path = self.corp_code_cache_path()
+        raw = self._read_cached_corp_codes(path)
+        if raw is None:
+            raw = self._request("corpCode.xml", {}).content
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = path.with_suffix(".zip.tmp")
+                tmp.write_bytes(raw)
+                tmp.replace(path)  # 원자적 — 반쯤 쓰인 zip을 다음 프로세스가 읽지 않게
+            except OSError:
+                pass  # 캐시는 최적화지 요구사항이 아니다
+
+        self._corp_code_map = self.parse_corp_code_zip(raw)
         return self._corp_code_map
+
+    @staticmethod
+    def _read_cached_corp_codes(path: Path) -> bytes | None:
+        """캐시가 있고 신선하면 바이트를, 아니면 None."""
+        try:
+            age = time.time() - path.stat().st_mtime
+            if age > CORP_CODE_CACHE_TTL.total_seconds():
+                return None
+            raw = path.read_bytes()
+        except OSError:
+            return None
+        # 깨진 캐시를 신뢰하지 않는다 — zip으로 열리는지 확인한 뒤에만 쓴다
+        return raw if raw and zipfile.is_zipfile(io.BytesIO(raw)) else None
 
     @staticmethod
     def parse_corp_code_zip(zip_bytes: bytes) -> dict[str, dict[str, str]]:

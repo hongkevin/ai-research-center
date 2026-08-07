@@ -14,6 +14,23 @@ RA의 리퀘스트는 열린 질문이 아니라 **정해진 성격**을 갖는�
 걸리지 않은 것을 남긴다. 여기가 비지 않으면 답변은 그 부분을 "확인할 수 있는
 근거가 없습니다"로 처리해야 한다. 검색이 조용히 비슷한 것을 집어 오면
 「모르면 모른다고 한다」가 성립하지 않는다.
+
+앞 턴을 이어받는다 (`Context`)
+------------------------------
+실측에서 이게 비어 있었다. 「채팅」인데 후속 질문을 못 받았다:
+
+    '현대로템 영업이익률 알려줘'  → 카드 잡힘
+    '그럼 작년은?'               → 비었음
+    '부문별로는?'                → 비었음
+    '거기 매출은 얼마야'          → «거기»가 무엇인지 모름
+
+RA 대화는 후속 질문이 기본인데 매 턴 종목명을 다시 말해야 했다. `Context`가
+직전 턴의 **종목·주제·연도**를 들고 온다.
+
+**이어받았으면 반드시 밝힌다** (`carried`). 사용자가 "부문별로는?"이라고 했을
+때 우리가 조용히 현대로템으로 답하면, 그가 다른 회사를 생각하고 있었을 때
+**틀린 답을 확신 있게 하게 된다.** 이어받기는 편의이고 그 편의의 대가는
+표시다. 그리고 질문이 회사를 부르면 이어받기는 **무시된다** — 새 주어가 이긴다.
 """
 
 from __future__ import annotations
@@ -58,6 +75,10 @@ class Retrieval:
     matched: list[str] = field(default_factory=list)  # 근거에서 걸린 질문 어휘
     unmatched: list[str] = field(default_factory=list)  # 어디에도 없던 질문 어휘
     reason: str = ""  # 비었을 때 왜 비었는가
+    # **질문이 가리킨 회사.** 근거가 비어도 남는다 — 공시에 없는 것을 물었을
+    # 때가 기사 힌트가 가장 쓸모 있는 순간이고, 그러려면 어느 회사인지는
+    # 알고 있어야 한다.
+    subject: CardRef | None = None
 
     @property
     def empty(self) -> bool:
@@ -186,6 +207,7 @@ def retrieve(
         out.cards.append(card_ref(card, tag))
         entries.extend(card_entries(card, tag))
         passages.extend(card_passages(card, tag))
+    out.subject = out.cards[0]
     out.registry = build_registry(entries)
 
     # **회사 이름은 발췌를 고르는 데 쓰지 않는다.** 그 카드의 모든 절이 그
@@ -225,9 +247,11 @@ def retrieve(
 
 
 def _nothing(out: Retrieval, tokens: list[str], template: str) -> Retrieval:
-    """근거 없음으로 되돌린다. **모은 것을 비우고 이유만 남긴다.**"""
+    """근거 없음으로 되돌린다. **모은 것을 비우고 이유와 대상만 남긴다.**"""
     out.reason = template.format(", ".join(tokens[:4]))
     out.unmatched = tokens
+    # 회사는 남긴다 — 「공시에는 없다」와 「어느 회사인지 모른다」는 다르다.
+    out.subject = out.cards[0] if out.cards else None
     out.cards = []
     out.passages = []
     out.keys = []
