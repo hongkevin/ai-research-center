@@ -60,3 +60,7 @@ corpus/**/prices/
 
 # 사용자가 대화에 붙인 스크린샷. 구독 채널·동료 이름이 찍혀 있어 저장소에 안 올린다.
 docs/KakaoTalk_Photo_*
+
+# 텔레그램 세션 = 계정 접근권 그 자체. 절대 커밋하지 않는다.
+*.session
+*.session-journal

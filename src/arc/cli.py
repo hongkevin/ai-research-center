@@ -404,5 +404,119 @@ def web(
     uvicorn.run("arc.web.app:app", host=host, port=port, reload=reload)
 
 
+telegram_app = typer.Typer(help="텔레그램 — 로그인·채널 목록·수집")
+app.add_typer(telegram_app, name="telegram")
+
+
+def _tg_store() -> Path:
+    """세션이 놓일 곳. **사용자 디렉터리 안이다** — 계정은 사람마다다."""
+    from arc.web.identity import user_dir
+
+    base = os.environ.get("ARC_STORE_DIR") or str(
+        Path(__file__).resolve().parents[2] / ".arc-store"
+    )
+    return user_dir(base)
+
+
+def _tg_client():
+    """로그인된 Telethon 클라이언트. **CLI에서만 만든다.**
+
+    인증은 전화번호 → 코드 → (2FA면) 비밀번호로 사람이 개입한다. 웹 요청
+    안에서 할 수 없고, 세션 파일은 계정 그 자체라 서버가 대신 들고 있을
+    물건이 아니다.
+    """
+    from telethon import TelegramClient
+
+    from arc.ingest.telegram_collect import credentials, session_path
+
+    api_id, api_hash = credentials()
+    return TelegramClient(str(session_path(_tg_store())), api_id, api_hash)
+
+
+@telegram_app.command("login")
+def telegram_login() -> None:
+    """텔레그램에 로그인한다. **한 번만 하면 세션이 남는다.**"""
+    import asyncio
+
+    async def run() -> None:
+        client = _tg_client()
+        await client.start()  # 전화번호·코드를 여기서 묻는다
+        me = await client.get_me()
+        typer.secho(
+            f"\n  로그인됨: {me.first_name or ''} (@{me.username or '-'})", fg=typer.colors.GREEN
+        )
+        typer.echo(f"  세션: {_tg_store()}/telegram.session\n")
+        await client.disconnect()
+
+    asyncio.run(run())
+
+
+@telegram_app.command("channels")
+def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
+    """구독 중인 채널 목록. **가져오기 전에 무엇이 있는지 본다.**"""
+    import asyncio
+
+    from arc.ingest.telegram_collect import fetch_dialogs
+    from arc.ingest.telegram_parse import classify_channel
+
+    async def run() -> None:
+        client = _tg_client()
+        await client.start()
+        rows = await fetch_dialogs(client, limit=limit)
+        await client.disconnect()
+        typer.echo(f"\n  채널 {len(rows)}개\n")
+        for r in rows:
+            kind = classify_channel(r["name"], chat_type=r["chat_type"])
+            typer.echo(f"  {r['chat_id']!s:>14}  {kind.value:<9} {r['unread']:>6}  {r['name']}")
+        typer.echo("")
+
+    asyncio.run(run())
+
+
+@telegram_app.command("sync")
+def telegram_sync(
+    chat: list[int] = typer.Option(None, "--chat", help="채널 id (여러 번). 비우면 전부"),
+    limit: int = typer.Option(300, "--limit", help="채널당 최근 몇 건"),
+    days: int = typer.Option(7, "--days", help="며칠치"),
+) -> None:
+    """채널에서 메시지를 가져와 **내보내기와 같은 모양**으로 저장한다.
+
+    파서가 그대로 읽는다 — 수집기를 바꿔도 그 뒤가 안 바뀐다 (D66).
+    """
+    import asyncio
+    import datetime as dt
+    import json
+
+    from arc.ingest.telegram_collect import fetch_channel, fetch_dialogs
+
+    async def run() -> None:
+        client = _tg_client()
+        await client.start()
+        targets = list(chat or [])
+        if not targets:
+            targets = [r["chat_id"] for r in await fetch_dialogs(client)]
+        since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+
+        out_dir = _tg_store() / "telegram"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        total = 0
+        for chat_id in targets:
+            try:
+                got = await fetch_channel(client, chat_id, limit=limit, since=since)
+            except Exception as exc:  # noqa: BLE001 — 한 채널이 실패해도 나머지는 받는다
+                typer.secho(f"  건너뜀 {chat_id}: {exc}", fg=typer.colors.YELLOW)
+                continue
+            if not got.messages:
+                continue
+            path = out_dir / f"{got.chat_id}.json"
+            path.write_text(json.dumps(got.as_export(), ensure_ascii=False), encoding="utf-8")
+            total += len(got.messages)
+            typer.echo(f"  {len(got.messages):>5}건  {got.name}")
+        await client.disconnect()
+        typer.secho(f"\n  메시지 {total}건 · {out_dir}\n", fg=typer.colors.GREEN)
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     app()
