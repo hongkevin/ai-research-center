@@ -877,9 +877,39 @@ export interface PeerColumn {
   ready: boolean;
 }
 
+/**
+ * 관점 칸 (D73). **숫자 칸과 다른 자료입니다** — 레지스트리 키가 없습니다.
+ *
+ * `absent`는 「그 관점이 이 종목에서 결론을 못 냈다」는 뜻입니다.
+ * **「중립」으로 적지 않습니다** — 그러면 「모른다」가 「보통이다」로 바뀝니다.
+ */
+export interface PeerLensCell {
+  verdict: "supportive" | "adverse" | "neutral" | "";
+  /** 화면에 세울 말 — 받쳐 줌 / 부담 / 중립 */
+  label: string;
+  /** 평문 주된 발견. 표에서는 길어서 툴팁으로 갑니다 */
+  headline: string;
+  card_id: string;
+  absent: boolean;
+}
+
+/**
+ * 관점 한 줄 — 같은 질문을 여러 종목에 던진 결과.
+ *
+ * **피어 비교는 실적 비교만이 아닙니다.** 같은 질문에 종목마다 다른 답이
+ * 나오는 지점이 곧 볼 거리입니다.
+ */
+export interface PeerLensRow {
+  label: string;
+  question: string;
+  cells: PeerLensCell[];
+}
+
 export interface PeerTable {
   columns: PeerColumn[];
   rows: PeerRow[];
+  /** 관점 층 — 숫자 아래 */
+  lens_rows: PeerLensRow[];
   /** **기준 기간이 섞이면 표가 조용히 거짓말을 한다** */
   mixed_basis: boolean;
   note: string;

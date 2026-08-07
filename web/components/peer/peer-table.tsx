@@ -70,6 +70,8 @@ export function PeerTable({
               {groups.map((g) => (
                 <GroupRows key={g} group={g} table={table} />
               ))}
+              {/* **관점은 숫자 아래다.** 위에 두면 판독이 사실처럼 읽힌다 */}
+              <LensRows table={table} />
             </tbody>
           </table>
         </div>
@@ -162,6 +164,84 @@ function GroupRows({ group, table }: { group: string; table: Table }) {
 }
 
 /** 아직 카드가 없는 구성원. **커버 밖 종목을 나중에 만드는 것이 본체다.** */
+/**
+ * 관점 층 — **엔진이 이미 판독해 놓은 것** (D35 · D73).
+ *
+ * 요구가 그대로였다: *"피어 분석이 사실 실적 분석이라고 생각하지는 않고,
+ * 주가 차이, 분석에 대한 관점도 일부 있다"*. 숫자는 크기를 비교하고, 여기는
+ * **같은 질문에 회사마다 다른 답이 나오는 지점**을 비교한다.
+ *
+ * **답이 갈리는 줄을 표시한다.** 다섯이 다 「받쳐 줌」이면 볼 것이 없고,
+ * 하나만 「부담」이면 그게 오늘 볼 것이다.
+ */
+function LensRows({ table }: { table: Table }) {
+  const rows = table.lens_rows ?? [];
+  if (rows.length === 0) return null;
+  return (
+    <>
+      <tr className="border-b bg-muted/20">
+        <td
+          colSpan={table.columns.length + 1}
+          className="px-3 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+        >
+          관점
+          <span className="ml-1.5 font-normal normal-case tracking-normal">
+            같은 질문에 회사마다 답이 다른 곳
+          </span>
+        </td>
+      </tr>
+      {rows.map((r) => {
+        const said = new Set(
+          r.cells.filter((c) => !c.absent).map((c) => c.verdict),
+        );
+        return (
+          <tr key={r.label} className="border-b last:border-b-0">
+            <td
+              className="sticky left-0 z-10 bg-card px-3 py-1.5 whitespace-nowrap"
+              title={r.question}
+            >
+              {r.label}
+              {said.size > 1 && (
+                <span className="ml-1.5 text-[10px] text-warn" title="답이 갈립니다">
+                  갈림
+                </span>
+              )}
+            </td>
+            {r.cells.map((c, i) => (
+              <td
+                key={i}
+                className="px-3 py-1.5 text-right"
+                title={
+                  c.absent
+                    ? "이 관점으로 볼 근거를 이 회사 공시에서 찾지 못했습니다 — 「보통이다」가 아닙니다"
+                    : c.headline
+                }
+              >
+                {c.absent ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <span
+                    className={cn(
+                      "rounded px-1.5 py-0.5 text-[11px]",
+                      c.verdict === "supportive"
+                        ? "bg-ok/15 text-ok"
+                        : c.verdict === "adverse"
+                          ? "bg-warn/15 text-warn"
+                          : "text-muted-foreground",
+                    )}
+                  >
+                    {c.label}
+                  </span>
+                )}
+              </td>
+            ))}
+          </tr>
+        );
+      })}
+    </>
+  );
+}
+
 function Pending({ members }: { members: PeerMember[] }) {
   const waiting = members.filter((m) => m.status !== "ready");
   if (waiting.length === 0) return null;
