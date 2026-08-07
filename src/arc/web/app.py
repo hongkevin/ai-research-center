@@ -100,6 +100,7 @@ from arc.store.notes import (
 from arc.store.notes import to_rows as note_rows
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
+from arc.web.identity import migrate_legacy, user_dir
 from arc.web.jobs import JobStore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -684,6 +685,17 @@ def _news_by_name(company: str):
     return list(select(raw, now=now, months=3, limit=10, company=name) or [])
 
 
+def _my_dir() -> Path:
+    """**지금 요청한 사람의** 저장소 경로.
+
+    `.arc-store/users/{uid}/`. 인증이 꺼져 있으면 `local` 한 사람이다.
+    시세(`prices`)와 corpCode 캐시는 여기 안 들어간다 — 시장 데이터는
+    누구의 것도 아니라서 사람마다 복제하면 디스크와 API 호출만 는다.
+    """
+    migrate_legacy(STORE_DIR)
+    return user_dir(STORE_DIR)
+
+
 def _open_store() -> SnapshotStore | None:
     """추정 이력 저장소. 쓸 수 없으면 None.
 
@@ -692,7 +704,7 @@ def _open_store() -> SnapshotStore | None:
     revision 추적을 위한 향상이지 리포트 생성의 전제가 아니다.
     """
     try:
-        return SnapshotStore(STORE_DIR)
+        return SnapshotStore(_my_dir())
     except OSError as exc:
         log.warning("추정 이력 저장소를 열지 못했습니다 (%s): %s", STORE_DIR, exc)
         return None
@@ -714,7 +726,7 @@ def _open_cards() -> CardStore | None:
     안 된다.
     """
     try:
-        return CardStore(STORE_DIR)
+        return CardStore(_my_dir())
     except OSError as exc:
         log.warning("카드 저장소를 열지 못했습니다 (%s): %s", STORE_DIR, exc)
         return None

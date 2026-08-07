@@ -33,6 +33,16 @@ def client(tmp_path, monkeypatch):
     return TestClient(web.app)
 
 
+def _mine(tmp_path):
+    """앱이 실제로 쓰는 곳 — **저장소가 사람별로 갈렸다.**
+
+    `.arc-store/users/{uid}/`. 인증이 꺼진 테스트에서는 `local` 한 사람이다.
+    """
+    from arc.web.identity import user_dir
+
+    return user_dir(tmp_path / "store")
+
+
 def _registry() -> NumberRegistry:
     reg = NumberRegistry()
     reg.register(
@@ -70,7 +80,7 @@ def _card(store: CardStore, *, gate_passed: bool = True, body: str = "") -> Card
 class TestPublish:
     def test_renders_the_cards_current_body(self, client, tmp_path):
         """**고친 것이 살아서 나간다.** 다시 생성하지 않는다."""
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store, body="## 실적 요약\n\n코멘트로 고친 문장. {{num:rev_2025a}}.\n")
 
         r = client.post(f"/api/cards/{card.id}/publish")
@@ -81,7 +91,7 @@ class TestPublish:
 
     def test_substitutes_placeholders(self, client, tmp_path):
         """플레이스홀더가 남은 채 나가면 독자에게 `{{num:…}}`이 보인다."""
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store)
 
         r = client.post(f"/api/cards/{card.id}/publish")
@@ -92,7 +102,7 @@ class TestPublish:
         assert "{{num:" not in text
 
     def test_moves_the_card_to_published(self, client, tmp_path):
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store)
 
         client.post(f"/api/cards/{card.id}/publish")
@@ -104,7 +114,7 @@ class TestPublish:
 
     def test_refuses_when_the_gate_did_not_pass(self, client, tmp_path):
         """점검을 통과하지 못한 초안은 나가지 않는다."""
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store, gate_passed=False)
 
         r = client.post(f"/api/cards/{card.id}/publish")
@@ -121,7 +131,7 @@ class TestPublish:
 
     def test_snapshots_the_estimate(self, client, tmp_path):
         """발간해야 추정이 이력에 남는다 — 다음 발간의 변화 추적 기준이다 (D27)."""
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store)
         card.estimate_snapshot = {
             "fiscal_year": 2026,
@@ -136,12 +146,12 @@ class TestPublish:
         from arc.finmodel.estimates import ESTIMATE_DATASET
         from arc.store.snapshot import SnapshotStore
 
-        rows = SnapshotStore(tmp_path / "store").read_as_of(ESTIMATE_DATASET)
+        rows = SnapshotStore(_mine(tmp_path)).read_as_of(ESTIMATE_DATASET)
         assert {r["metric"] for r in rows} == {"revenue", "operating_income"}
 
     def test_publishing_twice_is_idempotent_per_day(self, client, tmp_path):
         """같은 날 두 번 눌러도 파일이 늘지 않는다 — 날짜가 파일 이름이다."""
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store)
 
         first = client.post(f"/api/cards/{card.id}/publish").json()["published_path"]
@@ -154,7 +164,7 @@ class TestPublish:
 class TestCardList:
     def test_list_omits_the_body(self, client, tmp_path):
         """카드 하나에 60KB가 붙어 있다. 목록이 그걸 다 실으면 보드가 느려진다."""
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         _card(store)
 
         rows = client.get("/api/cards").json()["cards"]
@@ -173,7 +183,7 @@ class TestViewModelCompleteness:
     """
 
     def test_old_card_gets_todays_fields(self, client, tmp_path):
-        store = CardStore(tmp_path / "store")
+        store = CardStore(_mine(tmp_path))
         card = _card(store)
         # 필드가 몇 개뿐이던 시절의 카드
         card.vm = {"gate_passed": True, "body_html": "<p>옛 카드</p>"}
