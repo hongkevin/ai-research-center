@@ -8,6 +8,7 @@ import {
   getBrief,
   type Brief,
   type BriefLine,
+  type MacroPoint,
   type Move,
   type SectorLine,
 } from "@/lib/api";
@@ -18,14 +19,15 @@ import { cn } from "@/lib/utils";
  *
  * 인터뷰의 말이 그대로 요구다: *"이것만 아침에 해줘도 되는데"*.
  *
- * **시장 → 섹터 → 종목** 순이다. 아침 회의가 그렇게 간다 — 오늘 한국 증시가
- * 어땠고, 내 섹터가 어땠고, 그래서 내 종목이 어땠나. 종목만 나열하면 「이
- * 종목이 5% 빠졌다」가 시장이 5% 빠져서인지 이 종목만인지 알 수 없다.
+ * **세 칸이다** — 왼쪽 1/5 매크로, 가운데 2/5 섹터, 오른쪽 2/5 종목. 아침
+ * 회의가 그 순서로 간다: 오늘 한국 증시·환율·금리가 어땠고, 내 섹터가 어땠고,
+ * 그래서 내 종목이 어땠나. 세로로 쌓으면 셋을 **한눈에 견주지 못한다** —
+ * 섹터가 빠졌는데 시장이 더 빠졌는지는 나란히 놔야 보인다.
  *
- * **요약 문장이 없다.** 브리프는 서술이 아니라 배열이다 — 크게 움직인 것을
- * 위로 올리고 그 옆에 공시와 기사를 놓는 것이 전부다. 문장으로 요약하면
- * 비용이 들고, 틀릴 여지가 생기고, **RA가 원문을 안 보게 된다.** 아침에
- * 필요한 것은 판단이 아니라 **놓친 것이 없다는 확인**이다.
+ * **칸마다 맨 위에 한 줄이 있고 그 밑에 디테일이 온다.** 그 한 줄은 서술이
+ * 아니라 **아래 숫자를 다시 읽은 것**이다 — 새 사실이 생기지 않고, 틀릴
+ * 여지가 없고, 값이 없으면 그 절이 통째로 빠진다. 판단(「그래서 무엇을 봐야
+ * 하나」)은 여기 없다. 그건 미검증 레인이라 배지를 달고 따로 나가야 한다.
  */
 
 /** 「크게 움직였다」의 기준(%). 서버의 `NOTABLE`과 같은 값이다. */
@@ -72,63 +74,15 @@ export function MorningBrief({
   const empty = data.cover.length === 0 && data.watch.length === 0;
 
   return (
-    <div className="max-w-[900px] space-y-7">
+    <div className="space-y-5">
       {/* **언제 얘기인지가 먼저다.** 「1일 -2.4%」만 있으면 오늘인지 어제인지
           모른다 — EOD 시세라 장 마감 전에는 어제 종가가 최신이다. */}
-      <div>
-        <div className="flex flex-wrap items-baseline gap-x-3">
-          <span className="text-[15px] font-medium">
-            {data.asof_label || "시세 없음"} 종가 기준
-          </span>
-          <span className="text-[12.5px] text-muted-foreground">
-            {data.note}
-          </span>
-        </div>
-
-        {data.indices.length > 0 && (
-          <div className="mt-2.5 flex flex-wrap gap-x-6 gap-y-1">
-            {data.indices.map((i) => (
-              <span key={i.name} className="text-[14px]">
-                <span className="text-muted-foreground">{i.name} </span>
-                <span className="font-mono">
-                  {i.close?.toLocaleString(undefined, {
-                    maximumFractionDigits: 2,
-                  })}
-                </span>
-                <span
-                  className={cn(
-                    "ml-1.5 font-mono",
-                    (i.change_pct ?? 0) > 0
-                      ? "text-bad"
-                      : (i.change_pct ?? 0) < 0
-                        ? "text-num"
-                        : "text-muted-foreground",
-                  )}
-                >
-                  {fmtPct(i.change_pct)}
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
-
-        <p className="mt-2 text-[11.5px] text-muted-foreground">
-          공시는 최근 3일 · <strong>기사는 검증된 것이 아닙니다</strong> ·
-          괄호는 <strong>{data.market_label} 대비</strong>(%p)
-          {data.market.length > 0 && (
-            <>
-              {" · "}
-              {data.market_label}{" "}
-              {data.market
-                .filter((m) => m.change_pct != null)
-                .map((m) => `${m.label} ${fmtPct(m.change_pct)}`)
-                .join(" ")}
-            </>
-          )}
-        </p>
+      <div className="flex flex-wrap items-baseline gap-x-3">
+        <span className="text-[15px] font-medium">
+          {data.asof_label || "시세 없음"} 종가 기준
+        </span>
+        <span className="text-[12.5px] text-muted-foreground">{data.note}</span>
       </div>
-
-      {data.sectors.length > 0 && <Sectors sectors={data.sectors} />}
 
       {empty && (
         <button
@@ -143,43 +97,223 @@ export function MorningBrief({
         </button>
       )}
 
-      {data.cover.length > 0 && <Section title="커버 종목" lines={data.cover} />}
-      {data.watch.length > 0 && (
-        <Section title="관심 종목" lines={data.watch} muted />
-      )}
+      {/* 1/5 · 2/5 · 2/5. 좁은 화면에서는 위아래로 떨어진다 */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
+        <Column
+          className="lg:col-span-1"
+          title="시장"
+          head={data.heads.macro}
+          hint="지수·환율·금리"
+        >
+          <Macro brief={data} />
+        </Column>
+
+        <Column
+          className="lg:col-span-2"
+          title="섹터"
+          head={data.heads.sectors}
+          hint={
+            data.sectors.some((s) => s.basis === "peer")
+              ? "피어 그룹 전체의 중앙값"
+              : "내 종목의 중앙값"
+          }
+        >
+          {data.sectors.length > 0 ? (
+            <div className="divide-y">
+              {data.sectors.map((s) => (
+                <SectorRow key={s.sector} row={s} />
+              ))}
+            </div>
+          ) : (
+            <Nothing>섹터를 넣으면 여기 뜹니다.</Nothing>
+          )}
+        </Column>
+
+        <Column
+          className="lg:col-span-2"
+          title="종목"
+          head={data.heads.stocks}
+          hint={`괄호는 ${data.market_label} 대비(%p)`}
+        >
+          {data.cover.length > 0 && (
+            <Section title="커버" lines={data.cover} />
+          )}
+          {data.watch.length > 0 && (
+            <Section title="관심" lines={data.watch} muted />
+          )}
+          {!data.cover.length && !data.watch.length && (
+            <Nothing>커버 종목을 넣으면 여기 뜹니다.</Nothing>
+          )}
+        </Column>
+      </div>
+
+      <p className="text-[11.5px] leading-[1.7] text-muted-foreground">
+        공시는 최근 3일 · <strong>기사는 검증된 것이 아닙니다</strong> · 칸마다
+        맨 위 줄은 아래 숫자를 다시 읽은 것이라 <strong>새 사실이 없습니다</strong>
+        {data.market.length > 0 && (
+          <>
+            {" · "}
+            {data.market_label}{" "}
+            {data.market
+              .filter((m) => m.change_pct != null)
+              .map((m) => `${m.label} ${fmtPct(m.change_pct)}`)
+              .join(" ")}
+          </>
+        )}
+      </p>
     </div>
   );
 }
 
-/** 섹터 층 — **시장과 종목 사이.** 내 종목들의 중앙값이지 섹터 지수가 아니다. */
-function Sectors({ sectors }: { sectors: SectorLine[] }) {
+/**
+ * 칸 하나 — **맨 위 한 줄, 그 밑에 디테일.**
+ *
+ * 요구가 정확히 이 모양이었다: *"한 줄 요약(실제로는 2~3줄?)씩 칸마다 맨 위에
+ * 있고, 그 다음에 밑에 디테일이 나오는 형태"*.
+ */
+function Column({
+  title,
+  head,
+  hint,
+  className,
+  children,
+}: {
+  title: string;
+  head?: string;
+  hint?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <section>
-      <h3 className="mb-2 border-b pb-1.5 text-[12px] font-semibold">
-        내 섹터{" "}
-        <span className="font-normal text-muted-foreground">
-          커버 종목의 중앙값
-        </span>
-      </h3>
-      <div className="divide-y">
-        {sectors.map((s) => (
-          <div
-            key={s.sector}
-            className="flex flex-wrap items-baseline gap-x-3 py-2"
-          >
-            <span className="text-[13.5px] font-medium">{s.sector}</span>
-            <span className="font-mono text-[11px] text-muted-foreground">
-              {s.count}종목
+    <section className={cn("min-w-0", className)}>
+      <div className="mb-2 border-b pb-1.5">
+        <h3 className="text-[12px] font-semibold">
+          {title}
+          {hint && (
+            <span className="ml-1.5 font-normal text-muted-foreground">
+              {hint}
             </span>
-            <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
-              {s.moves.map((m) => (
-                <Pct key={m.key} move={m} excess={s.excess} />
-              ))}
-            </span>
-          </div>
-        ))}
+          )}
+        </h3>
       </div>
+      {/* 요약 줄. **없으면 자리도 없다** */}
+      {head && (
+        <p className="mb-2.5 text-[12.5px] leading-[1.75]">{head}</p>
+      )}
+      {children}
     </section>
+  );
+}
+
+function Nothing({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="rounded-md border border-dashed px-3 py-3 text-[12px] text-muted-foreground">
+      {children}
+    </p>
+  );
+}
+
+/** 시장 칸 — 지수 + 환율·금리. **날짜가 다르면 다르다고 적는다.** */
+function Macro({ brief }: { brief: Brief }) {
+  if (brief.indices.length === 0 && brief.macro.length === 0) {
+    return <Nothing>지수·환율을 아직 못 받았습니다.</Nothing>;
+  }
+  return (
+    <div className="divide-y">
+      {brief.indices.map((i) => (
+        <div key={i.name} className="flex items-baseline gap-2 py-1.5">
+          <span className="text-[12.5px] text-muted-foreground">{i.name}</span>
+          <span className="ml-auto font-mono text-[12.5px] tabular-nums">
+            {i.close?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </span>
+          <span
+            className={cn(
+              "w-[54px] text-right font-mono text-[11.5px] tabular-nums",
+              (i.change_pct ?? 0) > 0
+                ? "text-bad"
+                : (i.change_pct ?? 0) < 0
+                  ? "text-num"
+                  : "text-muted-foreground",
+            )}
+          >
+            {fmtPct(i.change_pct)}
+          </span>
+        </div>
+      ))}
+      {brief.macro.map((m) => (
+        <MacroRow key={m.key} point={m} />
+      ))}
+    </div>
+  );
+}
+
+function MacroRow({ point: m }: { point: MacroPoint }) {
+  // **기준금리는 계단이라 「전일 대비」가 정보가 아니다.** 알고 싶은 것은
+  // 「언제 올렸나」이고, 그래서 변경 시점을 대신 적는다.
+  const stepped = !!m.changed_at;
+  const when = stepped
+    ? `${m.changed_at.slice(0, 4)}-${m.changed_at.slice(4, 6)}`
+    : "";
+  return (
+    <div
+      className="flex items-baseline gap-2 py-1.5"
+      title={`${m.date} 기준${m.stale_days && m.stale_days > 1 ? ` · ${m.stale_days}일 전 값` : ""}`}
+    >
+      <span className="text-[12.5px] text-muted-foreground">{m.label}</span>
+      <span className="ml-auto font-mono text-[12.5px] tabular-nums">
+        {m.display}
+      </span>
+      <span
+        className={cn(
+          "w-[54px] text-right font-mono text-[11.5px] tabular-nums",
+          m.change == null || m.change === 0
+            ? "text-muted-foreground"
+            : m.change > 0
+              ? "text-bad"
+              : "text-num",
+        )}
+      >
+        {m.change == null
+          ? "—"
+          : stepped
+            ? when
+            : `${m.change >= 0 ? "+" : ""}${m.change.toFixed(m.digits)}`}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * 섹터 한 줄 — **모수를 밝힌다.**
+ *
+ * 피어 그룹 전체로 낸 것과 내 종목 3개로 낸 것은 완전히 다른 얘기고, 그 차이가
+ * 화면에 없으면 둘 다 「섹터 지수」로 읽힌다.
+ */
+function SectorRow({ row: s }: { row: SectorLine }) {
+  return (
+    <div className="py-2">
+      <div className="flex flex-wrap items-baseline gap-x-2.5">
+        <span className="text-[13px] font-medium">{s.sector}</span>
+        <span
+          className={cn(
+            "font-mono text-[10.5px]",
+            s.basis === "peer" ? "text-ok" : "text-muted-foreground",
+          )}
+          title={
+            s.basis === "peer"
+              ? "그 섹터의 피어 그룹 전체로 냈습니다 — 「섹터가 어땠나」의 답입니다"
+              : "피어 그룹이 없어 내 종목만으로 냈습니다 — 섹터 얘기가 아니라 내 것들 얘기입니다"
+          }
+        >
+          {s.basis_label}
+        </span>
+        <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
+          {s.moves.map((m) => (
+            <Pct key={m.key} move={m} excess={s.excess} />
+          ))}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -199,7 +333,9 @@ function Pct({
         m.change_pct == null
           ? "비교할 자료가 없습니다"
           : `${m.from_date} → ${m.to_date}` +
-            (over != null ? ` · 시장 대비 ${over >= 0 ? "+" : ""}${over.toFixed(1)}%p` : "")
+            (over != null
+              ? ` · 시장 대비 ${over >= 0 ? "+" : ""}${over.toFixed(1)}%p`
+              : "")
       }
     >
       <span className="text-[10.5px] text-muted-foreground">{m.label} </span>
@@ -236,19 +372,16 @@ function Section({
   muted?: boolean;
 }) {
   return (
-    <section>
-      <h3 className="mb-2 border-b pb-1.5 text-[12px] font-semibold">
-        {title}{" "}
-        <span className="font-mono font-normal text-muted-foreground">
-          {lines.length}
-        </span>
-      </h3>
+    <div className="mb-3 last:mb-0">
+      <p className="mb-1 text-[11px] font-medium text-muted-foreground">
+        {title} {lines.length}
+      </p>
       <div className="divide-y">
         {lines.map((l) => (
           <Line key={l.symbol} line={l} muted={muted} />
         ))}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -257,16 +390,15 @@ function Line({ line: l, muted }: { line: BriefLine; muted: boolean }) {
   const notable =
     l.filings.length > 0 || (day != null && Math.abs(day) >= NOTABLE);
   return (
-    <div className={cn("py-2.5", muted && "opacity-80")}>
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+    <div className={cn("py-2", muted && "opacity-80")}>
+      <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
         {/* **눈에 띄어야 하는 것만 표시한다.** 전부 강조하면 아무것도 강조가 아니다 */}
-        <span className="text-[13.5px] font-medium">
+        <span className="text-[13px] font-medium">
           {notable && <span className="mr-1 text-warn">★</span>}
           {l.company}
         </span>
-        <span className="font-mono text-[11px] text-muted-foreground">
+        <span className="font-mono text-[10.5px] text-muted-foreground">
           {l.symbol}
-          {l.sector && ` · ${l.sector}`}
         </span>
         <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
           {l.moves.map((m) => (

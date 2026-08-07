@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   getTgChannels,
   KIND_LABEL,
+  refreshTgChannels,
   setTgChannels,
+  syncTgMessages,
   type TgChannelList,
   type TgChannelRow,
 } from "@/lib/api";
@@ -28,16 +31,22 @@ import { cn } from "@/lib/utils";
  */
 export function ChannelPicker({ onChanged }: { onChanged?: () => void }) {
   const [data, setData] = useState<TgChannelList | null>(null);
-  const [open, setOpen] = useState(false);
+  // **켜 둔 채널이 없으면 펼쳐 둔다.** 접힌 「고르기」 막대만 보이면 센티 탭이
+  // 통째로 비어 보이고, 무엇을 해야 채워지는지가 화면에 없다.
+  const [open, setOpen] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // 마지막 가져오기 결과. **버튼을 눌렀는데 아무 말이 없으면 안 눌린 줄 안다**
+  const [said, setSaid] = useState("");
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
         const got = await getTgChannels();
-        if (alive) setData(got);
+        if (!alive) return;
+        setData(got);
+        setOpen((v) => v ?? !got.channels.some((c) => c.enabled));
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
@@ -64,7 +73,50 @@ export function ChannelPicker({ onChanged }: { onChanged?: () => void }) {
     }
   }
 
-  if (error) return <p className="text-[12px] text-bad">{error}</p>;
+  async function reload() {
+    setData(await getTgChannels());
+  }
+
+  async function refresh() {
+    setBusy(true);
+    setError("");
+    setSaid("");
+    try {
+      const got = await refreshTgChannels();
+      await reload();
+      setSaid(`구독 채널 ${got.found}개를 받았습니다.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pull() {
+    setBusy(true);
+    setError("");
+    setSaid("");
+    try {
+      const got = await syncTgMessages(7);
+      // **못 받은 채널을 삼키지 않는다** — 켰는데 안 오면 죽은 채널이다
+      const missed = got.skipped
+        ? ` · ${got.skipped}개 채널은 그 기간에 글이 없습니다`
+        : "";
+      setSaid(
+        got.messages
+          ? `${got.days}일치 ${got.messages.toLocaleString()}건을 가져왔습니다${missed}.`
+          : `가져올 메시지가 없었습니다${missed}.`,
+      );
+      await reload();
+      onChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (error && !data) return <p className="text-[12px] text-bad">{error}</p>;
   if (!data) return null;
 
   const on = data.channels.filter((c) => c.enabled).length;
@@ -74,11 +126,20 @@ export function ChannelPicker({ onChanged }: { onChanged?: () => void }) {
       <div className="rounded-lg border border-dashed px-4 py-4">
         <p className="text-[13px] font-medium">볼 채널을 아직 못 받았습니다.</p>
         <p className="mt-1 text-[12px] leading-[1.8] text-muted-foreground">
-          터미널에서 <code className="font-mono">arc telegram login</code> 한 뒤{" "}
-          <code className="font-mono">arc telegram channels</code> 를 돌리면
-          구독 중인 채널이 여기 나옵니다. 로그인은 인증 코드를 받아 쳐야 해서{" "}
-          <strong>터미널에서만</strong> 됩니다.
+          아래 <strong>「구독 채널 받기」</strong>를 누르면 들어가 있는 채널이
+          여기 나옵니다. 처음 한 번은 터미널에서{" "}
+          <code className="font-mono">arc telegram login</code> 이 필요합니다 —
+          인증 코드를 받아 쳐야 해서 화면에서는 안 됩니다.
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => void refresh()} disabled={busy}>
+            {busy ? "받는 중…" : "구독 채널 받기"}
+          </Button>
+          {said && (
+            <span className="text-[11.5px] text-muted-foreground">{said}</span>
+          )}
+          {error && <span className="text-[11.5px] text-bad">{error}</span>}
+        </div>
       </div>
     );
   }
@@ -95,9 +156,11 @@ export function ChannelPicker({ onChanged }: { onChanged?: () => void }) {
           {on}/{data.channels.length}
         </span>
         <span className="text-[11.5px] text-muted-foreground">
-          {data.measured
-            ? "내 커버리지를 말한 횟수 순"
-            : "아직 못 셌습니다 — 증권사·리서치와 규모 순"}
+          {on === 0
+            ? "아직 하나도 안 켰습니다 — 켜야 센티가 채워집니다"
+            : data.measured
+              ? "내 커버리지를 말한 횟수 순"
+              : "아직 못 셌습니다 — 증권사·리서치와 규모 순"}
         </span>
         <span className="ml-auto text-[11px] text-muted-foreground">
           {open ? "접기" : "고르기"}
@@ -109,11 +172,30 @@ export function ChannelPicker({ onChanged }: { onChanged?: () => void }) {
           {data.channels.map((c) => (
             <Row key={c.chat_id} row={c} onToggle={toggle} />
           ))}
-          <p className="px-3.5 py-2 text-[11.5px] leading-[1.7] text-muted-foreground">
-            고른 뒤 터미널에서{" "}
-            <code className="font-mono">arc telegram sync --days 7</code> 로
-            가져옵니다. <strong>켜 둔 것만</strong> 긁습니다 — 다 긁으면 하루
-            3,000건이 쏟아지고 대부분은 이미 DART·뉴스 API로 갖고 있습니다.
+          <div className="flex flex-wrap items-center gap-2 px-3.5 py-2.5">
+            <Button
+              size="sm"
+              onClick={() => void pull()}
+              disabled={busy || on === 0}
+            >
+              {busy ? "가져오는 중…" : `켜 둔 ${on}개에서 7일치 가져오기`}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void refresh()}
+              disabled={busy}
+            >
+              구독 채널 다시 받기
+            </Button>
+            {said && (
+              <span className="text-[11.5px] text-muted-foreground">{said}</span>
+            )}
+            {error && <span className="text-[11.5px] text-bad">{error}</span>}
+          </div>
+          <p className="px-3.5 pb-2 text-[11.5px] leading-[1.7] text-muted-foreground">
+            <strong>켜 둔 것만</strong> 긁습니다 — 다 긁으면 하루 3,000건이
+            쏟아지고 대부분은 이미 DART·뉴스 API로 갖고 있습니다.
           </p>
         </div>
       )}

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SectorPicker } from "@/components/profile/sector-picker";
 import { CompanySearch, symbolOf } from "@/components/workbench/company-search";
 import {
   getProfile,
@@ -165,6 +166,33 @@ export function Coverage({
           섹터 추가
         </Button>
       </form>
+
+      {/* **고르는 편이 치는 편보다 낫다.** 다만 시드는 출발점이라 아래에서
+          얼마든지 고칠 수 있고, 저장은 하나뿐인 저장 버튼이 한다. */}
+      <SectorPicker
+        taken={sectors}
+        onAdopt={(seed) => {
+          setSectors((v) => (v.includes(seed.name) ? v : [...v, seed.name]));
+          setStocks((v) => {
+            const have = new Set(v.map((s) => s.symbol));
+            const add = seed.symbols
+              // **이미 있는 것은 안 건드린다** — 커버/관심 표시가 사람 것이다
+              .map((symbol, i) => ({ symbol, company: seed.companies[i] ?? "" }))
+              .filter((s) => !have.has(s.symbol))
+              .map((s) => ({
+                ...s,
+                sector: seed.name,
+                // **커버가 아니라 관심으로 들어온다.** 커버는 「내가 리포트를
+                // 낸다」는 선언이라 사람이 골라야 한다
+                kind: "watch" as CoverKind,
+                note: "",
+                added_at: "",
+              }));
+            return [...v, ...add];
+          });
+          setDirty(true);
+        }}
+      />
 
       {sectors.length === 0 && loose.length === 0 && (
         <div className="rounded-lg border border-dashed px-4 py-8 text-center">

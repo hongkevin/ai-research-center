@@ -28,6 +28,10 @@ app = typer.Typer(add_completion=False, help="AI Research Center — 실적 리�
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRAFTS_DIR = REPO_ROOT / "drafts"
 
+# **키는 여기서 한 번 읽는다.** 명령마다 부르게 뒀더니 DART 경로에만 걸려서
+# `arc telegram`이 TELEGRAM_API_ID를 못 찾았다 — .env에 멀쩡히 있는데도.
+load_dotenv(REPO_ROOT / ".env")
+
 
 def _provider() -> DartProvider:
     load_dotenv(REPO_ROOT / ".env")
@@ -517,7 +521,7 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
             mark = "●" if c.chat_id in on else "○"
             typer.echo(f"  {mark} {c.kind:<9} {c.subscribers:>8,}  {c.name[:32]:34} {c.chat_id}")
         typer.secho(
-            "\n  「커버리지」 탭에서 켜고 끕니다 — 켜 둔 채널만 sync가 긁습니다.\n",
+            "\n  「시장 센티」 탭에서 켜고 끕니다 — 켜 둔 채널만 sync가 긁습니다.\n",
             fg=typer.colors.CYAN,
         )
 

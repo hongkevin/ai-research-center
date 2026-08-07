@@ -1564,6 +1564,14 @@ def api_brief(news: bool = True):
                 for i in items[:3]
             ]
 
+    # **섹터 모수는 피어 그룹 전체다.** 조선을 3종목 커버해도 「조선이
+    # 어땠나」는 12종목이 답한다 — 없는 섹터만 내 종목으로 떨어진다.
+    universe = _sector_universe(profile)
+    extra = sorted({s for syms in universe.values() for s in syms} - set(moves))
+    if extra:
+        names.update(_names_for(extra))
+        moves.update({m.symbol: m for m in moves_for_symbols(prices, extra, names=names)})
+
     brief = build_brief(
         profile,
         moves,
@@ -1571,9 +1579,59 @@ def api_brief(news: bool = True):
         articles=articles,
         market=_market_moves(prices),
         indices=_index_today(asof),
+        macro=_macro_now(),
+        universe=universe,
         asof=asof,
     )
     return dataclasses.asdict(brief)
+
+
+def _sector_universe(profile) -> dict[str, list[str]]:
+    """`{섹터: [종목코드…]}` — **피어 그룹이 섹터의 조작적 정의다** (D68).
+
+    카드가 곧 모수다. 같은 섹터에 그룹이 여럿이면 합집합을 쓴다 — 「조선
+    대형」과 「조선 기자재」를 둘 다 만들어 뒀다면 그 사람에게 조선은 둘 다다.
+    """
+    store = CardStore(_my_dir())
+    out: dict[str, set[str]] = {}
+    for card in store.list():
+        if card.kind != PEER:
+            continue
+        sector = _peer_sector(profile, card)
+        if not sector:
+            continue
+        out.setdefault(sector, set()).update(
+            m.symbol for m in card.members if len(m.symbol) == 6 and m.symbol.isdigit()
+        )
+    return {k: sorted(v) for k, v in out.items() if v}
+
+
+def _macro_now() -> list[dict]:
+    """환율·금리. **키가 없으면 빈 목록이다** — 브리프를 막지 않는다."""
+    from arc.data.kr import ecos
+
+    if not ecos.available():
+        return []
+    try:
+        points = ecos.fetch_macro()
+    except Exception as exc:  # noqa: BLE001 — 매크로 실패가 브리프를 막지 않는다
+        log.warning("매크로를 못 읽었습니다: %s", exc)
+        return []
+    return [
+        {
+            "key": p.key,
+            "label": p.label,
+            "value": p.value,
+            "display": p.display,
+            "date": p.date,
+            "unit": p.unit,
+            "digits": p.digits,
+            "change": p.change,
+            "changed_at": p.changed_at,
+            "stale_days": p.stale_days,
+        }
+        for p in points
+    ]
 
 
 def _market_moves(prices: dict) -> Moves | None:
@@ -1721,6 +1779,145 @@ def api_set_telegram_channels(payload: dict):
     return {"enabled": profile.enabled_channels()}
 
 
+@app.post("/api/telegram/refresh")
+def api_telegram_refresh():
+    """구독 채널 목록을 다시 받는다. **터미널에 미루지 않는다.**
+
+    로그인만 터미널에서 한다 — 인증 코드를 받아 쳐야 해서 어쩔 수 없다.
+    그 뒤로는 전부 화면에서 되어야 한다.
+    """
+    from arc.ingest.telegram_collect import fetch_dialogs
+    from arc.ingest.telegram_parse import classify_channel
+    from arc.store.profile import TgChannel, merge_channels
+
+    async def run(client):
+        from telethon.tl.functions.channels import GetFullChannelRequest
+
+        out: list[TgChannel] = []
+        for r in await fetch_dialogs(client, limit=200):
+            subs = 0
+            try:
+                full = await client(GetFullChannelRequest(await client.get_entity(r["chat_id"])))
+                subs = int(getattr(full.full_chat, "participants_count", 0) or 0)
+            except Exception as exc:  # noqa: BLE001 — 있으면 좋은 것이지 필수가 아니다
+                log.debug("구독자 수를 못 읽었습니다 (%s): %s", r["name"], exc)
+            out.append(
+                TgChannel(
+                    chat_id=r["chat_id"],
+                    name=r["name"],
+                    username=r.get("username") or "",
+                    kind=classify_channel(r["name"], chat_type=r["chat_type"]).value,
+                    subscribers=subs,
+                )
+            )
+        return out
+
+    try:
+        found = _run_telethon(run)
+    except Exception as exc:  # noqa: BLE001 — 로그인 안 됨·네트워크 등 그대로 보여준다
+        return JSONResponse({"error": _telegram_hint(exc)}, status_code=400)
+
+    store = ProfileStore(_my_dir())
+    profile = merge_channels(store.load(current_user()), found)
+    store.save(profile)
+    return {"found": len(found), "channels": len(profile.channels)}
+
+
+@app.post("/api/telegram/sync")
+def api_telegram_sync(payload: dict | None = None):
+    """켜 둔 채널에서 메시지를 가져온다. **버튼 하나로.**
+
+    화면이 *"터미널에서 `arc telegram sync`로 가져오면 여기 뜹니다"* 라고
+    말하는 것은 **막다른 길**이다 — 무엇을 해야 하는지는 알려주지만 할 수는
+    없게 만든다. 켜 둔 채널만 긁는 규칙은 그대로다(D66).
+    """
+    import datetime as dtm
+    import json
+
+    from arc.ingest.telegram_collect import fetch_channel
+
+    payload = payload or {}
+    days = max(1, min(int(payload.get("days") or 7), 30))
+    limit = max(1, min(int(payload.get("limit") or 300), 1000))
+
+    profile = ProfileStore(_my_dir()).load(current_user())
+    targets = profile.enabled_channels()
+    if not targets:
+        return JSONResponse(
+            {"error": "켜 둔 채널이 없습니다 — 위에서 볼 채널을 고르십시오."},
+            status_code=400,
+        )
+
+    since = dtm.datetime.now(dtm.UTC) - dtm.timedelta(days=days)
+    out_dir = _my_dir() / "telegram"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    async def run(client):
+        got = []
+        for chat_id in targets:
+            try:
+                got.append(await fetch_channel(client, chat_id, limit=limit, since=since))
+            except Exception as exc:  # noqa: BLE001 — 한 채널이 죽어도 나머지는 받는다
+                log.warning("채널을 건너뜁니다 (%s): %s", chat_id, exc)
+        return got
+
+    try:
+        fetched = _run_telethon(run)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": _telegram_hint(exc)}, status_code=400)
+
+    total, done = 0, []
+    for got in fetched:
+        if not got.messages:
+            continue
+        (out_dir / f"{got.chat_id}.json").write_text(
+            json.dumps(got.as_export(), ensure_ascii=False), encoding="utf-8"
+        )
+        total += len(got.messages)
+        done.append({"name": got.name, "count": len(got.messages)})
+
+    skipped = len(targets) - len(done)
+    return {"messages": total, "channels": done, "skipped": skipped, "days": days}
+
+
+def _run_telethon(job):
+    """텔레그램 세션으로 `job(client)`를 돌린다.
+
+    **워커 스레드에는 이벤트 루프가 없다.** FastAPI가 동기 엔드포인트를
+    스레드풀에서 부르므로 `asyncio.run()`이 그대로 쓸 수 있다 — 메인 루프를
+    건드리지 않는다.
+    """
+    import asyncio
+
+    from telethon import TelegramClient
+
+    from arc.ingest.telegram_collect import credentials, session_path
+
+    api_id, api_hash = credentials()
+
+    async def go():
+        client = TelegramClient(str(session_path(_my_dir())), api_id, api_hash)
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                raise PermissionError("텔레그램에 로그인되어 있지 않습니다")
+            return await job(client)
+        finally:
+            await client.disconnect()
+
+    return asyncio.run(go())
+
+
+def _telegram_hint(exc: Exception) -> str:
+    """실패를 **할 수 있는 말**로 바꾼다."""
+    if isinstance(exc, PermissionError | ValueError):
+        return (
+            f"{exc} — 터미널에서 `arc telegram login`을 한 번만 하십시오. "
+            "인증 코드를 받아 쳐야 해서 화면에서는 안 됩니다."
+        )
+    return f"텔레그램에서 못 받았습니다: {exc}"
+
+
 @app.get("/api/sentiment")
 def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
     """시장 센티 — **지금 무슨 말이 도는가.**
@@ -1799,6 +1996,34 @@ def _peer_sector(card, sector_of: dict[str, str]) -> str:
         if sector:
             hits[sector] = hits.get(sector, 0) + 1
     return max(hits.items(), key=lambda kv: kv[1])[0] if hits else ""
+
+
+@app.get("/api/sectors/seed")
+def api_sector_seed():
+    """고르면 그대로 들어오는 섹터 목록. **정답이 아니라 출발점이다.**
+
+    빈 화면에서 섹터를 직접 치고 종목을 하나씩 넣는 것은 마찰이 크다. 그렇다고
+    분류를 확정해 주면 [D68](../../docs/decisions.md#d68)이 거부한 문제로
+    돌아간다 — KSIC는 방산 4종목을 어느 자릿수에서도 못 묶는다. 그래서 시드다.
+
+    **프로필을 읽지 않는다.** 무엇을 이미 넣었는지는 화면이 자기 상태로 안다 —
+    여기서 겹쳐 판단하면 저장 전 편집과 어긋난다.
+    """
+    from arc.data.sectors import SEEDS
+
+    return {
+        "seeds": [
+            {
+                "name": s.name,
+                "symbols": list(s.symbols),
+                "companies": list(s.companies),
+                "cohesion": s.cohesion,
+            }
+            for s in SEEDS
+        ],
+        # 무작위 8종목의 내부 상관. 응집도를 이 값과 견주라고 함께 낸다.
+        "random_baseline": 0.102,
+    }
 
 
 @app.post("/api/profile")
