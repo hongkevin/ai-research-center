@@ -8,10 +8,14 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { CompanySearch, symbolOf } from "@/components/workbench/company-search";
 import {
+  fmtPct,
   getProfile,
   pinPeerGroup,
   saveProfile,
+  type CoverKind,
   type Covered,
+  type Move,
+  type Moves,
   type ProfileData,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -19,33 +23,44 @@ import { cn } from "@/lib/utils";
 /**
  * 내 커버리지 — **로그인이 뜻을 갖는 자리.**
  *
- * 지금까지 이 제품은 매번 처음부터 시작했다. 종목코드를 넣고, 리포트를
- * 만들고, 떠난다. RA는 그렇게 일하지 않는다 — 같은 20~30종목을 몇 년 본다.
+ * RA는 같은 20~30종목을 몇 년 본다. 어느 섹터를 맡고, 어느 종목에 리포트를
+ * 내고, 어느 피어를 옆에 두는지가 그 사람의 자산이다.
  *
- * **쌓는 것은 셋뿐이다**: 사람이 정한 것(커버 종목·섹터·고정한 피어 그룹),
- * 출처 있는 사실(카드), 리퀘스트 이력. **LLM이 만든 요약은 안 쌓는다** —
- * 필요하면 그때 다시 만들면 되고($0.002), 쌓아 두면 틀린 것이 굳는다.
+ * **커버와 관심을 가른다.** 처음엔 종목마다 「발간」 체크박스를 뒀는데
+ * 틀렸다 — 커버 종목이면 리포트를 내는 것이 자명해서 물을 이유가 없다.
+ * 실제로 갈리는 축은 **내가 책임지느냐**다.
+ *
+ * 그리고 **기간 등락을 함께 낸다.** 분기에 한 번 찍은 사진만 보여주면 RA의
+ * 하루에 못 들어간다 — 아침에 「어제 뭐가 빠졌나」를 보고 클라이언트가
+ * 「이거 왜 올랐어요」를 묻는다.
  */
+
 export function Coverage() {
   const [data, setData] = useState<ProfileData | null>(null);
   const [stocks, setStocks] = useState<Covered[]>([]);
   const [sectorText, setSectorText] = useState("");
   const [adding, setAdding] = useState("");
+  const [addNote, setAddNote] = useState("");
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let alive = true;
     void (async () => {
       try {
         const p = await getProfile();
+        if (!alive) return;
         setData(p);
         setStocks(p.stocks);
         setSectorText(p.sectors.join(", "));
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        if (alive) setError(e instanceof Error ? e.message : String(e));
       }
     })();
+    return () => {
+      alive = false;
+    };
   }, []);
 
   function patch(symbol: string, over: Partial<Covered>) {
@@ -53,21 +68,31 @@ export function Coverage() {
     setDirty(true);
   }
 
-  function add() {
+  function add(kind: CoverKind) {
     const code = symbolOf(adding);
-    if (!/^\d{6}$/.test(code) || stocks.some((s) => s.symbol === code)) return;
+    // **말없이 실패하지 않는다.** 목록에서 안 고르고 「넣기」를 누르면 이름이
+    // 그대로 남는데, 그때 아무 반응이 없으면 사용자는 넣은 줄 안다.
+    if (!/^\d{6}$/.test(code)) {
+      setAddNote("목록에서 종목을 골라 주십시오 — 이름만으로는 넣을 수 없습니다.");
+      return;
+    }
+    if (stocks.some((s) => s.symbol === code)) {
+      setAddNote("이미 들어 있는 종목입니다.");
+      return;
+    }
     setStocks((v) => [
       ...v,
       {
         symbol: code,
         company: adding.replace(/\s*\(\d{6}\)\s*$/, ""),
         sector: "",
-        publishes: false,
+        kind,
         note: "",
         added_at: "",
       },
     ]);
     setAdding("");
+    setAddNote("");
     setDirty(true);
   }
 
@@ -83,7 +108,7 @@ export function Coverage() {
         stocks: stocks.map((s) => ({
           symbol: s.symbol,
           sector: s.sector,
-          publishes: s.publishes,
+          kind: s.kind,
           note: s.note,
         })),
       });
@@ -124,12 +149,20 @@ export function Coverage() {
   }
 
   const withCards = new Set(data.with_cards);
+  const moveOf = new Map(data.moves.map((m) => [m.symbol, m]));
+  const sectors = sectorText
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const cover = stocks.filter((s) => s.kind !== "watch");
+  const watch = stocks.filter((s) => s.kind === "watch");
+  const asof = data.moves.find((m) => m.last_date)?.last_date ?? "";
 
   return (
-    <div className="max-w-[820px] space-y-8">
+    <div className="max-w-[1080px] space-y-8">
       <p className="text-[13px] leading-[1.8] text-muted-foreground">
-        여기 적어 두면 <strong>다음에 올 때도 그대로 있습니다.</strong> 물어보기·
-        피어 뷰·브리프가 이 목록을 기본 맥락으로 씁니다.
+        여기 적어 두면 <strong>다음에 올 때도 그대로 있습니다.</strong>{" "}
+        물어보기·피어 뷰·브리프가 이 목록을 기본 맥락으로 씁니다.
       </p>
 
       <section>
@@ -140,7 +173,7 @@ export function Coverage() {
             setSectorText(e.target.value);
             setDirty(true);
           }}
-          placeholder="방산·우주, 조선, 2차전지"
+          placeholder="방산·우주, 조선, 헬스케어"
         />
         <p className="mt-1.5 text-[11.5px] text-muted-foreground">
           쉼표로 나눕니다. <strong>표준 분류를 쓰지 않습니다</strong> — 방산
@@ -148,80 +181,53 @@ export function Coverage() {
         </p>
       </section>
 
+      <StockTable
+        title="커버 종목"
+        hint="내가 리포트를 내는 종목입니다. 실적 시즌에 반드시 봅니다."
+        rows={cover}
+        sectors={sectors}
+        withCards={withCards}
+        moveOf={moveOf}
+        asof={asof}
+        onPatch={patch}
+        onRemove={(sym) => {
+          setStocks((v) => v.filter((x) => x.symbol !== sym));
+          setDirty(true);
+        }}
+      />
+
+      <StockTable
+        title="관심 종목"
+        hint="피어·경쟁사·모니터링. 리포트는 안 냅니다."
+        rows={watch}
+        sectors={sectors}
+        withCards={withCards}
+        moveOf={moveOf}
+        asof=""
+        onPatch={patch}
+        onRemove={(sym) => {
+          setStocks((v) => v.filter((x) => x.symbol !== sym));
+          setDirty(true);
+        }}
+      />
+
       <section>
-        <div className="mb-2 flex items-baseline justify-between">
-          <h3 className="text-[12px] font-semibold">
-            커버 종목{" "}
-            <span className="font-mono font-normal text-muted-foreground">
-              {stocks.length}
-            </span>
-          </h3>
-          <span className="text-[11.5px] text-muted-foreground">
-            「발간」은 리포트를 내는 종목입니다
-          </span>
-        </div>
-
-        <div className="rounded-lg border">
-          {stocks.map((s) => (
-            <div
-              key={s.symbol}
-              className="flex flex-wrap items-center gap-2 border-b px-3 py-2 last:border-b-0"
-            >
-              <span className="min-w-[140px] flex-1 text-[13px]">
-                {s.company || s.symbol}
-                <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
-                  {s.symbol}
-                </span>
-                {/* 카드가 이미 있는지 — 「뭘 더 해야 하나」가 바로 보여야 한다 */}
-                {withCards.has(s.symbol) && (
-                  <span className="ml-1.5 text-[11px] text-ok">· 카드 있음</span>
-                )}
-              </span>
-              <Input
-                value={s.sector}
-                onChange={(e) => patch(s.symbol, { sector: e.target.value })}
-                placeholder="섹터"
-                className="h-7 w-[110px] text-[12px]"
-              />
-              <label className="flex items-center gap-1.5 text-[12px]">
-                <Checkbox
-                  checked={s.publishes}
-                  onCheckedChange={(v) => patch(s.symbol, { publishes: !!v })}
-                />
-                발간
-              </label>
-              <Input
-                value={s.note}
-                onChange={(e) => patch(s.symbol, { note: e.target.value })}
-                placeholder="왜 보는지 (선택)"
-                className="h-7 w-[180px] text-[12px]"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  setStocks((v) => v.filter((x) => x.symbol !== s.symbol));
-                  setDirty(true);
-                }}
-                className="text-[13px] text-muted-foreground hover:text-bad"
-                aria-label={`${s.company || s.symbol} 빼기`}
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          {stocks.length === 0 && (
-            <p className="px-3 py-4 text-[13px] text-muted-foreground">
-              커버하는 종목을 넣으십시오.
-            </p>
-          )}
-        </div>
-
-        <div className="mt-2 flex gap-2">
-          <CompanySearch value={adding} onChange={setAdding} />
-          <Button variant="outline" onClick={add} disabled={!adding.trim()}>
-            넣기
+        <div className="flex gap-2">
+          <CompanySearch
+            value={adding}
+            onChange={(v) => {
+              setAdding(v);
+              setAddNote("");
+            }}
+          />
+          <Button variant="outline" onClick={() => add("cover")} disabled={!adding.trim()}>
+            커버로
+          </Button>
+          <Button variant="ghost" onClick={() => add("watch")} disabled={!adding.trim()}>
+            관심으로
           </Button>
         </div>
+        {addNote && <p className="mt-1.5 text-[12px] text-warn">{addNote}</p>}
       </section>
 
       <section>
@@ -272,5 +278,187 @@ export function Coverage() {
         </Button>
       </div>
     </div>
+  );
+}
+
+function StockTable({
+  title,
+  hint,
+  rows,
+  sectors,
+  withCards,
+  moveOf,
+  asof,
+  onPatch,
+  onRemove,
+}: {
+  title: string;
+  hint: string;
+  rows: Covered[];
+  sectors: string[];
+  withCards: Set<string>;
+  moveOf: Map<string, Moves>;
+  asof: string;
+  onPatch: (symbol: string, over: Partial<Covered>) => void;
+  onRemove: (symbol: string) => void;
+}) {
+  const cols = moveOf.values().next().value?.items ?? [];
+  return (
+    <section>
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 className="text-[12px] font-semibold">
+          {title}{" "}
+          <span className="font-mono font-normal text-muted-foreground">
+            {rows.length}
+          </span>
+        </h3>
+        <span className="text-[11.5px] text-muted-foreground">
+          {hint}
+          {asof && ` · 종가 ${asof.slice(4, 6)}/${asof.slice(6, 8)} 기준`}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="rounded-lg border border-dashed px-3 py-4 text-[13px] text-muted-foreground">
+          아직 없습니다.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[720px] border-collapse text-[13px]">
+            <thead>
+              <tr className="border-b bg-muted/40 text-[11px] text-muted-foreground">
+                <th className="px-3 py-1.5 text-left font-medium">종목</th>
+                <th className="px-2 py-1.5 text-left font-medium">섹터</th>
+                {cols.map((c: Move) => (
+                  <th key={c.key} className="px-2 py-1.5 text-right font-medium">
+                    {c.label}
+                  </th>
+                ))}
+                <th className="px-2 py-1.5 text-left font-medium">메모</th>
+                <th className="w-6" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((s) => (
+                <Row
+                  key={s.symbol}
+                  stock={s}
+                  sectors={sectors}
+                  hasCard={withCards.has(s.symbol)}
+                  moves={moveOf.get(s.symbol)}
+                  onPatch={onPatch}
+                  onRemove={onRemove}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Row({
+  stock: s,
+  sectors,
+  hasCard,
+  moves,
+  onPatch,
+  onRemove,
+}: {
+  stock: Covered;
+  sectors: string[];
+  hasCard: boolean;
+  moves: Moves | undefined;
+  onPatch: (symbol: string, over: Partial<Covered>) => void;
+  onRemove: (symbol: string) => void;
+}) {
+  return (
+    <tr className="border-b last:border-b-0">
+      <td className="px-3 py-1.5 whitespace-nowrap">
+        {s.company || s.symbol}
+        <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+          {s.symbol}
+        </span>
+        {hasCard && <span className="ml-1.5 text-[11px] text-ok">· 카드</span>}
+      </td>
+      <td className="px-2 py-1">
+        {/* **맡은 섹터에서 고른다.** 매번 손으로 치게 하면 「방산」과 「방산·우주」가
+            섞이고, 그러면 섹터로 묶는 것 자체가 안 된다. */}
+        <select
+          value={s.sector}
+          onChange={(e) => onPatch(s.symbol, { sector: e.target.value })}
+          className="h-7 w-[110px] rounded-md border bg-transparent px-1.5 text-[12px]"
+        >
+          <option value="">—</option>
+          {sectors.map((x) => (
+            <option key={x} value={x}>
+              {x}
+            </option>
+          ))}
+          {s.sector && !sectors.includes(s.sector) && (
+            <option value={s.sector}>{s.sector}</option>
+          )}
+        </select>
+      </td>
+      {(moves?.items ?? []).map((m) => (
+        <td
+          key={m.key}
+          className={cn(
+            "px-2 py-1.5 text-right font-mono tabular-nums whitespace-nowrap",
+            m.change_pct == null
+              ? "text-muted-foreground"
+              : m.change_pct > 0
+                ? "text-bad"
+                : m.change_pct < 0
+                  ? "text-num"
+                  : "text-muted-foreground",
+          )}
+          /* 실제로 쓴 날짜를 남긴다 — 「1개월 +8.2%」만 있으면 언제부터인지 모른다 */
+          title={
+            m.change_pct == null
+              ? "비교할 자료가 없습니다"
+              : `${m.from_date} → ${m.to_date} (${m.days}거래일)${m.partial ? " · 자료가 짧습니다" : ""}`
+          }
+        >
+          {fmtPct(m.change_pct)}
+          {m.partial && m.change_pct != null && (
+            <span className="text-muted-foreground">*</span>
+          )}
+        </td>
+      ))}
+      <td className="px-2 py-1">
+        <Input
+          value={s.note}
+          onChange={(e) => onPatch(s.symbol, { note: e.target.value })}
+          placeholder="왜 보는지"
+          className="h-7 w-[150px] text-[12px]"
+        />
+      </td>
+      <td className="px-1 whitespace-nowrap">
+        {/* **커버와 관심은 오간다.** 처음엔 관심으로 넣었다가 커버가 되는
+            것이 이 일의 정상이라, 지웠다 다시 넣게 하면 메모가 사라진다. */}
+        <button
+          type="button"
+          onClick={() =>
+            onPatch(s.symbol, { kind: s.kind === "watch" ? "cover" : "watch" })
+          }
+          className="mr-1 rounded border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:text-foreground"
+          title={
+            s.kind === "watch" ? "커버 종목으로 옮깁니다" : "관심 종목으로 옮깁니다"
+          }
+        >
+          {s.kind === "watch" ? "→커버" : "→관심"}
+        </button>
+        <button
+          type="button"
+          onClick={() => onRemove(s.symbol)}
+          className="text-muted-foreground hover:text-bad"
+          aria-label={`${s.company || s.symbol} 빼기`}
+        >
+          ×
+        </button>
+      </td>
+    </tr>
   );
 }
