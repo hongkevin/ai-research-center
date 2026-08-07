@@ -258,3 +258,136 @@ def as_facts(note: PriorNote, *, symbol: str, year: int) -> NoteFacts | None:
         units=units,
         kinds=kinds,
     )
+
+
+# ── 영역별 대조 (D64) ────────────────────────────────────────────────
+
+AREAS_SYSTEM = """\
+당신은 한국 증권사 리서치센터의 애널리스트입니다. **직전 리포트가 본 그림이
+이번 공시로 유지되는가**를 영역별로 대조합니다.
+
+## 왜 이 일을 하는가
+
+RA가 새 분기 노트를 열고 가장 먼저 묻는 것은 「지난번 내 그림이 아직 맞나」
+입니다. 숫자가 얼마 바뀌었는지는 표가 이미 보여 줍니다. 당신이 하는 것은
+**무엇이 달라졌는가**입니다.
+
+## 절대 규칙 — 숫자
+
+**숫자를 일절 쓰지 마십시오.** 금액·성장률·비율·연도 어느 것도 쓰지 않습니다.
+직전 리포트의 숫자는 우리가 검산하지 않았고, 이번 공시 숫자는 표에 이미
+있습니다. 숫자가 하나라도 있으면 이 대조는 통째로 버려집니다.
+
+「늘었다/줄었다/유지됐다/뒤집혔다」로 씁니다.
+
+## 영역
+
+직전 리포트에서 **실제로 다룬 영역만** 고르십시오. 없는 영역을 지어내지
+마십시오. 보통 이런 것들입니다:
+
+- 실적 추이 · 수익성(마진) · 사업 구조와 부문 · 재무 안정성
+- 성장 동력 · 리스크 · 밸류에이션 근거
+
+## 판정
+
+각 영역을 넷 중 하나로 판정하십시오:
+
+- `유지` — 직전 그림이 이번 공시와 어긋나지 않는다
+- `강화` — 직전 그림이 이번 공시로 더 뒷받침된다
+- `약화` — 직전 그림과 이번 공시가 어긋나는 방향이다
+- `확인불가` — 공시만으로는 판정할 수 없다 (뉴스·업황 근거인 경우)
+
+**확인불가를 두려워하지 마십시오.** 공시 밖 주장은 그렇게 표시하는 것이 맞습니다.
+
+## 출력 형식
+
+아래 JSON만 출력하십시오. 3~6개 영역.
+
+{"areas": [{"area": "수익성", "prior": "직전 리포트가 본 것 (한 문장)",
+            "now": "이번 공시가 말하는 것 (한 문장)", "verdict": "유지|강화|약화|확인불가"}]}"""
+
+_VERDICTS = ("유지", "강화", "약화", "확인불가")
+
+
+@dataclass
+class AreaDiff:
+    """영역 하나의 대조."""
+
+    area: str
+    prior: str
+    now: str
+    verdict: str
+
+
+def build_areas_prompt(company: str, prior_markdown: str, observations: list[str]) -> str:
+    parts = [f"# 대상\n{company}\n"]
+    parts.append(
+        "# 직전 리포트 (사용자가 올린 것 · 숫자는 가려져 있습니다)\n" + prior_markdown[:_HEAD_CHARS]
+    )
+    if observations:
+        parts.append(
+            "\n# 이번 공시에서 확인된 것 (결정적 계산 결과)\n"
+            + "\n".join(f"- {o}" for o in observations[:14])
+        )
+    parts.append(
+        "\n# 과업\n직전 리포트가 본 그림이 이번 공시로 유지되는지 영역별로 "
+        "대조하십시오. **숫자는 쓰지 않습니다.** JSON만 출력합니다."
+    )
+    return "\n".join(parts)
+
+
+def compare_areas(
+    llm: object | None,
+    prior_markdown: str,
+    observations: list[str],
+    *,
+    company: str = "",
+) -> tuple[list[AreaDiff], list[str]]:
+    """직전 리포트 대비 **영역별** 대조. `(영역 목록, 문제 목록)`.
+
+    숫자 비교(D46)는 「얼마가 달라졌나」를 말한다. 이 함수는 **「무엇이
+    달라졌나」**를 말한다 — RA가 새 분기 노트를 열고 처음 묻는 것이 그쪽이다.
+
+    **숫자가 하나라도 있으면 통째로 버린다.** 직전 리포트의 숫자는 우리가
+    검산하지 않았고([D48](../../../docs/decisions.md#d48)), 이번 공시 숫자는
+    표에 이미 있다. 여기서 숫자를 쓰면 검산 안 된 값이 검산된 것처럼 섞인다.
+    """
+    if llm is None or not prior_markdown.strip():
+        return [], ["직전 리포트가 없어 영역 대조를 만들지 않았습니다."]
+
+    from arc.llm.number_registry import mask_numbers
+
+    try:
+        completion = llm.complete(
+            system=AREAS_SYSTEM,
+            user=build_areas_prompt(company, mask_numbers(prior_markdown), observations),
+            tier=Tier.WRITE,
+        )
+        payload = json.loads(_json_of(completion.text))
+    except Exception as exc:  # noqa: BLE001 — provider별 예외가 다르다
+        return [], [f"영역 대조를 만들지 못했습니다 ({type(exc).__name__})."]
+
+    if not isinstance(payload, dict):
+        return [], ["영역 대조 응답 형식이 맞지 않습니다."]
+
+    out: list[AreaDiff] = []
+    problems: list[str] = []
+    for raw in payload.get("areas") or []:
+        if not isinstance(raw, dict):
+            continue
+        area = str(raw.get("area") or "").strip()
+        prior = str(raw.get("prior") or "").strip()
+        now = str(raw.get("now") or "").strip()
+        verdict = str(raw.get("verdict") or "").strip()
+        if not (area and prior and now):
+            continue
+        if verdict not in _VERDICTS:
+            verdict = "확인불가"
+        digit = re.search(r"\d", f"{area} {prior} {now}")
+        if digit:
+            problems.append(f"「{area}」에 숫자가 있어 버렸습니다: {digit.group(0)!r}")
+            continue
+        out.append(AreaDiff(area=area, prior=prior, now=now, verdict=verdict))
+    if not out and not problems:
+        problems.append("대조할 영역을 찾지 못했습니다.")
+    return out, problems

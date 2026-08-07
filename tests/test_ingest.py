@@ -191,3 +191,127 @@ class TestConvertDocx:
             z.writestr("junk.txt", "not a docx")
         with pytest.raises(ConvertError, match="열지 못했습니다"):
             convert(bad.getvalue(), "note.docx")
+
+
+class TestCompareAreas:
+    """영역별 대조 (D64).
+
+    숫자 비교(D46)는 「얼마가 달라졌나」를 말한다. 이쪽은 **「무엇이
+    달라졌나」** — RA가 새 분기 노트를 열고 처음 묻는 것이 그쪽이다.
+    """
+
+    def _stub(self, payload):
+        import json as _json
+
+        class Stub:
+            def complete(self, **_):
+                class C:
+                    text = _json.dumps(payload, ensure_ascii=False)
+
+                return C()
+
+        return Stub()
+
+    def test_areas_are_read(self):
+        from arc.ingest.prior import compare_areas
+
+        areas, problems = compare_areas(
+            self._stub(
+                {
+                    "areas": [
+                        {
+                            "area": "수익성",
+                            "prior": "마진 개선을 전망했다",
+                            "now": "이번 공시에서 마진이 악화됐다",
+                            "verdict": "약화",
+                        }
+                    ]
+                }
+            ),
+            "## 리포트\n본문",
+            ["영업이익률이 나빠졌다"],
+        )
+        assert problems == []
+        assert areas[0].area == "수익성" and areas[0].verdict == "약화"
+
+    def test_numbers_get_the_area_dropped(self):
+        """**직전 리포트의 숫자는 우리가 검산하지 않았다** — 섞이면 안 된다."""
+        from arc.ingest.prior import compare_areas
+
+        areas, problems = compare_areas(
+            self._stub(
+                {
+                    "areas": [
+                        {
+                            "area": "실적",
+                            "prior": "매출 12조를 전망했다",
+                            "now": "유지됐다",
+                            "verdict": "유지",
+                        }
+                    ]
+                }
+            ),
+            "## 리포트",
+            [],
+        )
+        assert areas == []
+        assert problems and "숫자" in problems[0]
+
+    def test_unknown_verdict_becomes_uncertain(self):
+        """**확인불가를 두려워하지 않는다.** 공시 밖 주장은 그렇게 표시한다."""
+        from arc.ingest.prior import compare_areas
+
+        areas, _ = compare_areas(
+            self._stub(
+                {"areas": [{"area": "리스크", "prior": "가", "now": "나", "verdict": "몰라"}]}
+            ),
+            "## 리포트",
+            [],
+        )
+        assert areas[0].verdict == "확인불가"
+
+    def test_incomplete_area_is_skipped(self):
+        from arc.ingest.prior import compare_areas
+
+        areas, problems = compare_areas(
+            self._stub({"areas": [{"area": "수익성", "prior": "", "now": "나"}]}),
+            "## 리포트",
+            [],
+        )
+        assert areas == [] and problems
+
+    def test_no_llm_no_areas(self):
+        from arc.ingest.prior import compare_areas
+
+        areas, problems = compare_areas(None, "## 리포트", [])
+        assert areas == [] and problems
+
+    def test_provider_failure_does_not_raise(self):
+        from arc.ingest.prior import compare_areas
+
+        class Boom:
+            def complete(self, **_):
+                raise RuntimeError("down")
+
+        areas, problems = compare_areas(Boom(), "## 리포트", [])
+        assert areas == [] and any("RuntimeError" in p for p in problems)
+
+    def test_prior_numbers_are_masked_before_the_prompt(self):
+        """스니펫과 같은 규칙 — 유혹을 애초에 없앤다 (D45)."""
+        import json as _json
+
+        seen = {}
+
+        class Spy:
+            def complete(self, *, system, user, tier=None):
+                seen["user"] = user
+
+                class C:
+                    text = _json.dumps({"areas": []})
+
+                return C()
+
+        from arc.ingest.prior import compare_areas
+
+        compare_areas(Spy(), "매출액은 12조 3,456억원이다.", [])
+        assert "12조 3,456억원" not in seen["user"]
