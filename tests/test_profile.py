@@ -15,8 +15,10 @@ import json
 import pytest
 
 from arc.store.profile import (
+    COVER,
     MAX_SECTORS,
     MAX_STOCKS,
+    WATCH,
     Covered,
     Profile,
     ProfileStore,
@@ -57,22 +59,36 @@ class TestStocks:
     def test_add_and_read_back(self, tmp_path):
         store = ProfileStore(tmp_path)
         p = store.load("u1")
-        add_stock(p, Covered(symbol="064350", company="현대로템", publishes=True))
-        add_stock(p, Covered(symbol="047810", company="한국항공우주"))
+        add_stock(p, Covered(symbol="064350", company="현대로템", kind=COVER))
+        add_stock(p, Covered(symbol="042660", company="한화오션", kind=WATCH))
         store.save(p)
 
         back = store.load("u1")
-        assert back.symbols() == ["064350", "047810"]
-        assert back.publishing() == ["064350"]
+        assert back.symbols() == ["064350", "042660"]
+        assert back.covering() == ["064350"]
+        assert back.watching() == ["042660"]
         assert back.covers("064350") and not back.covers("005930")
+
+    def test_cover_and_watch_are_the_axis(self):
+        """**「발간 여부」가 아니다.** 커버 종목이면 리포트를 내는 것이 자명해서
+        체크박스가 있을 이유가 없었다 — 갈리는 축은 내가 책임지느냐다."""
+        p = Profile()
+        add_stock(p, Covered(symbol="064350", kind=COVER))
+        add_stock(p, Covered(symbol="042660", kind=WATCH))
+        assert p.stocks[0].publishes is True
+        assert p.stocks[1].publishes is False
+
+    def test_an_unknown_kind_becomes_cover(self):
+        p = add_stock(Profile(), Covered(symbol="064350", kind="아무거나"))
+        assert p.stocks[0].kind == COVER
 
     def test_the_same_stock_does_not_go_in_twice(self):
         """두 번 들어가면 브리프가 같은 종목을 두 번 낸다."""
         p = Profile()
-        add_stock(p, Covered(symbol="064350", company="현대로템"))
-        add_stock(p, Covered(symbol="064350", company="현대로템(주)", publishes=True))
+        add_stock(p, Covered(symbol="064350", company="현대로템", kind=WATCH))
+        add_stock(p, Covered(symbol="064350", company="현대로템(주)", kind=COVER))
         assert p.symbols() == ["064350"]
-        assert p.stocks[0].publishes is True  # 나중 것이 이긴다
+        assert p.stocks[0].kind == COVER  # 나중 것이 이긴다
 
     def test_added_at_is_stamped_once(self):
         p = Profile()
@@ -160,3 +176,36 @@ class TestStore:
     def test_it_lives_beside_the_cards(self, tmp_path):
         """프로필만 따로 빼면 사용자 축이 두 군데가 된다."""
         assert ProfileStore(tmp_path).path.parent == tmp_path
+
+
+class TestOldSchema:
+    """**필드를 바꾸기 전에 저장된 것이 반드시 있다.**
+
+    카드에서 두 번 밟았고(D65) 여기서 세 번째로 밟았다 — 「발간 여부」를
+    「커버냐 관심이냐」로 고쳤더니 옛 프로필이 `TypeError`를 내고 화면이
+    500이 됐다.
+    """
+
+    def _write(self, tmp_path, stock: dict) -> Profile:
+        (tmp_path / "profile.json").write_text(
+            json.dumps({"uid": "u1", "stocks": [stock]}), encoding="utf-8"
+        )
+        return ProfileStore(tmp_path).load("u1")
+
+    def test_publishes_true_becomes_cover(self, tmp_path):
+        p = self._write(tmp_path, {"symbol": "064350", "publishes": True})
+        assert p.stocks[0].kind == COVER
+
+    def test_publishes_false_becomes_watch(self, tmp_path):
+        """뜻이 있으니 **옮겨 준다** — 버리면 사용자가 표시해 둔 것이 사라진다."""
+        p = self._write(tmp_path, {"symbol": "042660", "publishes": False})
+        assert p.stocks[0].kind == WATCH
+
+    def test_an_unknown_field_is_dropped_not_fatal(self, tmp_path):
+        p = self._write(tmp_path, {"symbol": "064350", "무슨필드": 1, "kind": COVER})
+        assert p.stocks[0].symbol == "064350"
+        assert p.stocks[0].kind == COVER
+
+    def test_a_garbage_kind_falls_back_to_cover(self, tmp_path):
+        p = self._write(tmp_path, {"symbol": "064350", "kind": "아무거나"})
+        assert p.stocks[0].kind == COVER

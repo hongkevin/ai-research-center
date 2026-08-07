@@ -50,6 +50,7 @@ from fastapi.staticfiles import StaticFiles
 from arc.chat import answer_question
 from arc.chat.retrieval import Context
 from arc.data.kr.dart import DartProvider
+from arc.finmodel.moves import moves_for_symbols
 from arc.finmodel.peer import build_peer_table
 from arc.finmodel.peer_suggest import load_prices, suggest_group
 from arc.ingest.convert import ConvertError, convert
@@ -99,6 +100,8 @@ from arc.store.notes import (
 )
 from arc.store.notes import to_rows as note_rows
 from arc.store.profile import (
+    COVER,
+    WATCH,
     Covered,
     ProfileStore,
     add_stock,
@@ -1455,7 +1458,38 @@ def api_profile():
     # 화면에 바로 보여야 한다.
     have = {c.symbol for c in cards.list() if c.kind == SINGLE and c.registry} if cards else set()
     body["with_cards"] = sorted(have & set(profile.symbols()))
+    body["moves"] = _moves_payload(profile.symbols())
     return body
+
+
+def _moves_payload(symbols: list[str]) -> list[dict]:
+    """종목별 기간 등락. **새로 받지 않는다** — 받아 둔 시세로 나눗셈만 한다.
+
+    RA의 하루는 분기에 한 번 찍은 사진으로 안 돈다. 아침에 「어제 뭐가
+    빠졌나」를 보고 클라이언트가 「이거 왜 올랐어요」를 묻는다.
+    """
+    if not symbols:
+        return []
+    prices, _ = _price_source()
+    if not prices:
+        return []
+    names = _names_for(symbols)
+    return [dataclasses.asdict(m) for m in moves_for_symbols(prices, symbols, names=names)]
+
+
+@app.get("/api/prices/moves")
+def api_moves(symbols: str = ""):
+    """종목별 기간 등락 — 오늘·1주·1개월·분기·반기·1년."""
+    codes = [c.strip() for c in symbols.split(",") if c.strip()]
+    if not codes:
+        return {"moves": []}
+    if len(codes) > 60:
+        return JSONResponse({"error": "한 번에 60종목까지입니다."}, status_code=400)
+    try:
+        codes = [_resolve_symbol(c) for c in codes]
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return {"moves": _moves_payload(codes)}
 
 
 @app.post("/api/profile")
@@ -1482,13 +1516,14 @@ def api_save_profile(payload: dict):
             names = _names_for(codes)
             for code, item in zip(codes, raw, strict=True):
                 item = item if isinstance(item, dict) else {}
+                kind = str(item.get("kind", "")) or (COVER if item.get("publishes") else WATCH)
                 add_stock(
                     profile,
                     Covered(
                         symbol=code,
                         company=names.get(code, ""),
                         sector=str(item.get("sector", "")),
-                        publishes=bool(item.get("publishes", False)),
+                        kind=kind if kind in (COVER, WATCH) else COVER,
                         note=str(item.get("note", "")),
                     ),
                 )

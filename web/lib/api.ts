@@ -860,14 +860,53 @@ export async function renameCard(
  * 그때 다시 만들면 되고, 쌓아 두면 틀린 것이 굳는다.
  */
 
+/**
+ * `cover` 내가 리포트를 낸다 · `watch` 옆에서 본다.
+ *
+ * 「발간 여부」 체크박스였던 것을 고쳤다 — **커버 종목이면 리포트를 내는 것이
+ * 자명해서** 물을 이유가 없었다. 실제로 갈리는 축은 내가 책임지느냐다.
+ */
+export type CoverKind = "cover" | "watch";
+
 export interface Covered {
   symbol: string;
   company: string;
   sector: string;
-  /** 리포트를 내는 종목인가. 브리프·알림의 우선순위가 갈린다 */
-  publishes: boolean;
+  kind: CoverKind;
   note: string;
   added_at: string;
+}
+
+/** 한 구간의 등락. **쓴 날짜를 함께 낸다.** */
+export interface Move {
+  key: string;
+  label: string;
+  change_pct: number | null;
+  from_date: string;
+  to_date: string;
+  days: number;
+  /** 요청보다 짧게 잡혔는가 — 신규 상장이면 「1년」이 실제로는 3개월이다 */
+  partial: boolean;
+}
+
+export interface Moves {
+  symbol: string;
+  company: string;
+  last_close: number | null;
+  last_date: string;
+  items: Move[];
+}
+
+export async function getMoves(symbols: string[]): Promise<Moves[]> {
+  if (!symbols.length) return [];
+  const r = await api(`/api/prices/moves?symbols=${symbols.join(",")}`);
+  if (!r.ok) return [];
+  return (await r.json()).moves ?? [];
+}
+
+/** 등락률 표시. **부호가 먼저다.** */
+export function fmtPct(pct: number | null): string {
+  return pct == null ? "—" : `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`;
 }
 
 export interface PeerGroupRef {
@@ -888,6 +927,8 @@ export interface ProfileData {
   /** 카드에서 끌어온 것 — 사람에게 두 번 묻지 않는다 */
   peer_groups: PeerGroupRef[];
   with_cards: string[];
+  /** 종목별 기간 등락 — 받아 둔 시세로 나눗셈만 한 것 */
+  moves: Moves[];
 }
 
 export async function getProfile(): Promise<ProfileData> {
@@ -899,7 +940,7 @@ export async function getProfile(): Promise<ProfileData> {
 export async function saveProfile(patch: {
   display_name?: string;
   sectors?: string[];
-  stocks?: { symbol: string; sector?: string; publishes?: boolean; note?: string }[];
+  stocks?: { symbol: string; sector?: string; kind?: CoverKind; note?: string }[];
 }): Promise<ProfileData> {
   const r = await api(`/api/profile`, {
     method: "POST",
