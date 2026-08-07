@@ -1610,6 +1610,86 @@ def _index_today(asof: str) -> list[dict]:
     return out
 
 
+_NAME_INDEX = None
+
+
+def _telegram_messages() -> list:
+    """받아 둔 텔레그램 메시지 전부. **봇 채널은 뺀다.**
+
+    봇은 정형 데이터라 센티가 아니다 — 「무슨 말이 도는가」는 사람이 쓴
+    글에서만 나온다(D66 보강).
+    """
+    from arc.ingest.telegram_parse import ChannelKind, parse_export
+
+    folder = _my_dir() / "telegram"
+    if not folder.is_dir():
+        return []
+    out = []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            channel = parse_export(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            log.warning("텔레그램 파일을 읽지 못했습니다 (%s): %s", path.name, exc)
+            continue
+        if channel.kind is not ChannelKind.BOT_FEED:
+            out.extend(channel.messages)
+    return out
+
+
+def _name_index():
+    """종목명 색인. corpCode 한 번으로 만들고 프로세스에 둔다."""
+    global _NAME_INDEX
+    if _NAME_INDEX is None:
+        from arc.ingest.telegram_mentions import NameIndex
+
+        _NAME_INDEX = NameIndex.from_corp_codes(_shared_provider().load_corp_codes())
+    return _NAME_INDEX
+
+
+@app.get("/api/sentiment")
+def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
+    """시장 센티 — **지금 무슨 말이 도는가.**
+
+    브리프와 따로인 이유: 브리프는 「놓친 것이 없다」는 확인이라 짧아야 하고,
+    센티는 뒤지는 화면이다. 한 화면에 두면 브리프가 아침에 안 읽힌다.
+    """
+    import datetime as dtm
+
+    from arc.ingest.telegram_mentions import mention_surges
+    from arc.sentiment import build_sentiment
+
+    messages = _telegram_messages()
+    if not messages:
+        from arc.sentiment import Sentiment
+
+        return dataclasses.asdict(
+            Sentiment(
+                note="받아 둔 텔레그램 메시지가 없습니다 — `arc telegram sync`로 가져옵니다."
+            )
+        )
+
+    days = sorted({m.day for m in messages})
+    try:
+        day = dtm.date.fromisoformat(on) if on else days[-1]
+    except ValueError:
+        return JSONResponse({"error": "날짜 형식이 잘못됐습니다 (YYYY-MM-DD)."}, status_code=400)
+
+    surges = mention_surges(
+        messages,
+        _name_index(),
+        on=day,
+        baseline_days=max(1, min(baseline_days, 30)),
+        min_today=max(1, min_today),
+        min_channels=1,
+        limit=40,
+    )
+    profile = ProfileStore(_my_dir()).load(current_user())
+    mine = {s.symbol: s.kind for s in profile.stocks}
+    body = dataclasses.asdict(build_sentiment(messages, surges, day=day, mine=mine))
+    body["days"] = [d.isoformat() for d in days[-14:]]
+    return body
+
+
 @app.get("/api/prices/moves")
 def api_moves(symbols: str = ""):
     """종목별 기간 등락 — 오늘·1주·1개월·분기·반기·1년."""

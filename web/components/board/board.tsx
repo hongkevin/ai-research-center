@@ -45,100 +45,50 @@ const TONE: Record<Column, string> = {
  */
 export function Board({
   cards,
+  kind = "single",
   onOpen,
   onConfirm,
   onDelete,
   onComposePeer,
 }: {
   cards: CardSummary[];
+  /** 이 보드가 무엇을 그리는가. **탭이 갈렸으니 보드도 하나만 그린다.** */
+  kind?: "single" | "peer";
   onOpen: (id: string) => void;
   onConfirm: (id: string) => void;
   onDelete: (id: string) => void;
   onComposePeer?: () => void;
 }) {
-  const singles = cards.filter((c) => c.kind !== "peer");
-  const peers = cards.filter((c) => c.kind === "peer");
-
-  return (
-    <div className="space-y-8">
-      <Lane
-        title="종목"
-        cards={singles}
-        onOpen={onOpen}
-        onConfirm={onConfirm}
-        onDelete={onDelete}
-      />
-      <div>
-        <SectionTitle title="피어 그룹" count={peers.length} />
-        {peers.length > 0 ? (
-          <Columns
-            cards={peers}
-            onOpen={onOpen}
-            onConfirm={onConfirm}
-            onDelete={onDelete}
-          />
-        ) : (
-          /* **빈 칸 세 개를 세우지 않는다.** 피어가 없을 때 빈 칸반을 그리면
-             화면 절반이 비어 보이고, 그게 보드를 무겁게 만든다. */
-          <div className="rounded-lg border border-dashed px-4 py-5">
-            <p className="text-[13px]">
-              커버 밖 종목을 한 표로 볼 수 있습니다.
-            </p>
-            <p className="mt-1 text-[12px] leading-[1.7] text-muted-foreground">
-              커버하는 종목을 씨앗으로 주면 <strong>같이 움직이는</strong>{" "}
-              종목을 찾아 드립니다 — 업종 분류로는 못 찾는 것들입니다.
-            </p>
-            {onComposePeer && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={onComposePeer}
-                className="mt-3 h-7 text-[12px]"
-              >
-                피어 그룹 만들기
-              </Button>
-            )}
-          </div>
+  if (cards.length === 0 && kind === "peer") {
+    return (
+      <div className="rounded-lg border border-dashed px-4 py-6">
+        <p className="text-[14px] font-medium">
+          커버 밖 종목을 한 표로 볼 수 있습니다.
+        </p>
+        <p className="mt-1 text-[12.5px] leading-[1.8] text-muted-foreground">
+          커버하는 종목을 씨앗으로 주면 <strong>같이 움직이는</strong> 종목을
+          찾아 드립니다 — 업종 분류로는 못 찾는 것들입니다.
+        </p>
+        {onComposePeer && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onComposePeer}
+            className="mt-3 h-7 text-[12px]"
+          >
+            피어 그룹 만들기
+          </Button>
         )}
       </div>
-    </div>
-  );
-}
-
-function Lane({
-  title,
-  cards,
-  onOpen,
-  onConfirm,
-  onDelete,
-}: {
-  title: string;
-  cards: CardSummary[];
-  onOpen: (id: string) => void;
-  onConfirm: (id: string) => void;
-  onDelete: (id: string) => void;
-}) {
+    );
+  }
   return (
-    <div>
-      <SectionTitle title={title} count={cards.length} />
-      <Columns
-        cards={cards}
-        onOpen={onOpen}
-        onConfirm={onConfirm}
-        onDelete={onDelete}
-      />
-    </div>
-  );
-}
-
-function SectionTitle({ title, count }: { title: string; count: number }) {
-  return (
-    <h2 className="mb-3 flex items-baseline gap-2 border-b pb-1.5 text-[12px] font-semibold">
-      {title}
-      <span className="font-mono text-[11px] font-normal text-muted-foreground">
-        {count}
-      </span>
-    </h2>
+    <Columns
+      cards={cards}
+      onOpen={onOpen}
+      onConfirm={onConfirm}
+      onDelete={onDelete}
+    />
   );
 }
 

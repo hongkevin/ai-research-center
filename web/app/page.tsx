@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 import { AskWidget } from "@/components/ask/ask-widget";
 import { MorningBrief } from "@/components/brief/morning";
+import { Senti } from "@/components/senti/senti";
 import { Board, BoardHint } from "@/components/board/board";
 import { Coverage } from "@/components/profile/coverage";
 import { PeerCompose } from "@/components/peer/peer-compose";
@@ -99,7 +100,17 @@ export default function Workbench() {
   // 보드와 채팅. **카드를 여는 것은 탭이 아니라 보드 안의 행동이다.**
   // **브리프가 첫 화면이다.** RA의 하루는 「어젯밤 사이 뭐가 있었나」로
   // 시작한다 — 보드는 그다음에 여는 것이다.
-  const [tab, setTab] = useState<"brief" | "board" | "me">("brief");
+  // **순서가 일의 순서다.** 그리고 선은 「흐르는 것 vs 쌓이는 것」에 있다 —
+  // 브리프·센티는 하루 지나면 버려지고, 커버리지·피어·리포트는 남는다.
+  //
+  //   me    내가 무엇을 보는가          (설정)
+  //   brief 어젯밤 무엇이 달라졌나       (시간축)
+  //   senti 지금 무슨 말이 도는가        (시간축·미검증)
+  //   peer  이 종목이 동종 대비 어디인가  (횡단면축)
+  //   board 이 종목을 어떻게 쓸 것인가    (깊이축)
+  const [tab, setTab] = useState<
+    "me" | "brief" | "senti" | "peer" | "board"
+  >("brief");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
   // 피어 그룹 고치기 — 이름과 구성원. 한 번 만들고 끝나는 것이 아니다.
@@ -201,6 +212,9 @@ export default function Workbench() {
   // `vm.changes.length`에서 터져 화면 전체가 죽는다 (D49에서 카드를 바로 열게
   // 만들면서 낸 회귀 — 브라우저가 "This page couldn't load"를 띄웠다).
   const ready = !!open && Object.keys(open.vm ?? {}).length > 0;
+  // 탭이 갈렸으니 목록도 갈린다 — 피어는 횡단면, 리포트는 깊이다.
+  const singleCards = cards.filter((c) => c.kind !== "peer");
+  const peerCards = cards.filter((c) => c.kind === "peer");
 
   function openCompose() {
     setStep("choose");
@@ -327,8 +341,10 @@ export default function Workbench() {
         <nav className="-mb-5 flex items-end gap-5 self-end">
           {(
             [
-              ["me", "내 커버리지"],
+              ["me", "커버리지"],
               ["brief", "모닝 브리프"],
+              ["senti", "시장 센티"],
+              ["peer", "피어그룹"],
               ["board", "리포트"],
             ] as const
           ).map(([key, label]) => (
@@ -347,9 +363,14 @@ export default function Workbench() {
               )}
             >
               {label}
-              {key === "board" && cards.length > 0 && (
+              {key === "board" && singleCards.length > 0 && (
                 <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
-                  {cards.length}
+                  {singleCards.length}
+                </span>
+              )}
+              {key === "peer" && peerCards.length > 0 && (
+                <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+                  {peerCards.length}
                 </span>
               )}
             </button>
@@ -465,10 +486,12 @@ export default function Workbench() {
         )}
       >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
-          {tab === "brief" ? (
-            <MorningBrief onOpenCoverage={() => setTab("me")} />
-          ) : tab === "me" ? (
+          {tab === "me" ? (
             <Coverage />
+          ) : tab === "senti" ? (
+            <Senti />
+          ) : tab === "brief" ? (
+            <MorningBrief onOpenCoverage={() => setTab("me")} />
           ) : open && open.kind === "peer" ? (
             /* **피어 카드는 본문이 없다.** 표가 본문이다 — 단계 레일도
                근거 패널도 붙지 않는다(그건 종목 카드의 것이다). */
@@ -653,30 +676,31 @@ export default function Workbench() {
             <>
               <div className="mb-5 flex items-baseline justify-between gap-3">
                 <span className="text-[13px] text-muted-foreground">
-                  {cards.length > 0
-                    ? `리포트 ${cards.length}건`
-                    : "아직 작성한 리포트가 없습니다."}
+                  {tab === "peer"
+                    ? peerCards.length > 0
+                      ? `피어 그룹 ${peerCards.length}개 · 커버 종목이 동종 대비 어디인지 봅니다`
+                      : "아직 만든 피어 그룹이 없습니다."
+                    : singleCards.length > 0
+                      ? `리포트 ${singleCards.length}건`
+                      : "아직 작성한 리포트가 없습니다."}
                 </span>
-                {cards.length > 0 && (
-                  <span className="flex items-center gap-2">
-                    {/* 커버 밖 종목을 보는 자리 — 인터뷰가 먼저 꺼낸 고통이다 */}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setComposingPeer(true)}
-                    >
-                      피어 그룹
+                <span className="flex items-center gap-2">
+                  {tab === "peer" ? (
+                    <Button size="sm" onClick={() => setComposingPeer(true)}>
+                      피어 그룹 만들기
                     </Button>
+                  ) : (
                     <Button size="sm" onClick={() => openCompose()}>
                       <PenLineIcon className="size-3.5" />새 리포트
                     </Button>
-                  </span>
-                )}
+                  )}
+                </span>
               </div>
-              {cards.length > 0 ? (
+              {(tab === "peer" ? peerCards : singleCards).length > 0 ? (
                 <>
                   <Board
-                    cards={cards}
+                    cards={tab === "peer" ? peerCards : singleCards}
+                    kind={tab === "peer" ? "peer" : "single"}
                     onOpen={openCard}
                     onConfirm={confirm}
                     onDelete={remove}

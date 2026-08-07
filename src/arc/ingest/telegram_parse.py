@@ -135,7 +135,10 @@ class Message:
     reactions: int = 0
     edited: bool = False
     has_photo: bool = False
-    permalink: str | None = None  # 공개 채널은 만들 수 없다 — None이 정상이다
+    permalink: str | None = None  # username이 없으면 None — 그게 정상이다
+    # **앱을 직접 여는 링크.** 웹 링크는 「Open in Telegram」 중간 페이지를
+    # 거치는데, 웹에서 보다가 대화방을 열려면 그 한 단계가 거슬린다.
+    app_link: str | None = None
     time_is_local_guess: bool = False  # `date_unixtime`이 없어 `date`로 때운 것
 
     @property
@@ -244,6 +247,22 @@ def permalink_for(
     return None
 
 
+def app_permalink_for(
+    chat_id: int, message_id: int, chat_type: str, username: str | None = None
+) -> str | None:
+    """**텔레그램 앱을 직접 여는** 링크.
+
+    `https://t.me/...`는 브라우저에서 「Open in Telegram」 중간 페이지를 거친다.
+    `tg://`는 앱으로 바로 간다 — 웹에서 보다가 대화방을 열려면 이쪽이다.
+    앱이 없으면 아무 일도 안 일어나므로 **웹 링크를 함께 낸다.**
+    """
+    if username:
+        return f"tg://resolve?domain={username.lstrip('@')}&post={message_id}"
+    if chat_id > 0:
+        return f"tg://privatepost?channel={chat_id}&post={message_id}"
+    return None
+
+
 def _at(raw: Mapping[str, object]) -> tuple[dt.datetime, bool]:
     """메시지 dict → (KST 시각, 로컬시각으로 때웠는가)."""
     unix = raw.get("date_unixtime")
@@ -324,6 +343,7 @@ def parse_messages(
                 edited=bool(raw.get("edited")),
                 has_photo=bool(raw.get("photo")),
                 permalink=permalink_for(chat_id, message_id, chat_type, username),
+                app_link=app_permalink_for(chat_id, message_id, chat_type, username),
                 time_is_local_guess=guessed,
             )
         )

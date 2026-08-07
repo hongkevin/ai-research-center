@@ -490,6 +490,64 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
     asyncio.run(run())
 
 
+@telegram_app.command("check")
+def telegram_check(
+    names: list[str] = typer.Argument(None, help="@username 또는 t.me 링크 (여러 개)"),
+    file: str = typer.Option("", "--file", help="한 줄에 하나씩 적힌 파일"),
+) -> None:
+    """후보 채널이 **실제로 있는지** 확인하고 구독자 수를 낸다.
+
+    조사로 모은 이름은 **지어낸 것이 섞인다.** 붙여 보기 전에 걸러야 한다 —
+    없는 채널을 구독하려다 계정이 이상한 신호를 내는 것도 피한다.
+    """
+    import asyncio
+    import re
+
+    cands: list[str] = list(names or [])
+    if file:
+        cands += [x.strip() for x in Path(file).read_text(encoding="utf-8").splitlines()]
+    # `https://t.me/foo`, `@foo`, `foo` 를 모두 받는다
+    cleaned: list[str] = []
+    for raw in cands:
+        raw = raw.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        m = re.search(r"t\.me/(?:s/)?([A-Za-z0-9_]{4,})", raw)
+        cleaned.append((m.group(1) if m else raw).lstrip("@"))
+    cleaned = list(dict.fromkeys(cleaned))
+    if not cleaned:
+        typer.secho("확인할 채널을 주십시오.", fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+
+    async def run() -> None:
+        from telethon.tl.functions.channels import GetFullChannelRequest
+
+        client = _tg_client()
+        await client.start()
+        ok = miss = 0
+        rows = []
+        for name in cleaned:
+            try:
+                entity = await client.get_entity(name)
+                full = await client(GetFullChannelRequest(entity))
+                subs = getattr(full.full_chat, "participants_count", None)
+                rows.append((subs or 0, name, getattr(entity, "title", "") or "", "있음"))
+                ok += 1
+            except Exception as exc:  # noqa: BLE001 — 없는 채널이 정상 결과다
+                rows.append((-1, name, f"{type(exc).__name__}", "없음"))
+                miss += 1
+        await client.disconnect()
+        rows.sort(key=lambda r: -r[0])
+        typer.echo("")
+        for subs, name, title, state in rows:
+            mark = "✓" if state == "있음" else "✗"
+            count = f"{subs:>9,}" if subs >= 0 else "        -"
+            typer.echo(f"  {mark} {count}  @{name:<24} {title[:40]}")
+        typer.secho(f"\n  확인 {ok}개 · 없음 {miss}개\n", fg=typer.colors.GREEN)
+
+    asyncio.run(run())
+
+
 @telegram_app.command("sync")
 def telegram_sync(
     chat: list[int] = typer.Option(None, "--chat", help="채널 id (여러 번). 비우면 전부"),
