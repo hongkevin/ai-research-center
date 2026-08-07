@@ -182,24 +182,36 @@ def _score_passage(passage: Passage, tokens: list[str]) -> Passage:
     )
 
 
-def _label_hits(entries: list[NumberEntry], tokens: list[str]) -> tuple[list[str], list[str]]:
+def _label_hits(
+    entries: list[NumberEntry], tokens: list[str], *, years: frozenset[str] = frozenset()
+) -> tuple[list[str], list[str]]:
     """라벨이 질문 어휘를 담은 수치 키. `(키 목록, 걸린 어휘)`.
 
     본문에 없어도 레지스트리에는 있는 지표가 많다 — 표에만 나오는 계정이
     그렇다. 라벨을 따로 훑지 않으면 "현금흐름 얼마야"에 답하지 못한다.
+
+    `years`는 우리가 「작년」을 풀어 넣은 연도 어휘다. **연도만 걸린 항목은
+    주제가 따로 있으면 뺀다** — 실측: "그럼 작년은?"(주제=영업이익률)이
+    「2025」 하나로 전기 재무상태표를 통째로 끌어와, 묻지 않은 자산·부채가
+    답변에 실렸다. 주제가 아예 없으면(순수 "작년은?") 그때는 연도가 곧 질문이다.
     """
+    topical = [t for t in tokens if t not in years]
     keys: list[str] = []
     hits: list[str] = []
     for entry in entries:
         if entry.internal:
             continue  # 감사용 값은 독자용이 아니다 (D17)
         label = normalize(entry.label or entry.key)
-        for token in tokens:
-            if normalize(token) in label:
-                keys.append(entry.key)
-                if token not in hits:
-                    hits.append(token)
-                break
+        # **첫 어휘에서 멈추지 않는다.** 「매출액 (2025A)」는 «매출»과 «2025»에
+        # 둘 다 걸리는데, 하나만 세면 나머지가 「못 찾은 것」으로 올라간다.
+        # 실측: "작년은?"이 «2025»를 못 찾은 것으로 보고 답을 거부했다.
+        here = [t for t in tokens if normalize(t) in label]
+        if not here:
+            continue
+        if topical and set(here) <= years:
+            continue
+        keys.append(entry.key)
+        hits.extend(t for t in here if t not in hits)
     return keys, hits
 
 
@@ -266,15 +278,27 @@ def retrieve(
 
     # **회사 이름은 발췌를 고르는 데 쓰지 않는다.** 그 카드의 모든 절이 그
     # 회사 얘기라 아무 절이나 걸리고, 정작 무엇을 물었는지가 묻힌다.
-    content = [t for t in query.tokens if not _is_name(t, out.cards)]
-    content += _carry_content(question, content, context, out)
+    #
+    # `own`(사용자가 실제로 친 말)과 `extra`(우리가 이어받아 넣은 말)를 가른다.
+    # 「못 찾았다」는 판정은 `own`에만 내린다 — 우리가 넣은 «2025»가 안 걸렸다고
+    # 사용자에게 되물으면 안 되고, 반대로 사용자가 친 «삼성전자»가 안 걸리면
+    # 이어받은 종목이 있더라도 반드시 막아야 한다.
+    own = [t for t in query.tokens if not _is_name(t, out.cards)]
+    extra = _carry_content(question, own, context, out)
+    content = own + extra
+    years = frozenset(t for t in extra if t.isdigit())
 
     ranked = sorted((_score_passage(p, content) for p in passages), key=lambda p: -p.score)
-    hit = [p for p in ranked if p.score > 0][:max_passages]
-    key_hits, label_tokens = _label_hits(entries, content)
+    # 연도만 걸린 발췌도 뺀다 (`_label_hits`와 같은 이유). 재무 표에는 전기 열이
+    # 늘 있어서, 이걸 안 빼면 「작년은?」이 표 하나로 카탈로그를 가득 채운다.
+    topical = [t for t in content if t not in years]
+    hit = [p for p in ranked if p.score > 0 and not (topical and set(p.matched) <= years)][
+        :max_passages
+    ]
+    key_hits, label_tokens = _label_hits(entries, content, years=years)
     matched = {t for p in hit for t in p.matched} | set(label_tokens)
 
-    unmatched = [t for t in content if t not in matched]
+    unmatched = [t for t in own if t not in matched]
     if not hit and not key_hits and content:
         # 내용어가 있는데 하나도 안 걸렸다. **비워서 돌려준다** — 비슷한
         # 절을 대신 집어 오면 시스템이 모르는 것을 아는 척하게 된다.
@@ -284,6 +308,10 @@ def retrieve(
         # 있지 않은 회사 이름일 수 있다** — 실측: "삼성전자 매출 얼마야"가
         # 「매출」 하나로 현대로템 카드를 집어 왔다. 다른 회사의 숫자로 답하는
         # 것이 이 시스템이 할 수 있는 가장 나쁜 오답이다.
+        #
+        # **이어받기가 이 검사를 무력화하면 안 된다.** 앞 턴이 현대로템이었다고
+        # 「그럼 삼성전자 매출은?」에 현대로템 숫자를 내면 같은 오답이다.
+        # 이어받아 넣은 말은 `own`에 없으므로 여기 걸리지 않는다.
         return _nothing(
             out,
             unmatched,
