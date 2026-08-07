@@ -1531,7 +1531,118 @@ def api_create_peer(payload: dict):
         members=members,
     )
     cards.save(card)
-    return {"card_id": card.id, "members": card.members}
+    return {
+        "card_id": card.id,
+        "members": card.members,
+        "filling": _fill_missing_members(cards, codes),
+    }
+
+
+def _fill_missing_members(cards: CardStore, codes: list[str]) -> list[str]:
+    """카드가 없는 구성원의 **수치를 채운다. 리포트를 쓰지 않는다.**
+
+    비교표 12줄(매출·영업이익·이익률·YoY·ROE·부채비율…)은 전부 재무제표에서
+    바로 나온다. **리포트가 필요한 것은 서술이지 숫자가 아니다.** 그런데 이
+    화면은 표를 보려면 리포트부터 쓰게 만들고 있었다 — 순서가 거꾸로다.
+    RA는 숫자를 먼저 보고 **그다음에** 쓸지 정한다.
+
+    그래서 `llm=False`로 돌린다. 실측 5초, 비용 0, 레지스트리 90여 건.
+    쓰고 싶은 종목만 나중에 리포트로 올리면 된다.
+
+    **순차로 돈다.** DART를 병렬로 두드려 IP가 끊겼던 적이 있다(D69).
+    """
+    # **「카드가 있다」가 아니라 「수치가 있다」로 판단한다.** 실패한 카드가
+    # 남아 있으면 그게 재시도를 영영 막는다 — 실측으로 밟았다(빈 카드 3장이
+    # 조선 3종목의 재채움을 막았다).
+    singles = [c for c in cards.list() if c.kind == SINGLE and c.symbol]
+    usable = {c.symbol for c in singles if c.registry}
+    running = {c.symbol for c in singles if c.running}
+    missing = [c for c in codes if c not in usable and c not in running]
+    if not missing:
+        return []
+
+    # 재시도할 종목의 **빈 카드는 치운다.** 수치도 본문도 없어 잃을 것이
+    # 없고, 남겨 두면 보드에 아무 정보 없는 카드가 쌓인다.
+    for c in singles:
+        if c.symbol in missing and not c.registry and not c.assembled:
+            cards.delete(c.id)
+
+    def work(job):
+        for symbol in missing:
+            try:
+                _make_numbers_card(cards, symbol, on_progress=job.emit)
+            except Exception as exc:  # noqa: BLE001 — 하나가 실패해도 나머지는 채운다
+                log.warning("피어 구성원 수치를 못 채웠습니다 (%s): %s", symbol, exc)
+        return {"filled": missing}
+
+    JOBS.start(work)
+    return missing
+
+
+def _make_numbers_card(cards: CardStore, symbol: str, *, on_progress=None) -> str:
+    """수치만 채운 종목 카드 하나. **최신 정기보고서를 스스로 고른다.**
+
+    사람에게 연도·분기를 묻지 않는다 — 피어 표에서 알고 싶은 것은 「지금
+    나와 있는 최신 실적」이고, 그건 우리가 안다.
+    """
+    from arc.data.kr.filings import periodic_filings
+
+    end = dt.datetime.now(dt.UTC).date()
+    ds = _shared_provider().get_disclosures(
+        symbol, end - dt.timedelta(days=540), end, pblntf_ty="A"
+    )
+    filings = periodic_filings(ds)
+    if not filings:
+        raise ValueError(f"정기보고서를 찾지 못했습니다 — {symbol}")
+    top = filings[0]
+    card_id = cards.new_id()
+    cards.save(
+        Card(
+            id=card_id,
+            symbol=symbol,
+            year=top.year,
+            period=top.period.value,
+            created_at=now_iso(),
+            column=DRAFT,
+            running=True,
+            company=_names_for([symbol]).get(symbol, ""),
+        )
+    )
+    try:
+        vm, doc = _generate(
+            symbol,
+            top.year,
+            period=top.period.value,
+            use_llm=False,
+            overrides={},
+            on_progress=on_progress,
+        )
+    except Exception as exc:
+        failed = ViewModel(symbol=symbol, year=top.year, error=f"{type(exc).__name__}: {exc}")
+        _land_card(cards, card_id, failed, {}, published=False)
+        raise
+    _land_card(cards, card_id, vm, doc, published=False)
+    return card_id
+
+
+@app.post("/api/cards/{card_id}/rename")
+def api_rename_card(card_id: str, payload: dict):
+    """카드 이름을 고친다. 피어 그룹은 이름이 곧 그 그룹의 정체다."""
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+    try:
+        card = cards.get(card_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if card is None:
+        return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    name = str(payload.get("name", "")).strip()
+    if not name:
+        return JSONResponse({"error": "이름을 입력하십시오."}, status_code=400)
+    card.company = name[:60]
+    cards.save(card)
+    return {"company": card.company}
 
 
 @app.post("/api/cards/{card_id}/members")
@@ -1575,10 +1686,14 @@ def api_set_peer_members(card_id: str, payload: dict):
 
     card.members = members
     cards.save(card)
+    # 새로 넣은 종목의 수치도 바로 채운다 — 넣자마자 「—」만 보이면 넣은
+    # 사람이 뭘 더 해야 하는지 알 수 없다.
+    filling = _fill_missing_members(cards, codes)
     resolved = resolve_peer_members(cards, card.members)
     return {
         "members": [{k: v for k, v in m.items() if k != "registry"} for m in resolved],
         "attention": peer_attention_reasons(resolved),
+        "filling": filling,
     }
 
 
