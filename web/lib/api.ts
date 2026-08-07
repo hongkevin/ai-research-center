@@ -995,6 +995,8 @@ export interface BriefLine {
   moves: Move[];
   filings: BriefFiling[];
   articles: BriefArticle[];
+  /** 구간별 시장 대비 초과(%p). **아침에 알고 싶은 것은 이쪽이다** */
+  excess: Record<string, number>;
 }
 
 /** 코스피·코스닥 실제 지수. **아침 회의가 여기서 시작한다.** */
@@ -1011,6 +1013,8 @@ export interface SectorLine {
   sector: string;
   count: number;
   moves: Move[];
+  /** 구간별 시장 대비 초과(%p) */
+  excess: Record<string, number>;
 }
 
 export interface Brief {

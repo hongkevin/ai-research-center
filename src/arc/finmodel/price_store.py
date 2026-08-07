@@ -45,6 +45,7 @@ _INTERVAL = 0.2
 
 # 지수는 종목이 아니다. 시장 요인 제거(`peer_suggest`)에 쓰려고 같은 자리에
 # 두지만, 후보 목록에는 나오면 안 된다 — `suggest()`가 `market`으로 뺀다.
+# 파일명이 6자리 숫자가 아니라 `is_common_share()`가 후보에서 자동으로 뺀다.
 MARKET_KEY = "KOSPI"
 
 
@@ -183,3 +184,67 @@ def _merge(out: Path, series: dict[str, dict[str, float]]) -> int:
         )
         tmp.replace(path)
     return len(series)
+
+
+def backfill_indices(
+    base: str | Path,
+    *,
+    days: int = 400,
+    today: dt.date | None = None,
+    names: tuple[str, ...] = ("코스피", "코스닥"),
+    interval: float = _INTERVAL,
+) -> dict:
+    """지수 일별 종가를 종목과 **같은 자리에** 쌓는다.
+
+    왜 필요한가: 브리프의 「시장 대비 초과」를 내려면 지수도 **기간 시계열**이
+    있어야 한다. 지수 API는 하루치 등락만 주므로 날짜를 훑어야 하고, 그건
+    시세 백필과 같은 모양이다 — 하루 1콜에 168개 지수가 다 온다.
+
+    `KOSPI.json` / `KOSDAQ.json`으로 저장한다. 6자리 숫자가 아니라
+    `is_common_share()`가 피어 후보에서 자동으로 뺀다.
+    """
+    from arc.data.kr.krx_index import fetch_day
+
+    out = store_dir(base)
+    out.mkdir(parents=True, exist_ok=True)
+    file_of = {"코스피": "KOSPI", "코스닥": "KOSDAQ"}
+
+    end = today or dt.datetime.now(dt.UTC).date()
+    start = end - dt.timedelta(days=days)
+    have = _dates_on_disk_for(out, "KOSPI")
+
+    series: dict[str, dict[str, float]] = {}
+    fetched = 0
+    empty = 0
+    for day in _trading_days(start, end):
+        stamp = day.strftime("%Y%m%d")
+        if stamp in have:
+            continue
+        try:
+            got = fetch_day(day, names=names)
+        except Exception as exc:  # noqa: BLE001 — 하루가 실패해도 나머지는 받는다
+            log.warning("지수를 못 받았습니다 (%s): %s", stamp, exc)
+            continue
+        if not got:
+            empty += 1
+            continue
+        fetched += 1
+        for name, row in got.items():
+            close = row.get("close")
+            if close:
+                series.setdefault(file_of.get(name, name), {})[stamp] = float(close)
+        if interval:
+            time.sleep(interval)
+
+    written = _merge(out, series)
+    return {"fetched_days": fetched, "empty_days": empty, "indices": written, "path": str(out)}
+
+
+def _dates_on_disk_for(out: Path, stem: str) -> set[str]:
+    """그 계열이 이미 받아 둔 날짜. 종목과 달리 **계열마다 따로** 본다 —
+    지수는 두 개뿐이라 아무거나 하나로 대신할 수 없다."""
+    path = out / f"{stem}.json"
+    try:
+        return set(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set()
