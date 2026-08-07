@@ -181,6 +181,54 @@ def _beta_residual(rets: dict[str, float], market: dict[str, float]) -> dict[str
     return {d: rets[d] - beta * market[d] for d in common}
 
 
+# 횡단면 중앙값을 시장으로 쓰려면 이만큼은 있어야 한다. 종목 몇 개의
+# 중앙값은 시장이 아니라 그 몇 개다.
+_MIN_CROSS_SECTION = 30
+
+
+def is_common_share(symbol: str) -> bool:
+    """보통주인가.
+
+    한국 종목코드는 **마지막 자리가 주식 종류**다 — 보통주 `0`, 구형우선주
+    `5·7·9`, 신형우선주 `K·L·M`.
+
+    **안 거르면 우선주가 피어 1위로 앉는다.** 실측: 삼성전자 씨앗에
+    `005935`(삼성전자우)가 0.86으로 최상위였고, 반도체 후보 8개 중 셋이
+    우선주였다(`005935`·`02826K`·`03473K`). 같은 회사라 상관이 높은 게
+    당연하고, 그래서 **피어로는 아무 정보가 없다.**
+    """
+    return len(symbol) == 6 and symbol.endswith("0")
+
+
+def _market_returns(
+    prices: dict[str, dict[str, float]], dates: list[str], market: str
+) -> dict[str, float] | None:
+    """시장 요인 계열.
+
+    지수가 있으면 그것을 쓰고, 없으면 **그날 전 종목 수익률의 중앙값**을
+    시장으로 삼는다. 금융위 시세 API에는 지수가 없다 — 그런데 중앙값 쪽이
+    동일가중이라 시가총액에 눌리지 않고, 극단값에도 평균보다 강하다.
+    """
+    if market in prices:
+        return _returns(prices[market], dates)
+    if len(prices) < _MIN_CROSS_SECTION:
+        return None
+
+    by_date: dict[str, list[float]] = {}
+    for series in prices.values():
+        for day, value in _returns(series, dates).items():
+            by_date.setdefault(day, []).append(value)
+
+    out: dict[str, float] = {}
+    for day, values in by_date.items():
+        if len(values) < _MIN_CROSS_SECTION:
+            continue
+        values.sort()
+        mid = len(values) // 2
+        out[day] = values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+    return out or None
+
+
 def suggest(
     seeds: list[str],
     prices: dict[str, dict[str, float]],
@@ -190,6 +238,7 @@ def suggest(
     exclude: set[str] | None = None,
     market: str = MARKET,
     min_correlation: float = MIN_CORRELATION,
+    common_only: bool = True,
 ) -> list[Candidate]:
     """씨앗 종목과 **같이 움직이는** 종목을 상관 순으로.
 
@@ -197,9 +246,12 @@ def suggest(
     또렷해진다 — 실측에서 씨앗 하나일 때 top15 중 방산이 8~9개였는데 둘로
     올리자 top8이 사실상 전부 방산이었다.
 
-    `market` 계열이 있으면 **잔차 상관**을 쓴다. 없으면 원시 상관으로 떨어지되
-    그때는 `min_correlation`이 의미를 잃으므로 하한을 적용하지 않는다 —
-    두 공간의 숫자는 서로 견줄 수 없다.
+    **시장 요인은 늘 걷어낸다.** `market` 계열(지수)이 있으면 그것을, 없으면
+    **그날 전 종목 수익률의 중앙값**을 시장으로 삼는다. 금융위 시세 API에는
+    지수가 없어서 실제로는 후자를 쓰는데, 동일가중이라 오히려 맞고 새 소스가
+    필요 없다. 종목이 너무 적어 중앙값이 뜻을 잃으면 원시 상관으로 떨어지고
+    그때는 `min_correlation`을 적용하지 않는다 — 두 공간의 숫자는 서로 견줄
+    수 없다.
 
     씨앗 자신과 `exclude`는 결과에서 뺀다. 상관을 못 낸 종목(겹치는 거래일
     부족)도 뺀다 — 0.0으로 목록 끝에 세우면 「상관 없음」과 「모름」이 섞인다.
@@ -215,7 +267,7 @@ def suggest(
         seed_dates |= prices[s].keys()
     dates = sorted(seed_dates)[-(window + 1) :]
 
-    market_returns = _returns(prices[market], dates) if market in prices else None
+    market_returns = _market_returns(prices, dates, market)
     adjusted = market_returns is not None
 
     def factor(symbol: str) -> dict[str, float] | None:
@@ -238,6 +290,9 @@ def suggest(
     out: list[Candidate] = []
     for symbol in prices:
         if symbol in skip:
+            continue
+        # 우선주는 **같은 회사**다. 상관이 높은 게 당연하고 피어로는 정보가 없다.
+        if common_only and not is_common_share(symbol):
             continue
         series = factor(symbol)
         if not series:
