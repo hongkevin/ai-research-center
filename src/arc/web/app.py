@@ -1215,6 +1215,11 @@ def api_health():
     """플랫폼 헬스체크용. **인증 없이 열려 있다** (auth.PUBLIC_PATHS)."""
     return {
         "status": "ok",
+        # **배포된 것이 최신인지 알 방법이 있어야 한다.** 실서버에서 어떤
+        # 코드가 도는지 모르면 「고쳤는데 그대로다」의 원인을 못 가른다.
+        # Railway가 주입하는 값이고, 로컬에서는 비어 있다.
+        "commit": (os.environ.get("RAILWAY_GIT_COMMIT_SHA") or "")[:7],
+        "deployed_at": os.environ.get("RAILWAY_DEPLOYMENT_ID", "")[:8],
         "dart_key": bool(os.environ.get("DART_API_KEY")),
         "llm_key": bool(os.environ.get("OPENAI_API_KEY")),
         # 기사 검색 체크박스를 켤 수 있는가. 없으면 화면이 이유를 적는다.
