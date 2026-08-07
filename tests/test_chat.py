@@ -24,10 +24,11 @@ from arc.chat import (
     card_passages,
     check_answer,
     parse_query,
+    rank_observations,
     retrieve,
 )
 from arc.chat.evidence import tokenize
-from arc.data.base import Provenance
+from arc.data.base import NewsItem, Provenance
 from arc.llm.client import Completion
 from arc.store.cards import Card
 
@@ -80,10 +81,10 @@ DOC = """\
 """
 
 
-def _entry(key, label, unit, display, prov=PROV):
+def _entry(key, label, unit, display, prov=PROV, value=1.0):
     return {
         "key": key,
-        "value": 1.0,
+        "value": value,
         "unit": unit,
         "display": display,
         "provenance": prov.model_dump(mode="json"),
@@ -98,7 +99,9 @@ REGISTRY = [
     _entry("revenue_2026a", "매출액 (2026A)", "원", "1조 4,575억원"),
     _entry("revenue_yoy_2026a", "매출액 YoY (2026A)", "%", "23.9%"),
     _entry("operating_margin_2026a", "영업이익률 (2026A)", "%", "6.1%"),
-    _entry("opseg1_revenue_2026a", "방산 부문 매출 (2026A)", "원", "8,100억원"),
+    _entry("opseg1_revenue_2026a", "방산 부문 매출 (2026A)", "원", "8,100억원", value=8100),
+    _entry("opseg2_revenue_2026a", "철도 부문 매출 (2026A)", "원", "5,200억원", value=5200),
+    _entry("opseg3_revenue_2026a", "플랜트 매출 (2026A)", "원", "-1,200억원", value=-1200),
     _entry("payout_2026a", "배당성향 (2026A)", "%", "12.0%", DIVIDEND_PROV),
 ]
 
@@ -120,22 +123,60 @@ def _card(**over) -> Card:
 
 
 class _Fake:
-    """LLM 대역. 무엇을 돌려줄지 시험이 정한다."""
+    """LLM 대역. 무엇을 돌려줄지 시험이 정한다.
 
-    def __init__(self, *answers: str, unanswered: list[str] | None = None):
-        self.answers = list(answers)
+    **호출이 둘이다** — 검증 레인과 힌트 레인은 별도 호출이므로(D31) 대역도
+    시스템 프롬프트를 보고 갈라야 한다.
+    """
+
+    def __init__(
+        self,
+        *facts: str,
+        analysis: str = "",
+        unanswered: list[str] | None = None,
+        hints: list[dict] | None = None,
+    ):
+        self.facts = list(facts)
+        self.analysis = analysis
         self.unanswered = unanswered or []
+        self.hints = hints or []
         self.calls: list[str] = []
+        self.hint_calls: list[str] = []
 
     def complete(self, *, system, user, tier=None, max_tokens=0):
-        self.calls.append(user)
-        payload = {"answer": self.answers.pop(0), "unanswered": self.unanswered}
+        if '"hints"' in system:
+            self.hint_calls.append(user)
+            payload: dict = {"hints": self.hints}
+        else:
+            self.calls.append(user)
+            payload = {
+                "facts": self.facts.pop(0),
+                "analysis": self.analysis,
+                "unanswered": self.unanswered,
+            }
         return Completion(
             text=json.dumps(payload, ensure_ascii=False),
             model="fake-1",
             provider="fake",
             cost_usd=0.0001,
         )
+
+
+def _news(*titles: str):
+    """기사 대역. 회사명을 받아 `NewsItem`을 돌려준다."""
+    items = [
+        NewsItem(
+            title=title,
+            snippet=f"{title} 관련 보도 내용",
+            url=f"https://www.hankyung.com/article/{i}",
+            published_at=dt.datetime(2026, 7, 20, tzinfo=dt.UTC),
+            provenance=Provenance(
+                source="naver_news", retrieved_at=dt.datetime(2026, 8, 7, tzinfo=dt.UTC)
+            ),
+        )
+        for i, title in enumerate(titles, 1)
+    ]
+    return lambda company: list(items)
 
 
 # ── 질문 읽기 ────────────────────────────────────────────────────────
@@ -372,6 +413,113 @@ def test_line_structure_survives_the_guard():
     )
     a = answer_question("현대로템 실적", [_card()], client=client)
     assert a.text.count("\n") == 1
+
+
+# ── 레인 셋 ──────────────────────────────────────────────────────────
+def test_rank_observations_give_order_without_size():
+    """**순서는 크기가 아니다.** 이게 성립해야 분석 레인이 비교를 말할 수 있다."""
+    r = retrieve("현대로템 부문별 매출", [_card()])
+    lines = rank_observations(r.registry, r.keys)
+    joined = " ".join(lines)
+    assert joined.index("방산") < joined.index("철도") < joined.index("플랜트")
+    assert "(음수)" in joined
+    for record in REGISTRY:
+        assert record["display"] not in joined
+
+
+def test_the_prompt_carries_the_order_as_a_fact():
+    r = retrieve("현대로템 부문별 매출", [_card()])
+    assert "# 확인된 관찰" in build_prompt(r)
+
+
+def test_three_lanes_stay_separate():
+    client = _Fake(
+        "매출은 {{num:c1.revenue_2026a}}이다 [c1].",
+        analysis="외형이 늘어난 만큼 이익이 따라왔는지가 관건이다 [c1].",
+        hints=[{"text": "대규모 수주 계약이 보도됐다.", "articles": [1]}],
+    )
+    a = answer_question(
+        "현대로템 매출", [_card()], client=client, news=_news("현대로템 대규모 수주")
+    )
+
+    assert a.facts.startswith("매출은")
+    assert a.analysis.startswith("외형이")
+    assert a.text == f"{a.facts}\n\n{a.analysis}"
+    # **미검증 레인은 본문에 섞이지 않는다.** 섞이면 배지를 붙일 자리가 없다.
+    assert a.hints[0].text not in a.text
+    assert a.hints[0].articles[0].url.startswith("https://")
+    assert a.hints[0].articles[0].press
+
+
+def test_hint_with_a_number_is_dropped():
+    client = _Fake(
+        "매출은 {{num:c1.revenue_2026a}}이다 [c1].",
+        hints=[{"text": "5,000억원 규모 수주가 보도됐다.", "articles": [1]}],
+    )
+    a = answer_question("현대로템 매출", [_card()], client=client, news=_news("현대로템 수주"))
+    assert a.hints == []
+
+
+def test_hint_without_a_link_is_dropped():
+    """이 레인을 허용할 수 있는 근거가 「되짚을 수 있다」 하나뿐이다."""
+    client = _Fake(
+        "매출은 {{num:c1.revenue_2026a}}이다 [c1].",
+        hints=[{"text": "수주가 늘 것으로 보인다.", "articles": []}],
+    )
+    a = answer_question("현대로템 매출", [_card()], client=client, news=_news("현대로템 수주"))
+    assert a.hints == []
+
+
+def test_article_numbers_are_masked_going_in_and_coming_out():
+    client = _Fake(
+        "매출은 {{num:c1.revenue_2026a}}이다 [c1].",
+        hints=[{"text": "대규모 수주가 보도됐다.", "articles": [1]}],
+    )
+    a = answer_question(
+        "현대로템 수주", [_card()], client=client, news=_news("현대로템 5,000억원 수주")
+    )
+    assert "5,000억원" not in client.hint_calls[0]  # 넣을 때
+    assert "5,000억원" not in a.hints[0].articles[0].title  # 실을 때
+    assert "⟨수치⟩" in a.hints[0].articles[0].title
+
+
+def test_hints_survive_when_the_cards_cannot_answer():
+    """「공시에서 확인할 수 없다」와 「할 말이 없다」는 다르다."""
+    client = _Fake("쓰이지 않음", hints=[{"text": "신규 수주 계약이 보도됐다.", "articles": [1]}])
+    a = answer_question(
+        "현대로템 수주잔고 알려줘", [_card()], client=client, news=_news("현대로템 신규 수주")
+    )
+    assert a.text.startswith(NO_EVIDENCE)
+    assert a.grounded is False
+    assert len(a.hints) == 1
+    assert client.calls == []  # 검증 레인은 부르지 않았다
+
+
+def test_hint_lane_is_off_without_a_news_fetcher():
+    client = _Fake("매출은 {{num:c1.revenue_2026a}}이다 [c1].")
+    a = answer_question("현대로템 매출", [_card()], client=client)
+    assert a.hints == []
+    assert client.hint_calls == []
+    assert any("힌트 레인" in p for p in a.problems)
+
+
+def test_a_bad_analysis_does_not_take_the_facts_down_with_it():
+    client = _Fake(
+        "매출은 {{num:c1.revenue_2026a}}이다 [c1].", analysis="영업이익률은 6.1%다 [c1]."
+    )
+    a = answer_question("현대로템 매출", [_card()], client=client)
+    assert a.analysis == ""
+    assert "1조 4,575억원" in a.facts
+    assert a.rejected
+
+
+def test_opinion_anywhere_refuses_everything():
+    client = _Fake(
+        "매출은 {{num:c1.revenue_2026a}}이다 [c1].", analysis="목표주가는 20만원이다 [c1]."
+    )
+    a = answer_question("현대로템 매출", [_card()], client=client)
+    assert a.text == POLICY_REFUSAL
+    assert a.refused
 
 
 # ── 게이트 재사용 ────────────────────────────────────────────────────

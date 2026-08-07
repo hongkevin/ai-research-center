@@ -2,6 +2,7 @@
 
 import datetime as dt
 import io
+import time
 import zipfile
 
 import httpx
@@ -11,6 +12,7 @@ import respx
 from arc.data.base import ConsolidationType, Market, PeriodType
 from arc.data.kr.dart import (
     BASE_URL,
+    DartBlockedError,
     DartError,
     DartProvider,
     DartRateLimitError,
@@ -174,6 +176,102 @@ def test_missing_api_key_raises(monkeypatch):
     monkeypatch.delenv("DART_API_KEY", raising=False)
     with pytest.raises(ValueError):
         DartProvider()
+
+
+# ── 차단 대응 (D69) ──────────────────────────────────────────────────
+# 실제로 밟은 사고다. 병렬 호출로 IP가 막혔는데, 재시도 정책이 막힌 뒤에도
+# 계속 두드려 차단을 늘렸다. 아래 셋이 그 재발을 막는다.
+
+
+@respx.mock
+def test_connection_refused_stops_early_and_says_wait():
+    """**전송 오류는 재시도로 안 풀린다.** 예산을 짧게 쓰고 중단해야 한다."""
+    route = respx.get(f"{BASE_URL}/company.json").mock(
+        side_effect=httpx.ConnectError("Connection refused")
+    )
+    provider = make_provider()  # transport_retries=1
+    with pytest.raises(DartBlockedError, match="기다려라"):
+        provider._request("company.json", {})
+    # 최초 1회 + 재시도 1회 = 2. 예전 정책이면 4회였다.
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_transport_retries_zero_gives_up_immediately():
+    route = respx.get(f"{BASE_URL}/company.json").mock(
+        side_effect=httpx.RemoteProtocolError("Server disconnected")
+    )
+    with pytest.raises(DartBlockedError):
+        make_provider(transport_retries=0)._request("company.json", {})
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_transient_transport_error_still_recovers():
+    """차단과 일시적 끊김은 다르다 — 한 번 튕긴 뒤 살아나면 통과해야 한다."""
+    route = respx.get(f"{BASE_URL}/company.json")
+    route.side_effect = [
+        httpx.ConnectError("blip"),
+        httpx.Response(200, json={"status": "000", "corp_name": "삼성전자"}),
+    ]
+    assert make_provider()._get_json("company.json", {})["corp_name"] == "삼성전자"
+    assert route.call_count == 2
+
+
+# ── corpCode 디스크 캐시 (D69) ───────────────────────────────────────
+
+
+@respx.mock
+def test_corp_codes_cached_to_disk_across_instances(tmp_path):
+    """**프로세스가 새로 떠도 다시 받지 않는다.** 이게 차단의 주된 경로였다."""
+    route = respx.get(f"{BASE_URL}/corpCode.xml").mock(
+        return_value=httpx.Response(200, content=make_corp_code_zip())
+    )
+    first = make_provider(cache_dir=tmp_path)
+    assert "005930" in first.load_corp_codes()
+    assert route.call_count == 1
+
+    # 새 인스턴스 = 새 프로세스. 네트워크를 건드리면 안 된다.
+    second = make_provider(cache_dir=tmp_path)
+    assert "005930" in second.load_corp_codes()
+    assert route.call_count == 1
+    assert first.corp_code_cache_path().exists()
+
+
+@respx.mock
+def test_corrupt_cache_falls_back_to_network(tmp_path):
+    """캐시는 최적화지 요구사항이 아니다 — 깨졌으면 그냥 다시 받는다."""
+    (tmp_path / "corpcode.zip").write_bytes(b"not a zip at all")
+    route = respx.get(f"{BASE_URL}/corpCode.xml").mock(
+        return_value=httpx.Response(200, content=make_corp_code_zip())
+    )
+    assert "005930" in make_provider(cache_dir=tmp_path).load_corp_codes()
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_stale_cache_is_refetched(tmp_path):
+    import os
+
+    cached = tmp_path / "corpcode.zip"
+    cached.write_bytes(make_corp_code_zip())
+    old = time.time() - dt.timedelta(hours=25).total_seconds()
+    os.utime(cached, (old, old))
+
+    route = respx.get(f"{BASE_URL}/corpCode.xml").mock(
+        return_value=httpx.Response(200, content=make_corp_code_zip())
+    )
+    make_provider(cache_dir=tmp_path).load_corp_codes()
+    assert route.call_count == 1  # 24시간 지났으면 다시 받는다
+
+
+def test_throttle_spaces_requests():
+    """요청 간격을 지키는 것이 가장 싼 차단 예방이다."""
+    provider = make_provider(min_interval=0.05)
+    start = time.monotonic()
+    for _ in range(3):
+        provider._throttle()
+    assert time.monotonic() - start >= 0.10  # 첫 호출은 즉시, 이후 2회만 대기
 
 
 # ── 주요계정 폴백 (fnlttSinglAcnt) ───────────────────────────────────
