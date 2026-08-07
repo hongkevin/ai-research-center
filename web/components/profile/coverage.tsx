@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 
-import { Channels } from "@/components/profile/channels";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +14,6 @@ import {
   type Covered,
   type PeerGroupRef,
   type ProfileData,
-  type TgChannel,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -51,7 +49,6 @@ export function Coverage({
   const [data, setData] = useState<ProfileData | null>(null);
   const [stocks, setStocks] = useState<Covered[]>([]);
   const [sectors, setSectors] = useState<string[]>([]);
-  const [channels, setChannels] = useState<TgChannel[]>([]);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -66,7 +63,6 @@ export function Coverage({
         setData(p);
         setStocks(p.stocks);
         setSectors(p.sectors);
-        setChannels(p.channels ?? []);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
@@ -98,12 +94,10 @@ export function Coverage({
           kind: s.kind,
           note: s.note,
         })),
-        channels: channels.map((c) => ({ chat_id: c.chat_id, enabled: c.enabled })),
       });
       setData((d) => (d ? { ...d, ...next } : d));
       setStocks(next.stocks);
       setSectors(next.sectors);
-      setChannels(next.channels ?? []);
       setDirty(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -230,16 +224,6 @@ export function Coverage({
           />
         )}
       </div>
-
-      <Channels
-        channels={channels}
-        onToggle={(chatId, enabled) => {
-          setChannels((v) =>
-            v.map((c) => (c.chat_id === chatId ? { ...c, enabled } : c)),
-          );
-          setDirty(true);
-        }}
-      />
 
       {error && <p className="text-[12px] text-bad">{error}</p>}
 

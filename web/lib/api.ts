@@ -1134,6 +1134,39 @@ export interface TgChannel {
   enabled: boolean;
 }
 
+/** 채널 + **내 커버리지와의 관련도**. 센티 탭이 이걸로 줄 세운다. */
+export interface TgChannelRow extends TgChannel {
+  /** 받아 둔 메시지 중 내 종목·섹터를 말한 건수 */
+  relevance: number;
+  trusted: boolean;
+  stale: boolean;
+}
+
+export interface TgChannelList {
+  channels: TgChannelRow[];
+  /** 셀 수 있었는가 — false면 종류·구독자로만 줄 세운 것이다 */
+  measured: boolean;
+  sectors: string[];
+}
+
+export async function getTgChannels(): Promise<TgChannelList> {
+  const r = await api(`/api/telegram/channels`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function setTgChannels(
+  channels: { chat_id: number; enabled: boolean }[],
+): Promise<{ enabled: number[] }> {
+  const r = await api(`/api/telegram/channels`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channels }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
 /** 한 달 넘게 글이 없는가. 모르면 `false` — 모르는 것을 죽었다고 하지 않는다. */
 export function isStale(c: TgChannel, days = 30): boolean {
   if (!c.last_post) return false;

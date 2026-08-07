@@ -1654,6 +1654,73 @@ def _name_index():
     return _NAME_INDEX
 
 
+@app.get("/api/telegram/channels")
+def api_telegram_channels():
+    """볼 채널 고르기 — **센티 탭이 쓴다.**
+
+    채널은 센티의 **재료**라 소비하는 자리에서 관리하는 것이 맞다. 커버리지
+    탭에 뒀더니 「무엇을 보는가(종목)」와 「어디서 보는가(채널)」가 한 화면에
+    섞였다.
+
+    **내 커버리지와 얼마나 관련 있나로 줄 세운다.** 받아 둔 메시지가 있으면
+    내 종목·섹터가 몇 번 나왔는지 세고, 없으면 종류(증권사·리서치 먼저)와
+    구독자 수로 떨어진다 — **셀 수 있을 때만 세고, 없으면 없다고 한다.**
+    """
+    profile = ProfileStore(_my_dir()).load(current_user())
+    mine = {s.symbol for s in profile.stocks}
+    sectors = [x for x in profile.sectors if x]
+
+    hits: dict[str, int] = {}
+    counted = 0
+    if mine or sectors:
+        index = _name_index() if mine else None
+        for msg in _telegram_messages():
+            found = _mentions_mine(msg, index, mine, sectors)
+            if found:
+                hits[msg.chat_name] = hits.get(msg.chat_name, 0) + 1
+                counted += 1
+
+    rows = []
+    for c in profile.channels:
+        row = dataclasses.asdict(c)
+        row["relevance"] = hits.get(c.name, 0)
+        row["trusted"] = c.trusted
+        row["stale"] = c.stale()
+        rows.append(row)
+    # 관련도 → 신뢰(증권사·리서치) → 구독자.
+    rows.sort(key=lambda r: (-r["relevance"], not r["trusted"], -r["subscribers"]))
+    return {"channels": rows, "measured": counted > 0, "sectors": sectors}
+
+
+def _mentions_mine(msg, index, mine: set[str], sectors: list[str]) -> bool:
+    """이 메시지가 내 종목이나 내 섹터를 말했는가."""
+    text = msg.text
+    if any(sector and sector in text for sector in sectors):
+        return True
+    if not mine or index is None:
+        return False
+    from arc.ingest.telegram_mentions import message_symbols
+
+    return bool(message_symbols(msg, index) & mine)
+
+
+@app.post("/api/telegram/channels")
+def api_set_telegram_channels(payload: dict):
+    """켜고 끄기. **이름·구독자·분류는 CLI가 갱신한다.**"""
+    store = ProfileStore(_my_dir())
+    profile = store.load(current_user())
+    wanted = {
+        int(c.get("chat_id", 0)): bool(c.get("enabled"))
+        for c in (payload.get("channels") or [])
+        if isinstance(c, dict)
+    }
+    for channel in profile.channels:
+        if channel.chat_id in wanted:
+            channel.enabled = wanted[channel.chat_id]
+    store.save(profile)
+    return {"enabled": profile.enabled_channels()}
+
+
 @app.get("/api/sentiment")
 def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
     """시장 센티 — **지금 무슨 말이 도는가.**
