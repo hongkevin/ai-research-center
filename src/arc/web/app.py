@@ -98,9 +98,17 @@ from arc.store.notes import (
     rank,
 )
 from arc.store.notes import to_rows as note_rows
+from arc.store.profile import (
+    Covered,
+    ProfileStore,
+    add_stock,
+    pin_peer,
+    set_sectors,
+    unpin_peer,
+)
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
-from arc.web.identity import migrate_legacy, user_dir
+from arc.web.identity import current_user, migrate_legacy, user_dir
 from arc.web.jobs import JobStore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1414,6 +1422,102 @@ def _names_for(symbols: list[str]) -> dict[str, str]:
         row = table.get(s) or {}
         out[s] = str(row.get("stock_name") or row.get("corp_name") or "")
     return out
+
+
+@app.get("/api/profile")
+def api_profile():
+    """내 커버리지. **RA가 쌓아 가는 것.**
+
+    지금까지 이 제품은 매번 처음부터 시작했다 — 종목코드를 넣고, 리포트를
+    만들고, 떠난다. RA는 그렇게 일하지 않는다. 같은 20~30종목을 몇 년 본다.
+
+    카드에서 **끌어올 수 있는 것은 끌어온다.** 사람에게 두 번 묻지 않는다 —
+    피어 그룹 목록은 카드가 이미 알고 있다.
+    """
+    cards = _open_cards()
+    profile = ProfileStore(_my_dir()).load(current_user())
+    body = dataclasses.asdict(profile)
+    body["peer_groups"] = (
+        [
+            {
+                "card_id": c.id,
+                "name": c.company,
+                "member_count": len(c.members),
+                "pinned": c.id in profile.pinned_peers,
+            }
+            for c in cards.list()
+            if c.kind == PEER
+        ]
+        if cards
+        else []
+    )
+    # 커버 종목 중 **리포트 카드가 이미 있는 것.** 「뭘 더 해야 하나」가
+    # 화면에 바로 보여야 한다.
+    have = {c.symbol for c in cards.list() if c.kind == SINGLE and c.registry} if cards else set()
+    body["with_cards"] = sorted(have & set(profile.symbols()))
+    return body
+
+
+@app.post("/api/profile")
+def api_save_profile(payload: dict):
+    """커버 종목·섹터를 통째로 갈아 끼운다.
+
+    **부분 수정 API를 만들지 않는다.** 화면이 목록을 통째로 들고 있고,
+    쪼개면 순서·중복 규칙이 양쪽에 생긴다.
+    """
+    store = ProfileStore(_my_dir())
+    profile = store.load(current_user())
+    try:
+        if "sectors" in payload:
+            set_sectors(profile, [str(s) for s in (payload.get("sectors") or [])])
+        if "stocks" in payload:
+            raw = payload.get("stocks") or []
+            if not isinstance(raw, list):
+                return JSONResponse({"error": "종목 목록이 필요합니다."}, status_code=400)
+            profile.stocks = []
+            codes = []
+            for item in raw:
+                item = item if isinstance(item, dict) else {"symbol": item}
+                codes.append(_resolve_symbol(str(item.get("symbol", "")).strip()))
+            names = _names_for(codes)
+            for code, item in zip(codes, raw, strict=True):
+                item = item if isinstance(item, dict) else {}
+                add_stock(
+                    profile,
+                    Covered(
+                        symbol=code,
+                        company=names.get(code, ""),
+                        sector=str(item.get("sector", "")),
+                        publishes=bool(item.get("publishes", False)),
+                        note=str(item.get("note", "")),
+                    ),
+                )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if "display_name" in payload:
+        profile.display_name = str(payload.get("display_name", ""))[:60]
+    profile.uid = current_user()
+    return dataclasses.asdict(store.save(profile))
+
+
+@app.post("/api/profile/pin")
+def api_pin_peer(payload: dict):
+    """피어 그룹을 고정한다 (D68).
+
+    *"확정한 그룹은 고정한다, 매번 재계산 금지"* — 상관 top15가 기간이
+    바뀌면 4/15까지 흔들려서, 표가 조용히 바뀌면 「직전 대비 변화」(D46)가
+    무의미해진다. 그 「고정」이 놓일 자리가 여기다.
+    """
+    card_id = str(payload.get("card_id", "")).strip()
+    if not card_id:
+        return JSONResponse({"error": "카드를 지정하십시오."}, status_code=400)
+    store = ProfileStore(_my_dir())
+    profile = store.load(current_user())
+    if payload.get("pinned") is False:
+        unpin_peer(profile, card_id)
+    else:
+        pin_peer(profile, card_id)
+    return {"pinned_peers": store.save(profile).pinned_peers}
 
 
 @app.post("/api/peers/suggest")

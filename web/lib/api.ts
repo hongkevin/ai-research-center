@@ -849,3 +849,77 @@ export async function renameCard(
   if (!r.ok) await fail(r);
   return r.json();
 }
+
+/* ── 내 커버리지 ────────────────────────────────────────────────────
+ *
+ * RA는 같은 20~30종목을 몇 년 본다. 어느 섹터를 맡고, 어느 종목에 리포트를
+ * 내고, 어느 피어를 옆에 두는지가 그 사람의 자산이고, 그게 쌓이지 않으면
+ * 로그인할 이유가 없다.
+ *
+ * **LLM이 만든 요약은 여기 없다.** 빠뜨린 게 아니라 정한 것이다 — 필요하면
+ * 그때 다시 만들면 되고, 쌓아 두면 틀린 것이 굳는다.
+ */
+
+export interface Covered {
+  symbol: string;
+  company: string;
+  sector: string;
+  /** 리포트를 내는 종목인가. 브리프·알림의 우선순위가 갈린다 */
+  publishes: boolean;
+  note: string;
+  added_at: string;
+}
+
+export interface PeerGroupRef {
+  card_id: string;
+  name: string;
+  member_count: number;
+  pinned: boolean;
+}
+
+export interface ProfileData {
+  uid: string;
+  display_name: string;
+  /** 자유 텍스트다 — 표준 분류로는 못 적는다는 것이 D68의 결론이다 */
+  sectors: string[];
+  stocks: Covered[];
+  pinned_peers: string[];
+  updated_at: string;
+  /** 카드에서 끌어온 것 — 사람에게 두 번 묻지 않는다 */
+  peer_groups: PeerGroupRef[];
+  with_cards: string[];
+}
+
+export async function getProfile(): Promise<ProfileData> {
+  const r = await api(`/api/profile`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function saveProfile(patch: {
+  display_name?: string;
+  sectors?: string[];
+  stocks?: { symbol: string; sector?: string; publishes?: boolean; note?: string }[];
+}): Promise<ProfileData> {
+  const r = await api(`/api/profile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/** 피어 그룹 고정 (D68) — 확정한 그룹은 매번 재계산하지 않는다. */
+export async function pinPeerGroup(
+  cardId: string,
+  pinned: boolean,
+): Promise<{ pinned_peers: string[] }> {
+  const r = await api(`/api/profile/pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_id: cardId, pinned }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
