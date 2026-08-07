@@ -47,6 +47,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
+from arc.brief import build_brief
 from arc.chat import answer_question
 from arc.chat.retrieval import Context
 from arc.data.kr.dart import DartProvider
@@ -1475,6 +1476,83 @@ def _moves_payload(symbols: list[str]) -> list[dict]:
         return []
     names = _names_for(symbols)
     return [dataclasses.asdict(m) for m in moves_for_symbols(prices, symbols, names=names)]
+
+
+_BRIEF_FILINGS: dict[tuple[str, str], list[dict]] = {}
+
+
+def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
+    """어젯밤 사이 나온 공시. **하루 한 번만 묻는다.**
+
+    커버 30종목이면 새로 고칠 때마다 30콜인데, 그게 [D69](../../docs/decisions.md#d69)의
+    요청률 차단을 부른 종류의 일이다. 날짜로 캐시한다.
+    """
+    key = (symbol, dt.datetime.now(dt.UTC).date().isoformat())
+    cached = _BRIEF_FILINGS.get(key)
+    if cached is not None:
+        return cached
+    end = dt.datetime.now(dt.UTC).date()
+    try:
+        ds = _shared_provider().get_disclosures(symbol, end - dt.timedelta(days=days), end)
+    except Exception as exc:  # noqa: BLE001 — 한 종목이 실패해도 브리프는 나간다
+        log.warning("공시를 못 읽었습니다 (%s): %s", symbol, exc)
+        return []
+    out = [
+        {
+            "title": d.title,
+            "filed_at": d.filed_at.isoformat(),
+            "url": d.provenance.verify_url or "",
+        }
+        for d in sorted(ds, key=lambda d: d.filed_at, reverse=True)[:5]
+    ]
+    _BRIEF_FILINGS[key] = out
+    return out
+
+
+@app.get("/api/brief")
+def api_brief(news: bool = True):
+    """모닝 브리프 — **아침에 이것만 봐도 되게.**
+
+    인터뷰의 말이 그대로 요구다: *"이것만 아침에 해줘도 되는데"*.
+
+    **LLM을 안 쓴다.** 브리프는 서술이 아니라 **배열**이다 — 크게 움직인 것을
+    위로 올리고 그 옆에 공시와 기사를 놓는 것이 전부다. 문장으로 요약하면
+    비용이 들고, 틀릴 여지가 생기고, **RA가 원문을 안 보게 된다.** 아침에
+    필요한 것은 판단이 아니라 **놓친 것이 없다는 확인**이다.
+    """
+    profile = ProfileStore(_my_dir()).load(current_user())
+    symbols = profile.symbols()
+    if not symbols:
+        return dataclasses.asdict(build_brief(profile, {}))
+
+    prices, _ = _price_source()
+    names = _names_for(symbols)
+    moves = {m.symbol: m for m in moves_for_symbols(prices, symbols, names=names)}
+    asof = next((m.last_date for m in moves.values() if m.last_date), "")
+
+    # **커버 종목만** 공시·기사를 붙인다. 관심 종목까지 붙이면 호출이 배로
+    # 늘고 화면이 길어져 정작 볼 것을 못 본다.
+    cover = profile.covering()
+    filings = {s: _recent_filings(s) for s in cover}
+    articles: dict[str, list[dict]] = {}
+    if news and news_available():
+        for s in cover:
+            try:
+                items = _news_by_name(names.get(s, ""))
+            except Exception as exc:  # noqa: BLE001 — 기사 실패가 브리프를 막지 않는다
+                log.warning("기사를 못 읽었습니다 (%s): %s", s, exc)
+                continue
+            articles[s] = [
+                {
+                    "title": i.title,
+                    "url": i.url,
+                    "date": i.published_at.date().isoformat() if i.published_at else "",
+                }
+                for i in items[:3]
+            ]
+
+    brief = build_brief(profile, moves, filings=filings, articles=articles, asof=asof)
+    return dataclasses.asdict(brief)
 
 
 @app.get("/api/prices/moves")
