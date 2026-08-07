@@ -118,6 +118,102 @@ export interface AreaDiff {
   verdict: string;
 }
 
+/* ── 엔진이 계산해 놓고 화면에 못 오던 것들 (D73) ────────────────────
+ *
+ * `ReportResult`는 *"감사에 필요한 중간물을 **모두 보관**한다"*고 적혀 있고
+ * 실제로 그렇습니다. 그런데 화면이 절반을 버리고 있었습니다 — 새로 계산하는
+ * 게 아니라 **이미 있는 것을 표면으로 끌어올린 것**입니다.
+ */
+
+/** 관점 하나 (D35). **부호 하나로 접지 않습니다.** */
+export interface LensView {
+  label: string;
+  question: string;
+  /** 주된 발견. **앞선 질문에 답하지 못했으면 비어 있습니다** */
+  headline: string;
+  /** 주된 발견보다 뒤에 있고 **방향이 다른** 판독 */
+  caveats: string[];
+  readings: string[];
+  /** 다음에 볼 것 */
+  watch: string;
+  /** 답하지 못한 질문들 — **못 본 것을 적는 편이 정직합니다** */
+  unanswered: string[];
+  /** 통째로 침묵한 이유 */
+  note: string;
+}
+
+/** 정기보고서 주요정보. **`unavailable`이 핵심입니다.** */
+export interface ReportInfo {
+  fiscal_year?: number;
+  shares_issued?: number | null;
+  shares_outstanding?: number | null;
+  treasury?: number | null;
+  dps?: number | null;
+  payout_ratio?: number | null;
+  dividend_yield?: number | null;
+  auditor?: string;
+  opinion?: string;
+  employees?: number | null;
+  avg_tenure?: number | null;
+  /** **못 받은 항목의 이름.** 「없다」와 「못 받았다」는 다른 얘기입니다 */
+  unavailable?: string[];
+}
+
+/** 밸류에이션. **EPS 교차검증이 여기 있습니다** (재무제표 vs 배당공시). */
+export interface Valuation {
+  fiscal_year?: number;
+  shares_issued?: number | null;
+  shares_outstanding?: number | null;
+  has_preferred?: boolean;
+  /** 주식수가 공시와 맞는가. 안 맞으면 **주당 지표가 전부 흔들립니다** */
+  shares_reconciled?: boolean;
+  bps?: number | null;
+  eps_stmt?: number | null;
+  eps_disclosed?: number | null;
+  eps_gap_pct?: number | null;
+  roe?: number | null;
+  roa?: number | null;
+  debt_ratio?: number | null;
+  dps?: number | null;
+  dividend_yield?: number | null;
+  payout_ratio?: number | null;
+}
+
+export interface SegmentProfitLine {
+  name: string;
+  revenue: number;
+  operating_income: number | null;
+  assets: number | null;
+  margin: number | null;
+}
+
+/**
+ * 부문 손익 + 총계 검산.
+ *
+ * **`usable: false`는 결함이 아닐 수 있습니다.** SK하이닉스에 부문 손익이
+ * 없는 것은 단일 부문이라 정상이고, `note`가 그 사실을 적습니다.
+ */
+export interface SegmentProfit {
+  fiscal_year?: number;
+  usable?: boolean;
+  reconciled?: boolean;
+  section_title?: string;
+  revenue_gap_pct?: number | null;
+  op_gap_pct?: number | null;
+  unit_scale?: number | null;
+  note?: string;
+  lines?: SegmentProfitLine[];
+}
+
+export interface BusinessInfo {
+  fiscal_year?: number;
+  overview?: string;
+  signals?: string[];
+  source_title?: string;
+  affiliate_weight?: number | null;
+  note?: string;
+}
+
 export interface ViewModel {
   symbol: string;
   year: number;
@@ -163,6 +259,17 @@ export interface ViewModel {
   areas_note: string;
   notice: string;
   error: string;
+
+  /** 관점 (D35). **본문에 쓰는 것과 같은 글**이고 숫자는 출처를 답니다 */
+  lenses: LensView[];
+  /** 관점이 갈리는 지점 — 관전 포인트 */
+  lens_tensions: string[];
+  report_info: ReportInfo;
+  valuation: Valuation;
+  segment_profit: SegmentProfit;
+  business: BusinessInfo;
+  /** 주요정보 조회 실패 사유. **조용히 넘기지 않습니다** */
+  info_error: string;
 }
 
 /**

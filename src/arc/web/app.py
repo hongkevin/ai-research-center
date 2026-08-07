@@ -75,7 +75,7 @@ from arc.render.charts import (
     trend_bars,
 )
 from arc.render.docx import markdown_to_docx
-from arc.render.html import binding_rows, render_html
+from arc.render.html import binding_rows, render_html, substitute_with_spans
 from arc.render.xlsx import collect_series, note_to_xlsx
 from arc.store.cards import (
     DRAFT,
@@ -251,6 +251,27 @@ class ViewModel:
     notice: str = ""
     error: str = ""
 
+    # ── 엔진이 계산해 놓고 화면에 못 오던 것들 (D73) ──────────────────
+    #
+    # `ReportResult`의 독스트링이 *"감사에 필요한 중간물을 **모두 보관**한다"*
+    # 인데, 정작 여기서 절반을 버리고 있었다. 새로 계산하는 게 아니라 **이미
+    # 있는 것을 표면으로 끌어올린다.**
+
+    # 관점 — [D35](../../docs/decisions.md#d35). 만들어는 지는데 화면에 한
+    # 글자도 안 나왔다. 숫자는 레지스트리로 치환해 출처를 달고 나간다
+    lenses: list[dict] = field(default_factory=list)
+    lens_tensions: list[str] = field(default_factory=list)
+    # 정기보고서 주요정보. **`unavailable`이 핵심이다** — 못 받은 것을
+    # 조용히 넘기면 화면은 「없다」와 「못 받았다」를 구분할 수 없다
+    report_info: dict = field(default_factory=dict)
+    # 밸류에이션 — **EPS 교차검증**이 여기 있다 (재무제표 vs 배당공시)
+    valuation: dict = field(default_factory=dict)
+    # 부문 손익 + 총계 검산. **단일 부문은 결함이 아니라 정상이다**
+    segment_profit: dict = field(default_factory=dict)
+    business: dict = field(default_factory=dict)
+    # 주요정보 조회 실패 사유. **조용히 넘기지 않는다**
+    info_error: str = ""
+
 
 # corpCode.xml은 1.5MB zip이고 파싱까지 하면 무겁다. **프로세스 수명 동안
 # 하나만 둔다** — 검색뿐 아니라 생성도 같은 인스턴스를 쓴다.
@@ -316,6 +337,143 @@ def _shown(registry: NumberRegistry, key: str) -> str:
     return entry.rendered() if entry is not None else ""
 
 
+def _lens_rows(r: ReportResult) -> tuple[list[dict], list[str]]:
+    """관점 — [D35](../../docs/decisions.md#d35). **본문에 쓰는 것과 같은 글이다.**
+
+    `_lens_section`이 이미 주된 발견·단서·다음에 볼 것을 나눠 놓았다. 다시
+    만들지 않고 그대로 쓰되, 플레이스홀더를 **레지스트리로 치환해** 숫자마다
+    출처가 붙어 나가게 한다 — 불변식 1은 화면에서도 같다.
+
+    **침묵한 렌즈도 낸다.** 통째로 빠지면 검토자는 「이 회사엔 볼 관점이
+    없구나」로 읽는다. 무엇을 못 봤는지 적는 편이 정직하다.
+    """
+    from arc.pipeline.earnings_review import _lens_section, _ph
+
+    if r.lenses is None:
+        return [], []
+
+    def fill(text: str) -> str:
+        return substitute_with_spans(text, r.registry) if text else ""
+
+    section = _lens_section(r.lenses, lambda k: _ph(k) if k in r.registry else None)
+    views = [
+        {
+            "label": x["label"],
+            "question": x["question"],
+            "headline": fill(x["headline"]),
+            "caveats": [fill(t) for t in x["caveats"]],
+            "readings": [fill(t) for t in x["readings"]],
+            "watch": x["watch"],
+            "unanswered": x["unanswered"],
+            "note": x["note"],
+        }
+        for x in section["views"]
+    ]
+    return views, list(section["tensions"])
+
+
+def _report_info_row(info) -> dict:
+    """정기보고서 주요정보. **`unavailable`이 이 표의 핵심이다.**
+
+    「배당이 없다」와 「배당 정보를 못 받았다」는 완전히 다른 얘기인데, 지금까지
+    화면에서는 둘 다 그냥 빈칸이었다.
+    """
+    if info is None:
+        return {}
+    shares, dividend, audit, work = info.shares, info.dividend, info.audit, info.workforce
+    return {
+        "fiscal_year": info.fiscal_year,
+        "shares_issued": getattr(shares, "issued", None),
+        "shares_outstanding": getattr(shares, "outstanding", None),
+        "treasury": getattr(shares, "treasury", None),
+        "dps": getattr(dividend, "dps_common", None),
+        "payout_ratio": getattr(dividend, "payout_ratio", None),
+        "dividend_yield": getattr(dividend, "yield_common", None),
+        "auditor": getattr(audit, "auditor", ""),
+        "opinion": getattr(audit, "opinion", ""),
+        "employees": getattr(work, "total", None),
+        "avg_tenure": getattr(work, "avg_tenure_years", None),
+        # **못 받은 것을 이름으로 적는다.** 목록이 비어야 「다 받았다」다
+        "unavailable": list(info.unavailable),
+    }
+
+
+def _valuation_row(val) -> dict:
+    """밸류에이션. **EPS 교차검증이 여기 있다.**
+
+    재무제표의 희석EPS와 배당공시의 주당순이익은 원래 같아야 한다. 어긋나면
+    둘 중 하나가 틀렸다는 뜻이고, 그건 화면에 나와야 하는 사실이다.
+    """
+    if val is None:
+        return {}
+    return {
+        "fiscal_year": val.fiscal_year,
+        "shares_issued": val.shares_issued,
+        "shares_outstanding": val.shares_outstanding,
+        "has_preferred": val.has_preferred,
+        # 주식수가 공시와 맞는지. 안 맞으면 아래 주당 지표가 전부 흔들린다
+        "shares_reconciled": val.shares_reconciled,
+        "bps": val.bps,
+        "eps_stmt": val.eps_stmt,
+        "eps_disclosed": val.eps_disclosed,
+        "eps_gap_pct": val.eps_gap_pct,
+        "roe": val.roe,
+        "roa": val.roa,
+        "debt_ratio": val.debt_ratio,
+        "dps": val.dps,
+        "dividend_yield": val.dividend_yield,
+        "payout_ratio": val.payout_ratio,
+    }
+
+
+def _segment_profit_row(sp) -> dict:
+    """부문 손익 + 총계 검산.
+
+    **`usable`이 False인 것과 `None`인 것을 구분해서 낸다.** SK하이닉스에
+    부문 손익이 없는 것은 정상(단일 부문)이고 DART 조회 실패는 결함인데,
+    지금 화면은 둘 다 그냥 안 보인다.
+    """
+    if sp is None:
+        return {}
+    return {
+        "fiscal_year": sp.fiscal_year,
+        "usable": sp.usable,
+        "reconciled": sp.reconciled,
+        "section_title": sp.section_title,
+        "revenue_gap_pct": sp.revenue_gap_pct,
+        "op_gap_pct": sp.op_gap_pct,
+        "unit_scale": sp.unit_scale,
+        "note": sp.note,
+        "lines": [
+            {
+                "name": x.name,
+                "revenue": x.revenue,
+                "operating_income": x.operating_income,
+                "assets": x.assets,
+                "margin": (
+                    round(x.operating_income / x.revenue * 100.0, 1)
+                    if x.revenue and x.operating_income is not None
+                    else None
+                ),
+            }
+            for x in sp.lines
+        ],
+    }
+
+
+def _business_row(b) -> dict:
+    if b is None:
+        return {}
+    return {
+        "fiscal_year": b.fiscal_year,
+        "overview": b.overview,
+        "signals": list(b.signals),
+        "source_title": b.source_title,
+        "affiliate_weight": b.affiliate_weight,
+        "note": b.note,
+    }
+
+
 def _to_view(r: ReportResult) -> ViewModel:
     v = ViewModel(symbol=r.symbol, year=r.fiscal_year)
     v.company = r.company.name
@@ -344,6 +502,15 @@ def _to_view(r: ReportResult) -> ViewModel:
         }
         for s in r.stages
     ]
+
+    # **엔진이 이미 계산한 것을 표면으로 올린다** (D73). 게이트와 무관하다 —
+    # 차단됐을 때야말로 무엇을 검산했고 무엇을 못 구했는지 봐야 한다.
+    v.info_error = r.info_error or ""
+    v.lenses, v.lens_tensions = _lens_rows(r)
+    v.report_info = _report_info_row(r.report_info)
+    v.valuation = _valuation_row(r.valuation)
+    v.segment_profit = _segment_profit_row(r.segment_profit)
+    v.business = _business_row(r.business)
 
     # 게이트가 막으면 본문을 렌더하지 않는다 — 차단된 초안을 보여주면
     # 검토자가 그걸 결과로 착각한다.

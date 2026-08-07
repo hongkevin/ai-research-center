@@ -19,9 +19,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { CheckRail } from "@/components/workbench/check-rail";
 import { StageRail } from "@/components/workbench/stage-rail";
 import { StartChoice } from "@/components/workbench/start-choice";
 import { UploadConfirm } from "@/components/workbench/upload-confirm";
+import { LensPanel } from "@/components/note/lens-panel";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { SectionEditor } from "@/components/note/section-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -768,6 +770,9 @@ export default function Workbench() {
               elapsed={elapsed}
             />
           )}
+          {/* **검산은 게이트와 무관하다.** 차단됐을 때야말로 무엇이
+              어긋났는지 봐야 한다 — 본문만 숨기고 대조 결과는 남긴다. */}
+          {open && !open.vm.error && <CheckRail vm={open.vm} />}
           {ready && !open.vm.error && (
             <EvidenceRail
               vm={open.vm}
@@ -988,6 +993,9 @@ function CenterColumn({
             onEditSection={onEditSection}
             editableSections={editableSections}
           />
+          {/* **관점은 본문 다음이다** (D35 · D73). 엔진이 만들어 놓고
+              화면에 한 글자도 못 오던 것 — 오른쪽 레일에 넣기엔 글이다. */}
+          <LensPanel lenses={vm.lenses ?? []} tensions={vm.lens_tensions ?? []} />
         </>
       ) : (
         // 차단된 초안은 **보여주지 않는다** — 검토자가 결과로 착각한다
