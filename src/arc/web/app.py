@@ -1663,9 +1663,7 @@ def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
         from arc.sentiment import Sentiment
 
         return dataclasses.asdict(
-            Sentiment(
-                note="받아 둔 텔레그램 메시지가 없습니다 — `arc telegram sync`로 가져옵니다."
-            )
+            Sentiment(note="받아 둔 텔레그램 메시지가 없습니다 — `arc telegram sync`로 가져옵니다.")
         )
 
     days = sorted({m.day for m in messages})
@@ -1685,7 +1683,17 @@ def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
     )
     profile = ProfileStore(_my_dir()).load(current_user())
     mine = {s.symbol: s.kind for s in profile.stocks}
-    body = dataclasses.asdict(build_sentiment(messages, surges, day=day, mine=mine))
+    # **「내 섹터」는 피어 그룹이다.** 섹터가 자유 텍스트라 코드가 못 읽고(D68),
+    # 사람이 확정해 고정한 그룹이 그 섹터의 실질적 정의다.
+    peers: dict[str, str] = {}
+    cards = _open_cards()
+    if cards is not None:
+        for card in cards.list():
+            if card.kind != PEER:
+                continue
+            for member in card.members:
+                peers.setdefault(str(member.get("symbol") or ""), card.company)
+    body = dataclasses.asdict(build_sentiment(messages, surges, day=day, mine=mine, peers=peers))
     body["days"] = [d.isoformat() for d in days[-14:]]
     return body
 

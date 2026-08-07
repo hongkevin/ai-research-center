@@ -35,7 +35,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 log = logging.getLogger("arc.store.profile")
@@ -83,6 +83,43 @@ class Covered:
 
 
 @dataclass
+class TgChannel:
+    """구독 중인 텔레그램 채널 하나. **켜 둔 것만 긁는다.**
+
+    다 긁으면 하루 3,000건이 쏟아지고 그중 대부분은 이미 DART·뉴스 API로
+    갖고 있는 것이다(D66). 커버 종목을 고르듯 채널도 고른다.
+    """
+
+    chat_id: int
+    name: str = ""
+    username: str = ""
+    # 분류기가 붙인 것 — broker / research / chatter / bot_feed / internal / unknown
+    kind: str = "unknown"
+    subscribers: int = 0
+    # 마지막 글 (YYYY-MM-DD). **구독자 수만 보면 시체를 잡는다** — 실측:
+    # 박석중의 글로벌전략은 20,437명인데 퇴사 후 8개월째 정지, wemakebull은
+    # 18,638명인데 2024-01이 마지막이다. 규모는 남고 채널은 죽는다.
+    last_post: str = ""
+    # **기본은 꺼짐이다.** 목록에 나타났다고 자동으로 긁으면 고르는 의미가 없다.
+    enabled: bool = False
+
+    @property
+    def trusted(self) -> bool:
+        """증권사 공식·리서치 채널인가. 추천 목록의 기준이다."""
+        return self.kind in ("broker", "research")
+
+    def stale(self, today: dt.date | None = None, days: int = 30) -> bool:
+        """한 달 넘게 글이 없는가. **모르면 False** — 없는 것을 죽었다고 하지 않는다."""
+        if not self.last_post:
+            return False
+        try:
+            last = dt.date.fromisoformat(self.last_post)
+        except ValueError:
+            return False
+        return ((today or dt.datetime.now(dt.UTC).date()) - last).days > days
+
+
+@dataclass
 class Profile:
     """이 사람의 커버리지. **화면 상태가 아니라 업무의 형태다.**"""
 
@@ -95,6 +132,9 @@ class Profile:
     # 고정한 피어 그룹의 카드 id. **그룹 자체를 복제하지 않는다** — 카드가
     # 정본이고 여기는 「내가 계속 보는 것」이라는 표시다.
     pinned_peers: list[str] = field(default_factory=list)
+    # 텔레그램 채널. **커버 종목과 같은 성격이다** — 사람이 정한 것이라
+    # 쌓아도 안전하다.
+    channels: list[TgChannel] = field(default_factory=list)
     updated_at: str = ""
 
     # ── 조회 ─────────────────────────────────────────────────────────
@@ -115,6 +155,10 @@ class Profile:
     # 옛 이름 (import 호환)
     def publishing(self) -> list[str]:
         return self.covering()
+
+    def enabled_channels(self) -> list[int]:
+        """긁을 채널. **켜 둔 것만.**"""
+        return [c.chat_id for c in self.channels if c.enabled]
 
     @property
     def empty(self) -> bool:
@@ -160,14 +204,15 @@ class ProfileStore:
         except (OSError, ValueError):
             return Profile(uid=uid)
         stocks = [_read_stock(s) for s in raw.pop("stocks", []) if isinstance(s, dict)]
+        channels = [_read_channel(c) for c in raw.pop("channels", []) if isinstance(c, dict)]
         try:
-            return Profile(**raw, stocks=stocks)
+            return Profile(**raw, stocks=stocks, channels=channels)
         except TypeError as exc:
             # 필드를 추가하기 **전에** 저장된 프로필. 카드에서 이미 두 번
             # 밟은 자리다(D65) — 여기서는 아는 것만 취한다.
             log.warning("프로필에 모르는 필드가 있어 아는 것만 읽었습니다: %s", exc)
             known = {k: v for k, v in raw.items() if k in Profile.__dataclass_fields__}
-            return Profile(**known, stocks=stocks)
+            return Profile(**known, stocks=stocks, channels=channels)
 
     def save(self, profile: Profile) -> Profile:
         profile.updated_at = _now()
@@ -176,6 +221,28 @@ class ProfileStore:
         # 원자적 교체 — 쓰다 죽으면 반쪽 JSON이 남아 프로필이 통째로 사라진다
         tmp.replace(self.path)
         return profile
+
+
+def _read_channel(raw: dict) -> TgChannel:
+    """모르는 필드는 버린다 — `_read_stock`과 같은 이유(D65)."""
+    known = {k: v for k, v in raw.items() if k in TgChannel.__dataclass_fields__}
+    known.setdefault("chat_id", 0)
+    return TgChannel(**known)
+
+
+def merge_channels(profile: Profile, found: list[TgChannel]) -> Profile:
+    """구독 목록을 프로필에 합친다. **켜 둔 표시는 지키고 나머지는 갱신한다.**
+
+    이름·구독자 수는 바뀌고 분류도 메시지가 쌓이면 정확해진다. 그런데 사람이
+    켜 둔 것을 덮어쓰면 매번 다시 골라야 한다.
+    """
+    was_on = {c.chat_id: c.enabled for c in profile.channels}
+    merged = [replace(c, enabled=was_on.get(c.chat_id, c.enabled)) for c in found]
+    # 목록에서 사라진 채널(나갔거나 못 읽은 것)도 **켜 둔 것이면 남긴다.**
+    seen = {c.chat_id for c in merged}
+    merged += [c for c in profile.channels if c.chat_id not in seen and c.enabled]
+    profile.channels = merged
+    return profile
 
 
 def add_stock(profile: Profile, stock: Covered) -> Profile:
