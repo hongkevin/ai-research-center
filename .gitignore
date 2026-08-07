@@ -64,3 +64,4 @@ docs/KakaoTalk_Photo_*
 # 텔레그램 세션 = 계정 접근권 그 자체. 절대 커밋하지 않는다.
 *.session
 *.session-journal
+.arc-backup-*

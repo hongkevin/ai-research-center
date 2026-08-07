@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ChannelPicker } from "@/components/senti/channel-picker";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   getSentiment,
@@ -87,6 +88,9 @@ export function Senti() {
           「볼 만하다」는 신호이지 사실이 아닙니다.
         </p>
       </div>
+
+      {/* **채널은 센티의 재료다.** 소비하는 자리에서 관리한다. */}
+      <ChannelPicker onChanged={() => setDay((d) => d)} />
 
       {data.total > 0 && <Rhythm data={data} />}
 
