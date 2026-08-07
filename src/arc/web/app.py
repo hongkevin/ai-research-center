@@ -1569,10 +1569,20 @@ def api_brief(news: bool = True):
 
 
 def _market_moves(prices: dict) -> Moves | None:
-    """시장 계열의 기간 등락. 지수는 오늘 등락만 주므로 **기간은 우리가 만든
-    동일가중 중앙값 지수**로 낸다 — 둘은 다른 것을 말한다."""
+    """시장 계열의 기간 등락.
+
+    **코스피를 받아 뒀으면 그것을 쓴다.** 「시장 대비 초과」를 내려면 종목과
+    **같은 창·같은 기준일**의 시계열이어야 하는데, 지수 API는 하루치만 주므로
+    백필해 둔 `KOSPI.json`이 그 자리다.
+
+    없으면 전 종목 동일가중 중앙값으로 떨어진다 — 그것도 시장이긴 하지만
+    코스피와 같은 것을 말하지는 않으므로 이름을 다르게 낸다.
+    """
     if not prices:
         return None
+    index = prices.get("KOSPI")
+    if index:
+        return moves_for(index, symbol="KOSPI", company="코스피")
     series = market_series(prices)
     return moves_for(series, symbol="MARKET", company=MARKET_LABEL) if series else None
 

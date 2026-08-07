@@ -87,6 +87,7 @@ class SectorLine:
     sector: str
     count: int = 0
     moves: list[Move] = field(default_factory=list)
+    excess: dict[str, float] = field(default_factory=dict)
 
     @property
     def day_change(self) -> float | None:
@@ -107,6 +108,8 @@ class Line:
     filings: list[dict] = field(default_factory=list)
     # 기사 — **미검증 레인이다.** 숫자를 여기서 읽지 않는다.
     articles: list[dict] = field(default_factory=list)
+    # 구간별 시장 대비 초과(%p). 시장 계열이 없으면 빈 dict.
+    excess: dict[str, float] = field(default_factory=dict)
 
     @property
     def day_change(self) -> float | None:
@@ -214,10 +217,24 @@ def build_brief(
     brief.watch = _rank(brief.watch)
     brief.asof_label = when_label(asof, today) if asof else ""
     brief.market = _pick(market, keys)
+    if market is not None and market.company:
+        brief.market_label = market.company
     brief.indices = list(indices or [])
     # **섹터는 커버 종목으로만 낸다.** 관심 종목까지 섞으면 「내 섹터가
     # 어땠나」가 아니라 「내가 보는 것들이 어땠나」가 된다.
     brief.sectors = _sectors(brief.cover, keys)
+
+    # **시장 대비 초과.** 아침에 알고 싶은 것은 이쪽이다 — 5% 빠진 것이
+    # 시장이 5% 빠져서인지 이 종목만인지는 완전히 다른 얘기다.
+    #
+    # 섹터를 **만든 뒤에** 채운다. 순서를 뒤집었다가 빈 목록에 값을 넣고
+    # 곧바로 덮어써서 섹터 줄만 초과가 비어 있었다.
+    for row in (*brief.cover, *brief.watch, *brief.sectors):
+        row.excess = {
+            m.key: value
+            for m in row.moves
+            if (value := relative(m, brief.market)) is not None
+        }
     brief.note = _note(brief, profile)
     return brief
 

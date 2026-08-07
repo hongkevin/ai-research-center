@@ -321,12 +321,15 @@ export default function Workbench() {
         {/* **채팅은 보드 옆 탭이다.** 리포트 작성과 무관하게 도는 일이라
             (하루 10~15건의 클라이언트 리퀘스트) 카드 안에 두면 갈 곳이 없다.
             카드가 열려 있어도 탭을 누르면 그쪽으로 간다. */}
-        <nav className="flex items-center gap-0.5 rounded-md border p-0.5">
+        {/* **순서가 일의 순서다** — 커버리지를 정하고, 매일 브리프를 보고,
+            일이 있으면 보드에서 굴린다. 처음 여는 곳은 브리프다(매일 오는
+            곳이라서). 커버 종목이 없으면 브리프가 커버리지로 보낸다. */}
+        <nav className="-mb-5 flex items-end gap-5 self-end">
           {(
             [
-              ["brief", "브리프"],
-              ["board", "보드"],
               ["me", "내 커버리지"],
+              ["brief", "모닝 브리프"],
+              ["board", "리포트"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -337,13 +340,18 @@ export default function Workbench() {
                 if (key !== "board") setOpen(null);
               }}
               className={cn(
-                "rounded px-2.5 py-1 text-[12px] transition-colors",
+                "border-b-2 pb-2 text-[13px] transition-colors",
                 tab === key
-                  ? "bg-accent font-medium text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
+                  ? "border-foreground font-medium text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
               )}
             >
               {label}
+              {key === "board" && cards.length > 0 && (
+                <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
+                  {cards.length}
+                </span>
+              )}
             </button>
           ))}
         </nav>

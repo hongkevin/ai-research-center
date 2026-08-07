@@ -268,3 +268,42 @@ class TestIndices:
 
     def test_a_missing_close_is_skipped(self):
         assert index_line([{"name": "코스피", "close": None}]) == ""
+
+
+class TestExcessIsFilledEverywhere:
+    """**섹터 줄에도 초과가 붙는다.**
+
+    실측으로 밟았다 — 섹터를 만들기 *전에* 초과를 채우고 곧바로 덮어써서
+    종목 줄에만 괄호가 붙고 섹터 줄은 비어 있었다.
+    """
+
+    def _built(self):
+        p = _profile(
+            Covered(symbol="064350", sector="방산", kind=COVER),
+            Covered(symbol="042660", sector="조선", kind=WATCH),
+        )
+        market = Moves(
+            symbol="KOSPI",
+            company="코스피",
+            items=[Move(key="1d", label="1일", change_pct=-5.0)],
+        )
+        return build_brief(
+            p,
+            {"064350": _moves("064350", -2.0), "042660": _moves("042660", -1.0)},
+            market=market,
+        )
+
+    def test_stock_lines_have_excess(self):
+        b = self._built()
+        assert b.cover[0].excess["1d"] == 3.0
+
+    def test_watch_lines_have_excess(self):
+        assert self._built().watch[0].excess["1d"] == 4.0
+
+    def test_sector_lines_have_excess(self):
+        b = self._built()
+        assert b.sectors[0].excess["1d"] == 3.0
+
+    def test_the_market_label_follows_the_series(self):
+        """코스피를 쓰면 「코스피 대비」라고 말해야 한다."""
+        assert self._built().market_label == "코스피"

@@ -113,7 +113,8 @@ export function MorningBrief({
         )}
 
         <p className="mt-2 text-[11.5px] text-muted-foreground">
-          공시는 최근 3일 · <strong>기사는 검증된 것이 아닙니다</strong>
+          공시는 최근 3일 · <strong>기사는 검증된 것이 아닙니다</strong> ·
+          괄호는 <strong>{data.market_label} 대비</strong>(%p)
           {data.market.length > 0 && (
             <>
               {" · "}
@@ -172,7 +173,7 @@ function Sectors({ sectors }: { sectors: SectorLine[] }) {
             </span>
             <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
               {s.moves.map((m) => (
-                <Pct key={m.key} move={m} />
+                <Pct key={m.key} move={m} excess={s.excess} />
               ))}
             </span>
           </div>
@@ -182,13 +183,23 @@ function Sectors({ sectors }: { sectors: SectorLine[] }) {
   );
 }
 
-function Pct({ move: m }: { move: Move }) {
+function Pct({
+  move: m,
+  excess,
+}: {
+  move: Move;
+  excess?: Record<string, number>;
+}) {
+  // **시장 대비가 진짜 답이다.** 5% 빠진 것이 시장이 5% 빠져서인지 이
+  // 종목만인지는 완전히 다른 얘기다.
+  const over = excess?.[m.key];
   return (
     <span
       title={
         m.change_pct == null
           ? "비교할 자료가 없습니다"
-          : `${m.from_date} → ${m.to_date}`
+          : `${m.from_date} → ${m.to_date}` +
+            (over != null ? ` · 시장 대비 ${over >= 0 ? "+" : ""}${over.toFixed(1)}%p` : "")
       }
     >
       <span className="text-[10.5px] text-muted-foreground">{m.label} </span>
@@ -205,6 +216,12 @@ function Pct({ move: m }: { move: Move }) {
       >
         {fmtPct(m.change_pct)}
       </span>
+      {over != null && (
+        <span className="ml-0.5 text-[10px] text-muted-foreground">
+          ({over >= 0 ? "+" : ""}
+          {over.toFixed(1)})
+        </span>
+      )}
     </span>
   );
 }
@@ -253,7 +270,7 @@ function Line({ line: l, muted }: { line: BriefLine; muted: boolean }) {
         </span>
         <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
           {l.moves.map((m) => (
-            <Pct key={m.key} move={m} />
+            <Pct key={m.key} move={m} excess={l.excess} />
           ))}
         </span>
       </div>
