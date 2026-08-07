@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 
 import { AskPanel } from "@/components/ask/ask-panel";
 import { Board, BoardHint } from "@/components/board/board";
+import { PeerCompose } from "@/components/peer/peer-compose";
+import { PeerTable } from "@/components/peer/peer-table";
 import {
   Dialog,
   DialogContent,
@@ -91,6 +93,8 @@ export default function Workbench() {
   const [open, setOpen] = useState<CardDetail | null>(null);
   // 보드와 채팅. **카드를 여는 것은 탭이 아니라 보드 안의 행동이다.**
   const [tab, setTab] = useState<"board" | "ask">("board");
+  // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
+  const [composingPeer, setComposingPeer] = useState(false);
   const [sections, setSections] = useState<DocSection[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const { phase, steps, error, elapsed, run } = useGeneration();
@@ -420,15 +424,62 @@ export default function Workbench() {
         </DialogContent>
       </Dialog>
 
+      {/* **피어 그룹은 종목 리포트와 다른 물건이다.** 폼을 같이 쓰면 「종목
+          하나」 전제가 섞인다 — 여기는 씨앗을 넣고 후보를 고르는 흐름이다. */}
+      <Dialog open={composingPeer} onOpenChange={setComposingPeer}>
+        <DialogContent className="max-h-[86dvh] w-full max-w-[640px] overflow-y-auto sm:max-w-[640px]">
+          <DialogHeader>
+            <DialogTitle>피어 그룹 만들기</DialogTitle>
+          </DialogHeader>
+          <PeerCompose
+            onCreated={(id) => {
+              setComposingPeer(false);
+              void openCard(id);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
       <div
         className={cn(
           "grid items-start",
-          open && "xl:grid-cols-[minmax(0,1fr)_360px]",
+          open && open.kind !== "peer" && "xl:grid-cols-[minmax(0,1fr)_360px]",
         )}
       >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
           {tab === "ask" ? (
             <AskPanel cardCount={cards.length} />
+          ) : open && open.kind === "peer" ? (
+            /* **피어 카드는 본문이 없다.** 표가 본문이다 — 단계 레일도
+               근거 패널도 붙지 않는다(그건 종목 카드의 것이다). */
+            <>
+              <div className="mb-3 flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setOpen(null)}
+                  className="-ml-2 h-7 text-[12px] text-muted-foreground"
+                >
+                  ← 보드로
+                </Button>
+                <span className="text-[12px] text-muted-foreground">
+                  {open.members?.length ?? 0}종목
+                </span>
+              </div>
+              <PeerTable
+                table={
+                  open.peer_table ?? {
+                    columns: [],
+                    rows: [],
+                    mixed_basis: false,
+                    note: "",
+                  }
+                }
+                members={open.members ?? []}
+                attention={open.attention ?? []}
+                onOpenCard={(id) => void openCard(id)}
+              />
+            </>
           ) : open ? (
             <>
               <div className="mb-3 flex items-center gap-2">
@@ -557,9 +608,19 @@ export default function Workbench() {
                     : "아직 작성한 리포트가 없습니다."}
                 </span>
                 {cards.length > 0 && (
-                  <Button size="sm" onClick={() => openCompose()}>
-                    <PenLineIcon className="size-3.5" />새 리포트
-                  </Button>
+                  <span className="flex items-center gap-2">
+                    {/* 커버 밖 종목을 보는 자리 — 인터뷰가 먼저 꺼낸 고통이다 */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setComposingPeer(true)}
+                    >
+                      피어 그룹
+                    </Button>
+                    <Button size="sm" onClick={() => openCompose()}>
+                      <PenLineIcon className="size-3.5" />새 리포트
+                    </Button>
+                  </span>
                 )}
               </div>
               {cards.length > 0 ? (

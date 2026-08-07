@@ -94,6 +94,7 @@ function CardTile({
   // 아니라 스피너다.
   const running = card.running;
   const blocked = card.attention.length > 0;
+  const peer = card.kind === "peer";
   return (
     <div
       className={cn(
@@ -110,25 +111,41 @@ function CardTile({
       >
         <div className="flex items-baseline justify-between gap-2">
           <span className="truncate text-[13px] font-medium">
+            {/* **피어 카드는 종목 하나에 매이지 않는다.** 이름이 곧 그룹이다. */}
+            {peer && <span className="mr-1 text-num">▤</span>}
             {card.company || card.symbol}
           </span>
           <span className="flex-none font-mono text-[11px] text-muted-foreground">
-            FY{card.year}
+            {peer ? `${card.member_count}종목` : `FY${card.year}`}
           </span>
         </div>
         <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-          {card.symbol}
-          {running ? (
-            <span className="ml-1.5 inline-flex items-center gap-1">
-              ·{" "}
-              <span className="inline-block size-2 animate-spin rounded-full border border-current border-t-transparent" />
-              만드는 중
+          {peer ? (
+            <span>
+              {(card.member_symbols ?? []).slice(0, 4).join(" · ")}
+              {(card.member_symbols?.length ?? 0) > 4 && " …"}
+              {/* 표에 실제로 설 수 있는 종목 수. 나머지는 아직 카드가 없다. */}
+              <span className="ml-1.5">
+                · 표 <span className="text-num">{card.member_ready ?? 0}</span>/
+                {card.member_count}
+              </span>
             </span>
           ) : (
-            <span className="ml-1.5">
-              · 수치 <span className="text-num">{card.registry_size}</span>건 ·
-              단계 {card.stage_count}
-            </span>
+            <>
+              {card.symbol}
+              {running ? (
+                <span className="ml-1.5 inline-flex items-center gap-1">
+                  ·{" "}
+                  <span className="inline-block size-2 animate-spin rounded-full border border-current border-t-transparent" />
+                  만드는 중
+                </span>
+              ) : (
+                <span className="ml-1.5">
+                  · 수치 <span className="text-num">{card.registry_size}</span>건
+                  · 단계 {card.stage_count}
+                </span>
+              )}
+            </>
           )}
         </div>
 

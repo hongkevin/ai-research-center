@@ -88,12 +88,7 @@ export function PeerCompose({ onCreated }: { onCreated: (id: string) => void }) 
       </div>
 
       <div className="flex gap-2">
-        <CompanySearch
-          value={seedInput}
-          onChange={setSeedInput}
-          onPick={(v) => setSeedInput(v)}
-          placeholder="종목명 또는 코드"
-        />
+        <CompanySearch value={seedInput} onChange={setSeedInput} />
         <Button variant="outline" onClick={addSeed} disabled={!seedInput.trim()}>
           씨앗 추가
         </Button>
