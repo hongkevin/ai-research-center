@@ -31,8 +31,8 @@ class TestMoves:
         """달력으로 세면 공휴일에 따라 종목마다 다른 날을 비교하게 된다."""
         closes = [100.0] * 20 + [120.0]
         m = moves_for(_series(closes))
-        # 1주 = 5거래일 전(=100) 대비
-        assert round(m.get("1w").change_pct, 6) == 20.0
+        # 5일 = 5거래일 전(=100) 대비
+        assert round(m.get("5d").change_pct, 6) == 20.0
 
     def test_a_short_history_is_marked_partial(self):
         """신규 상장이면 「1년」이 실제로는 3개월이다. **말해야 한다.**"""

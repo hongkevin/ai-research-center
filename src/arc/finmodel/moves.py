@@ -24,10 +24,8 @@ from dataclasses import dataclass
 # 이름 → 거래일 수. 1년은 252가 관례지만 우리 창이 268이라 250으로 둔다.
 HORIZONS: tuple[tuple[str, str, int], ...] = (
     ("1d", "1일", 1),
-    ("2d", "2일", 2),
-    ("1w", "1주", 5),
+    ("5d", "5일", 5),
     ("1m", "1개월", 21),
-    ("3m", "3개월", 63),
     ("6m", "6개월", 126),
     ("1y", "1년", 250),
 )
@@ -135,3 +133,40 @@ def fmt(pct: float | None) -> str:
     if pct is None:
         return "—"
     return f"{pct:+.1f}%"
+
+
+# 시장 계열의 이름. 지수를 못 받는 동안 **전 종목 중앙값**을 쓴다 —
+# 금융위 지수시세 API는 별도 활용신청이 필요하고(403), 그때까지 동일가중
+# 중앙값이 그 자리를 대신한다. 시가총액에 눌리지 않아 오히려 「오늘 시장이
+# 어땠나」에는 가깝다.
+MARKET_LABEL = "전 종목 중앙값"
+
+
+def market_series(prices: dict[str, dict[str, float]], *, min_names: int = 30) -> dict[str, float]:
+    """전 종목의 **일별 중앙값 지수**. 100에서 시작하는 가상의 지수다.
+
+    수익률의 중앙값을 누적해 지수를 만든다 — 값 자체에는 뜻이 없고 **등락률만**
+    쓴다. 그래서 `moves_for()`에 그대로 넣을 수 있다.
+    """
+    days = sorted({d for s in prices.values() for d in s})
+    if len(days) < 2 or len(prices) < min_names:
+        return {}
+
+    level = 100.0
+    out: dict[str, float] = {}
+    prev = days[0]
+    out[prev] = level
+    for day in days[1:]:
+        rets = []
+        for series in prices.values():
+            a, b = series.get(prev), series.get(day)
+            if a and b and a > 0 and b > 0:
+                rets.append(b / a - 1.0)
+        if len(rets) >= min_names:
+            rets.sort()
+            mid = len(rets) // 2
+            step = rets[mid] if len(rets) % 2 else (rets[mid - 1] + rets[mid]) / 2
+            level *= 1.0 + step
+        out[day] = level
+        prev = day
+    return out

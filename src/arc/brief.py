@@ -13,6 +13,15 @@
 잃는다: 비용이 들고, 틀릴 여지가 생기고, **RA가 원문을 안 보게 된다.**
 아침에 필요한 것은 판단이 아니라 **놓친 것이 없다는 확인**이다.
 
+시장 → 섹터 → 종목
+-------------------
+아침 회의가 그 순서로 간다 — **오늘 한국 증시가 어땠고, 내 섹터가 어땠고,
+그래서 내 종목이 어땠나.** 종목만 나열하면 「이 종목이 5% 빠졌다」가 시장이
+5% 빠져서인지 이 종목만 빠진 것인지 알 수 없고, 그 둘은 완전히 다른 얘기다.
+
+**그래서 섹터·종목 줄에 「시장 대비」를 함께 낸다.** 초과수익이야말로 아침에
+알고 싶은 것이다.
+
 커버와 관심을 다르게 다룬다
 ---------------------------
 `Profile`의 [커버/관심 축](store/profile.py)이 여기서 값을 한다:
@@ -32,18 +41,56 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 
-from arc.finmodel.moves import Move, Moves
+from arc.finmodel.moves import MARKET_LABEL, Move, Moves
 from arc.store.profile import COVER, Profile
 
 # 브리프에 세울 등락 구간. **전체 구간을 다 싣지 않는다** — 아침에 보는 것은
 # 어제와 최근이지 1년이 아니다. 1년은 카드에서 본다.
-BRIEF_KEYS = ("1d", "1w", "1m")
+BRIEF_KEYS = ("1d", "5d", "1m")
 
 # 「크게 움직였다」의 기준(%). 넘으면 위로 올리고 표시한다. 코스피 일간
 # 표준편차가 1% 안팎이라 3%면 눈에 띄는 움직임이다.
 NOTABLE = 3.0
+
+
+# 시세 기준일이 오늘인가 어제인가. **「1일 -2.4%」만 있으면 언제 얘기인지
+# 모른다** — EOD 시세라 장 마감 전에는 어제 종가가 최신이다.
+_WEEKDAY = ("월", "화", "수", "목", "금", "토", "일")
+
+
+def when_label(asof: str, today: dt.date | None = None) -> str:
+    """`20260806` → 「어제(8/6 목)」. 오늘이면 「오늘」, 더 오래됐으면 날짜만."""
+    if len(asof) != 8 or not asof.isdigit():
+        return ""
+    day = dt.date(int(asof[:4]), int(asof[4:6]), int(asof[6:8]))
+    today = today or dt.datetime.now(dt.UTC).date()
+    gap = (today - day).days
+    stamp = f"{day.month}/{day.day} {_WEEKDAY[day.weekday()]}"
+    if gap <= 0:
+        return f"오늘({stamp})"
+    if gap == 1:
+        return f"어제({stamp})"
+    return stamp
+
+
+@dataclass
+class SectorLine:
+    """섹터 한 줄. **내 종목들의 중앙값**이지 섹터 지수가 아니다.
+
+    진짜 섹터 지수는 라이선스가 걸리고(D67), 무엇보다 RA가 알고 싶은 것은
+    「내가 보는 그 종목들이 어땠나」다.
+    """
+
+    sector: str
+    count: int = 0
+    moves: list[Move] = field(default_factory=list)
+
+    @property
+    def day_change(self) -> float | None:
+        return next((m.change_pct for m in self.moves if m.key == "1d"), None)
 
 
 @dataclass
@@ -77,6 +124,13 @@ class Brief:
     """오늘 아침의 브리프."""
 
     asof: str = ""  # 시세 기준일 (YYYYMMDD)
+    asof_label: str = ""  # 「어제(8/6 목)」 — 언제 얘기인지가 먼저다
+    # 시장 → 섹터 → 종목. 아침 회의가 그 순서로 간다.
+    market: list[Move] = field(default_factory=list)
+    market_label: str = MARKET_LABEL
+    # 코스피·코스닥 실제 지수. **아침 회의가 여기서 시작한다.**
+    indices: list[dict] = field(default_factory=list)
+    sectors: list[SectorLine] = field(default_factory=list)
     cover: list[Line] = field(default_factory=list)
     watch: list[Line] = field(default_factory=list)
     note: str = ""
@@ -123,7 +177,10 @@ def build_brief(
     *,
     filings: dict[str, list[dict]] | None = None,
     articles: dict[str, list[dict]] | None = None,
+    market: Moves | None = None,
+    indices: list[dict] | None = None,
     asof: str = "",
+    today: dt.date | None = None,
     keys: tuple[str, ...] = BRIEF_KEYS,
 ) -> Brief:
     """프로필 + 시세 + 공시 + 기사 → 브리프. **순수 함수다.**
@@ -155,8 +212,53 @@ def build_brief(
 
     brief.cover = _rank(brief.cover)
     brief.watch = _rank(brief.watch)
+    brief.asof_label = when_label(asof, today) if asof else ""
+    brief.market = _pick(market, keys)
+    brief.indices = list(indices or [])
+    # **섹터는 커버 종목으로만 낸다.** 관심 종목까지 섞으면 「내 섹터가
+    # 어땠나」가 아니라 「내가 보는 것들이 어땠나」가 된다.
+    brief.sectors = _sectors(brief.cover, keys)
     brief.note = _note(brief, profile)
     return brief
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    values = sorted(values)
+    mid = len(values) // 2
+    return values[mid] if len(values) % 2 else (values[mid - 1] + values[mid]) / 2
+
+
+def _sectors(lines: list[Line], keys: tuple[str, ...]) -> list[SectorLine]:
+    """섹터별 중앙값. **평균이 아니라 중앙값이다** — 한 종목이 30% 뛰면
+    평균은 그 종목 얘기가 되고 섹터 얘기가 아니게 된다."""
+    buckets: dict[str, list[Line]] = {}
+    for line in lines:
+        buckets.setdefault(line.sector or "미분류", []).append(line)
+
+    out: list[SectorLine] = []
+    for sector, group in buckets.items():
+        moves: list[Move] = []
+        for key in keys:
+            picked = [m for line in group for m in line.moves if m.key == key]
+            if not picked:
+                continue
+            value = _median([m.change_pct for m in picked if m.change_pct is not None])
+            sample = picked[0]
+            moves.append(
+                Move(
+                    key=key,
+                    label=sample.label,
+                    change_pct=value,
+                    from_date=sample.from_date,
+                    to_date=sample.to_date,
+                    days=sample.days,
+                )
+            )
+        out.append(SectorLine(sector=sector, count=len(group), moves=moves))
+    # 크게 움직인 섹터가 위로. 같은 이유로 이름순이 아니다.
+    return sorted(out, key=lambda x: -abs(x.day_change) if x.day_change is not None else 0.0)
 
 
 def _note(brief: Brief, profile: Profile) -> str:
@@ -174,3 +276,28 @@ def _note(brief: Brief, profile: Profile) -> str:
     if not parts:
         return "커버 종목에 큰 움직임도 새 공시도 없습니다."
     return " · ".join(parts)
+
+
+def index_line(indices: list[dict]) -> str:
+    """「코스피 6,296 -4.58% · 코스닥 802 +0.26%」 한 줄."""
+    out = []
+    for i in indices:
+        close = i.get("close")
+        pct = i.get("change_pct")
+        if close is None:
+            continue
+        out.append(
+            f"{i.get('name', '')} {close:,.0f} {pct:+.2f}%"
+            if pct is not None
+            else f"{i.get('name', '')} {close:,.0f}"
+        )
+    return " · ".join(out)
+
+
+def relative(line_move: Move | None, market: list[Move]) -> float | None:
+    """시장 대비 초과. **아침에 알고 싶은 것은 이쪽이다** — 5% 빠진 것이
+    시장이 5% 빠져서인지 이 종목만인지는 완전히 다른 얘기다."""
+    if line_move is None or line_move.change_pct is None:
+        return None
+    base = next((m.change_pct for m in market if m.key == line_move.key), None)
+    return None if base is None else line_move.change_pct - base

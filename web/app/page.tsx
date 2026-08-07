@@ -55,7 +55,9 @@ import {
   type CardDetail,
   type Converted,
   type CardSummary,
+  type Moves,
   type ViewModel,
+  fmtPct,
 } from "@/lib/api";
 
 /**
@@ -512,6 +514,7 @@ export default function Workbench() {
                 }
                 members={open.members ?? []}
                 attention={open.attention ?? []}
+                moves={open.moves}
                 onOpenCard={(id) => void openCard(id)}
               />
             </>
@@ -619,6 +622,10 @@ export default function Workbench() {
                   </AlertDescription>
                 </Alert>
               )}
+              {/* **주가 띠.** 리포트는 분기에 한 번 찍은 사진이라, 그 옆에
+                  「지금 어떻게 움직이고 있나」가 없으면 클라이언트 질문에
+                  못 들어간다. */}
+              {open.moves?.[0] && <PriceStrip moves={open.moves[0]} />}
               {ready && (
                 <CenterColumn
                   vm={open.vm}
@@ -727,6 +734,50 @@ export default function Workbench() {
         />
       )}
     </>
+  );
+}
+
+/** 카드 위 주가 띠 — 1일·5일·1개월·6개월·1년. */
+function PriceStrip({ moves }: { moves: Moves }) {
+  if (!moves.items.some((m) => m.change_pct != null)) return null;
+  return (
+    <div className="mb-4 flex max-w-[860px] flex-wrap items-baseline gap-x-5 gap-y-1 rounded-lg border px-3.5 py-2">
+      <span className="text-[11px] text-muted-foreground">주가</span>
+      {moves.last_close != null && (
+        <span className="font-mono text-[13px]">
+          {moves.last_close.toLocaleString()}
+          <span className="ml-1 text-[10.5px] text-muted-foreground">
+            {moves.last_date.slice(4, 6)}/{moves.last_date.slice(6, 8)}
+          </span>
+        </span>
+      )}
+      {moves.items.map((m) => (
+        <span
+          key={m.key}
+          className="font-mono text-[12px] tabular-nums"
+          title={
+            m.change_pct == null
+              ? "비교할 자료가 없습니다"
+              : `${m.from_date} → ${m.to_date} (${m.days}거래일)`
+          }
+        >
+          <span className="text-[10.5px] text-muted-foreground">{m.label} </span>
+          <span
+            className={cn(
+              m.change_pct == null
+                ? "text-muted-foreground"
+                : m.change_pct > 0
+                  ? "text-bad"
+                  : m.change_pct < 0
+                    ? "text-num"
+                    : "text-muted-foreground",
+            )}
+          >
+            {fmtPct(m.change_pct)}
+          </span>
+        </span>
+      ))}
+    </div>
   );
 }
 
