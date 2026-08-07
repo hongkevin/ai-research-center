@@ -1485,7 +1485,7 @@ def api_create_peer(payload: dict):
         # 대개 4~8종목이다.
         return JSONResponse({"error": "한 표에 12종목까지 세울 수 있습니다."}, status_code=400)
 
-    members: list[dict] = []
+    codes: list[str] = []
     seen: set[str] = set()
     for item in raw:
         try:
@@ -1495,7 +1495,13 @@ def api_create_peer(payload: dict):
         if symbol in seen:
             continue
         seen.add(symbol)
-        members.append(peer_member(symbol, company=_company_name(symbol)))
+        codes.append(symbol)
+
+    # **상장 종목명을 쓴다.** 법인명은 DART가 영문을 한글로 음차해 둬서
+    # 「엘아이지디펜스앤에어로스페이스(주)」가 되고, 표의 열 머리로 못 쓴다.
+    # 그리고 corpCode 한 번으로 전부 풀어 종목당 API 호출을 없앤다(D69).
+    names = _names_for(codes)
+    members = [peer_member(c, company=names.get(c, "")) for c in codes]
 
     cards = _open_cards()
     if cards is None:
@@ -1537,7 +1543,7 @@ def api_set_peer_members(card_id: str, payload: dict):
     if len(raw) > 12:
         return JSONResponse({"error": "한 표에 12종목까지 세울 수 있습니다."}, status_code=400)
 
-    members: list[dict] = []
+    codes: list[str] = []
     seen: set[str] = set()
     for item in raw:
         try:
@@ -1547,7 +1553,13 @@ def api_set_peer_members(card_id: str, payload: dict):
         if symbol in seen:
             continue
         seen.add(symbol)
-        members.append(peer_member(symbol, company=_company_name(symbol)))
+        codes.append(symbol)
+
+    # **상장 종목명을 쓴다.** 법인명은 DART가 영문을 한글로 음차해 둬서
+    # 「엘아이지디펜스앤에어로스페이스(주)」가 되고, 표의 열 머리로 못 쓴다.
+    # 그리고 corpCode 한 번으로 전부 풀어 종목당 API 호출을 없앤다(D69).
+    names = _names_for(codes)
+    members = [peer_member(c, company=names.get(c, "")) for c in codes]
 
     card.members = members
     cards.save(card)

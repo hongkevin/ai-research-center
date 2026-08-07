@@ -241,6 +241,9 @@ export interface CardDetail extends Omit<
 > {
   vm: ViewModel;
   versions: Revision[];
+  /** 피어 카드만. 구성원은 **읽을 때마다 저장소에서 다시 찾은 것**이다. */
+  members?: PeerMember[];
+  peer_table?: PeerTable;
 }
 
 export async function listCards(): Promise<CardSummary[]> {

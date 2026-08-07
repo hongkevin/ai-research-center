@@ -413,7 +413,10 @@ def resolve_peer_members(store: CardStore, members: list[dict]) -> list[dict]:
             continue
         resolved = peer_member(
             symbol,
-            company=card.company or want,
+            # **표의 열 머리는 짧아야 한다.** 구성원에 적힌 상장 종목명이
+            # 먼저다 — 카드의 `company`는 법인명이라 「한국항공우주산업(주)」가
+            # 되고, 네 열이 나란히 서면 표가 읽히지 않는다.
+            company=want or card.company,
             card_id=card.id,
             year=card.year,
             period=card.period,
