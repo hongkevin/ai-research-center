@@ -51,6 +51,7 @@ from arc.chat import answer_question
 from arc.chat.retrieval import Context
 from arc.data.kr.dart import DartProvider
 from arc.finmodel.peer import build_peer_table
+from arc.finmodel.peer_suggest import load_prices, suggest_group
 from arc.ingest.convert import ConvertError, convert
 from arc.ingest.model_fill import fill_model
 from arc.ingest.prior import (
@@ -1366,6 +1367,101 @@ def api_ask(payload: dict):
             {"error": f"답변을 만들지 못했습니다 — {type(exc).__name__}"}, status_code=500
         )
     return dataclasses.asdict(answer)
+
+
+def _price_source() -> tuple[dict, str]:
+    """피어 후보가 딛고 설 시세. **받아 둔 것을 먼저 본다.**
+
+    개발 기기에는 `corpus/consensus/prices/`가 있지만 배포에는 없고(gitignore)
+    네이버에서 받은 것이라 재배포도 안 된다(D67). 그래서 금융위 API로 받아
+    `.arc-store/prices`에 쌓은 것을 정본으로 쓰고, 없을 때만 코퍼스로 떨어진다.
+    """
+    from arc.finmodel.price_store import available, store_dir
+
+    if available(STORE_DIR):
+        return load_prices(store_dir(STORE_DIR)), "store"
+    corpus = REPO_ROOT / "corpus" / "consensus" / "prices"
+    if corpus.is_dir():
+        return load_prices(corpus), "corpus"
+    return {}, "none"
+
+
+def _names_for(symbols: list[str]) -> dict[str, str]:
+    """종목코드 → 회사명. **corpCode 한 번으로 전부 푼다.**
+
+    `_company_name()`을 후보마다 부르면 종목당 API 호출이 하나씩 나간다 —
+    15종목이면 15콜이고, 그게 D69의 차단을 부른 종류의 일이다.
+    """
+    try:
+        table = _shared_provider().load_corp_codes()
+    except Exception as exc:  # noqa: BLE001 — 이름은 표시용이라 없어도 된다
+        log.warning("회사명을 못 읽었습니다: %s", exc)
+        return {}
+    out: dict[str, str] = {}
+    for s in symbols:
+        row = table.get(s) or {}
+        out[s] = str(row.get("stock_name") or row.get("corp_name") or "")
+    return out
+
+
+@app.post("/api/peers/suggest")
+def api_suggest_peers(payload: dict):
+    """씨앗 종목과 **같이 움직이는** 종목을 낸다.
+
+    업종 분류로는 안 된다 — 방산 4종목이 KSIC 어느 자릿수에서도 한 그룹이
+    되지 않는다([D68](../../docs/decisions.md#d68)). 대신 인터뷰의 말을 그대로
+    쓴다: *"우리 커버리지랑 같이 움직이는 종목 골라줘"*.
+
+    **확정하지 않는다.** 여기서 나오는 것은 후보이고, 사람이 고른 것만 카드에
+    박힌다. 상관은 산업이 아니라 지금 같이 움직이는 테마를 찾으므로(현대건설
+    씨앗 → 원전 테마) 상관계수를 함께 내서 사람이 판단하게 한다.
+    """
+    raw = payload.get("seeds") or []
+    if not isinstance(raw, list) or not raw:
+        return JSONResponse({"error": "씨앗 종목을 하나 이상 지정하십시오."}, status_code=400)
+    seeds: list[str] = []
+    for item in raw[:4]:
+        try:
+            seeds.append(_resolve_symbol(str(item).strip()))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    prices, source = _price_source()
+    if not prices:
+        return JSONResponse(
+            {
+                "error": "시세를 아직 받지 않았습니다.",
+                "hint": "`arc prices backfill`로 일별 시세를 받은 뒤 다시 시도하십시오.",
+            },
+            status_code=503,
+        )
+
+    missing = [s for s in seeds if s not in prices]
+    if missing:
+        return JSONResponse(
+            {"error": f"시세가 없는 종목입니다 — {', '.join(missing)}"}, status_code=400
+        )
+
+    top = payload.get("top")
+    group = suggest_group(seeds, prices, top=int(top) if isinstance(top, int) else 15)
+    names = _names_for([c.symbol for c in group.candidates] + seeds)
+    return {
+        "seeds": [{"symbol": s, "company": names.get(s, "")} for s in seeds],
+        "candidates": [
+            {
+                "symbol": c.symbol,
+                "company": names.get(c.symbol, ""),
+                "correlation": round(c.correlation, 3),
+                "overlap": c.overlap,
+            }
+            for c in group.candidates
+        ],
+        "meaningful": group.meaningful,
+        "cohesion": round(group.cohesion, 3),
+        "note": group.note,
+        "universe": len(prices),
+        "source": source,
+    }
 
 
 @app.post("/api/peers")

@@ -9,7 +9,13 @@ from __future__ import annotations
 import json
 import math
 
-from arc.finmodel.peer_suggest import MIN_OVERLAP, Candidate, load_prices, suggest
+from arc.finmodel.peer_suggest import (
+    MIN_OVERLAP,
+    Candidate,
+    is_common_share,
+    load_prices,
+    suggest,
+)
 
 
 def _series(returns: list[float], start: float = 1000.0) -> dict[str, float]:
@@ -36,45 +42,45 @@ class TestSuggest:
     def test_a_mover_together_ranks_above_an_unrelated_one(self):
         base = _wave(N)
         prices = {
-            "SEED": _series(base),
-            "TWIN": _series([r * 0.9 for r in base]),  # 거의 같이 움직인다
-            "OTHER": _series(_wave(N, phase=1.7)),  # 위상이 다르다
+            "047810": _series(base),
+            "079550": _series([r * 0.9 for r in base]),  # 거의 같이 움직인다
+            "064350": _series(_wave(N, phase=1.7)),  # 위상이 다르다
         }
-        got = suggest(["SEED"], prices, top=5)
-        assert got[0].symbol == "TWIN"
+        got = suggest(["047810"], prices, top=5)
+        assert got[0].symbol == "079550"
         assert got[0].correlation > 0.9
 
     def test_the_seed_is_not_its_own_peer(self):
-        prices = {"SEED": _series(_wave(N)), "TWIN": _series(_wave(N))}
-        assert "SEED" not in [c.symbol for c in suggest(["SEED"], prices)]
+        prices = {"047810": _series(_wave(N)), "079550": _series(_wave(N))}
+        assert "047810" not in [c.symbol for c in suggest(["047810"], prices)]
 
     def test_excluded_symbols_are_dropped(self):
-        """ETF·우선주처럼 회사가 아닌 것을 부르는 쪽에서 뺀다."""
-        prices = {"SEED": _series(_wave(N)), "ETF": _series(_wave(N))}
-        assert suggest(["SEED"], prices, exclude={"ETF"}) == []
+        """ETF처럼 회사가 아닌 것을 부르는 쪽에서 뺀다 (069500 = KODEX 200)."""
+        prices = {"047810": _series(_wave(N)), "069500": _series(_wave(N))}
+        assert suggest(["047810"], prices, exclude={"069500"}) == []
 
     def test_too_little_overlap_is_dropped_not_zeroed(self):
         """0.0으로 목록 끝에 세우면 「상관 없음」과 「모름」이 섞인다."""
         short = _series(_wave(MIN_OVERLAP - 20))
-        prices = {"SEED": _series(_wave(N)), "NEW": short}
-        assert [c.symbol for c in suggest(["SEED"], prices)] == []
+        prices = {"047810": _series(_wave(N)), "448710": short}
+        assert [c.symbol for c in suggest(["047810"], prices)] == []
 
     def test_a_halted_stock_does_not_divide_by_zero(self):
         """거래정지로 종가가 붙박이면 분산이 0이다."""
-        prices = {"SEED": _series(_wave(N)), "HALT": _series([0.0] * N)}
-        assert suggest(["SEED"], prices) == []  # 상관 0 — 분산이 없어 못 낸다
+        prices = {"047810": _series(_wave(N)), "064350": _series([0.0] * N)}
+        assert suggest(["047810"], prices) == []  # 상관 0 — 분산이 없어 못 낸다
 
     def test_two_seeds_average_their_correlations(self):
         base = _wave(N)
         prices = {
-            "S1": _series(base),
-            "S2": _series([r * 0.95 for r in base]),
-            "TWIN": _series([r * 0.9 for r in base]),
-            "OTHER": _series(_wave(N, phase=1.7)),
+            "047810": _series(base),
+            "012450": _series([r * 0.95 for r in base]),
+            "079550": _series([r * 0.9 for r in base]),
+            "064350": _series(_wave(N, phase=1.7)),
         }
-        got = suggest(["S1", "S2"], prices, top=5)
+        got = suggest(["047810", "012450"], prices, top=5)
         # 씨앗 둘은 후보에서 빠지고, 같이 움직이는 쪽이 위에 선다
-        assert [c.symbol for c in got] == ["TWIN", "OTHER"]
+        assert [c.symbol for c in got] == ["079550", "064350"]
         assert got[0].correlation > got[1].correlation
         assert 0 < got[0].correlation <= 1
 
@@ -82,19 +88,19 @@ class TestSuggest:
         """씨앗 전부와 견줄 수 있어야 평균이 뜻을 가진다."""
         base = _wave(N)
         prices = {
-            "S1": _series(base),
-            "S2": _series(base),
-            "PARTIAL": _series(_wave(MIN_OVERLAP - 20)),
+            "047810": _series(base),
+            "012450": _series(base),
+            "103140": _series(_wave(MIN_OVERLAP - 20)),
         }
-        assert suggest(["S1", "S2"], prices) == []
+        assert suggest(["047810", "012450"], prices) == []
 
     def test_unknown_seed_yields_nothing(self):
-        assert suggest(["NOPE"], {"A": _series(_wave(N))}) == []
+        assert suggest(["999990"], {"005930": _series(_wave(N))}) == []
 
     def test_overlap_is_reported(self):
         """**몇 일치로 본 것인가**를 후보마다 들고 있어야 한다."""
-        prices = {"SEED": _series(_wave(N)), "TWIN": _series(_wave(N))}
-        got = suggest(["SEED"], prices, top=1)
+        prices = {"047810": _series(_wave(N)), "079550": _series(_wave(N))}
+        got = suggest(["047810"], prices, top=1)
         assert got[0].overlap >= MIN_OVERLAP
 
     def test_no_sector_label_is_invented(self):
@@ -103,10 +109,37 @@ class TestSuggest:
         현대건설 씨앗이 원전 테마를 물어 오는 것이 실측된 동작이다. 여기에
         섹터 이름을 붙이면 「같은 산업」이라는 거짓 약속이 된다.
         """
-        prices = {"SEED": _series(_wave(N)), "TWIN": _series(_wave(N))}
-        c = suggest(["SEED"], prices, top=1)[0]
+        prices = {"047810": _series(_wave(N)), "079550": _series(_wave(N))}
+        c = suggest(["047810"], prices, top=1)[0]
         assert set(vars(c)) == {"symbol", "correlation", "overlap", "company"}
         assert c.company == ""  # 이름은 부르는 쪽이 채운다. 섹터는 아무도 안 채운다
+
+
+class TestCommonShares:
+    """**우선주는 같은 회사다.** 상관이 높은 게 당연하고 피어로는 정보가 없다."""
+
+    def test_share_class_is_the_last_digit(self):
+        assert is_common_share("005930") is True  # 삼성전자
+        assert is_common_share("005935") is False  # 삼성전자우
+        assert is_common_share("02826K") is False  # 신형우선주
+        assert is_common_share("000725") is False  # 현대건설우
+        assert is_common_share("00593") is False  # 자릿수가 안 맞는 것
+
+    def test_a_preferred_share_never_becomes_a_peer(self):
+        """실측: 삼성전자 씨앗에 삼성전자우가 **0.86으로 1위**였다."""
+        base = _wave(N)
+        prices = {
+            "005930": _series(base),
+            "005935": _series([r * 0.99 for r in base]),  # 거의 같이 움직인다
+            "000660": _series([r * 0.8 for r in base]),
+        }
+        got = suggest(["005930"], prices, top=5, market="__none__")
+        assert [c.symbol for c in got] == ["000660"]
+
+    def test_it_can_be_turned_off(self):
+        prices = {"005930": _series(_wave(N)), "005935": _series(_wave(N))}
+        got = suggest(["005930"], prices, top=5, market="__none__", common_only=False)
+        assert [c.symbol for c in got] == ["005935"]
 
 
 class TestLoad:

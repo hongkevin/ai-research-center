@@ -191,9 +191,17 @@ export const COLUMN_HINT: Record<Column, string> = {
   handoff: "확정해서 내보낸 것",
 };
 
+/**
+ * 카드의 종류. **새 칸이 아니라 새 종류다** — 피어 뷰도 초안이고, 검토하고,
+ * 넘긴다. 종목 카드와 똑같은 수명을 산다 (D68).
+ */
+export type CardKind = "single" | "peer";
+
 /** 목록용 — 본문(60KB)이 빠져 있다. */
 export interface CardSummary {
   id: string;
+  kind: CardKind;
+  /** 피어 카드는 비어 있다 — 종목 하나에 매이지 않는다 */
   symbol: string;
   year: number;
   created_at: string;
@@ -210,6 +218,11 @@ export interface CardSummary {
   version: string;
   revision_count: number;
   published_path: string;
+  /** 피어 카드만 — 묶은 종목 수 */
+  member_count: number;
+  member_symbols: string[];
+  /** 피어 카드만 — 실제로 카드가 있어 표에 설 수 있는 종목 수 */
+  member_ready?: number;
 }
 
 /** 수정 1건의 기록. **버전 이력은 감사 흔적이 아니라 콘텐츠다** (D25). */
@@ -701,6 +714,119 @@ export async function ask(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, context }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/* ── 피어 카드 ──────────────────────────────────────────────────────
+ *
+ * 인터뷰가 먼저 꺼낸 고통이 **커버 밖 종목**이었다. 업종 분류로는 못 찾는다 —
+ * 방산 4종목이 KSIC 어느 자릿수에서도 한 그룹이 안 된다 (D68).
+ */
+
+/** 피어 카드의 구성원 한 줄. `card_id`가 비면 아직 종목 카드가 없다는 뜻. */
+export interface PeerMember {
+  symbol: string;
+  company: string;
+  card_id: string;
+  year: number;
+  period: string;
+  /** `pending` | `running` | `ready` | `failed` */
+  status: string;
+  error: string;
+  gate_passed?: boolean;
+}
+
+/** 비교표의 칸 하나. **표시 문자열은 레지스트리에서 그대로 온다.** */
+export interface PeerCell {
+  display: string;
+  key: string;
+  card_id: string;
+  value: number | null;
+  absent: boolean;
+}
+
+export interface PeerRow {
+  label: string;
+  group: string;
+  unit: string;
+  cells: PeerCell[];
+}
+
+export interface PeerColumn {
+  symbol: string;
+  company: string;
+  card_id: string;
+  year: number;
+  period: string;
+  /** 「2026년 1분기 누적」 */
+  basis: string;
+  ready: boolean;
+}
+
+export interface PeerTable {
+  columns: PeerColumn[];
+  rows: PeerRow[];
+  /** **기준 기간이 섞이면 표가 조용히 거짓말을 한다** */
+  mixed_basis: boolean;
+  note: string;
+}
+
+/** 씨앗과 같이 움직이는 종목 하나. **상관계수를 늘 함께 낸다.** */
+export interface PeerCandidate {
+  symbol: string;
+  company: string;
+  correlation: number;
+  /** 상관을 낸 거래일 수 */
+  overlap: number;
+}
+
+export interface PeerSuggestion {
+  seeds: { symbol: string; company: string }[];
+  candidates: PeerCandidate[];
+  /** 후보끼리도 같이 움직이는가. 아니면 이 목록을 섹터로 읽으면 안 된다 */
+  meaningful: boolean;
+  cohesion: number;
+  note: string;
+  universe: number;
+  source: string;
+}
+
+export async function suggestPeers(
+  seeds: string[],
+  top = 15,
+): Promise<PeerSuggestion> {
+  const r = await api(`/api/peers/suggest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ seeds, top }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function createPeerCard(
+  name: string,
+  symbols: string[],
+): Promise<{ card_id: string; members: PeerMember[] }> {
+  const r = await api(`/api/peers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, symbols }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function setPeerMembers(
+  cardId: string,
+  symbols: string[],
+): Promise<{ members: PeerMember[]; attention: string[] }> {
+  const r = await api(`/api/cards/${cardId}/members`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbols }),
   });
   if (!r.ok) await fail(r);
   return r.json();
