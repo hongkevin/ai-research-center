@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 import logging
@@ -1247,7 +1248,7 @@ def api_card(card_id: str):
         return JSONResponse({"error": str(exc)}, status_code=400)
     if card is None:
         return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
-    return card.__dict__
+    return dict(card.__dict__, vm=_complete_vm(card.vm))
 
 
 @app.post("/api/cards/{card_id}/confirm")
@@ -1271,6 +1272,22 @@ def api_confirm_card(card_id: str):
     card.column = column_for(card.vm, confirmed=True, published=bool(card.vm.get("published_path")))
     cards.save(card)
     return card.summary()
+
+
+def _complete_vm(vm: dict) -> dict:
+    """저장된 ViewModel에 **지금 ViewModel의 빈 기본값을 채워** 돌려준다.
+
+    카드는 만들어진 시점의 `vm`을 그대로 들고 있다. 그 뒤에 필드를 추가하면
+    **옛 카드에는 그 필드가 없고**, 화면이 `vm.areas.length`를 읽다가 터져
+    브라우저가 「This page couldn't load」를 띄운다 — 두 번 밟았다(D63, D65).
+
+    필드를 추가할 때마다 화면에 `?.`를 하나씩 다는 것은 못 지킨다. **서버가
+    항상 완전한 모양을 준다**고 정하면 그 종류의 버그가 끝난다.
+    """
+    if not vm:
+        return vm
+    full = dataclasses.asdict(ViewModel(symbol="", year=0))
+    return {**full, **vm}
 
 
 def _load_card(card_id: str):

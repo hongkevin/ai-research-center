@@ -2538,6 +2538,40 @@ ValueError: key 중복 등록: 'debt_ratio_2025a'
 
 ---
 
+### D65 — 서버가 **항상 완전한 ViewModel**을 준다
+
+카드를 열면 브라우저가 「This page couldn't load」를 띄웠다. **두 번째다**
+([D63](#d63)에 이어).
+
+원인은 같은 종류다. 카드는 **만들어진 시점의 `vm`을 그대로** 들고 있는데,
+그 뒤에 필드를 추가하면 옛 카드에는 그 필드가 없다. 화면이 `vm.areas.length`를
+읽으면 `undefined.length` → TypeError → React가 트리 전체를 내린다.
+
+```
+vm 필드 유무 (D64 이전에 만든 카드):
+   areas          ★ 없음
+   changes        있음
+   stages         있음
+```
+
+**필드를 추가할 때마다 화면에 `?.`를 하나씩 다는 것은 못 지킨다.** 오늘만
+`vm.changes`·`vm.quarter_chart`·`vm.segment_items`·`vm.areas` 넷을 추가했고,
+그때마다 옛 카드가 깨질 수 있었다. 개별 방어는 언젠가 빠뜨린다.
+
+**그래서 규칙을 서버로 옮겼다**: 카드를 내보낼 때 지금 `ViewModel`의 빈
+기본값을 채워서 준다. 저장된 값이 이기고, 없는 것만 채운다.
+
+```python
+full = dataclasses.asdict(ViewModel(symbol="", year=0))
+return {**full, **vm}
+```
+
+**빈 `vm`은 그대로 둔다.** 생성 중인 카드는 `vm`이 `{}`이고, 화면이 그걸로
+「아직 안 됐다」를 안다([D63](#d63)의 `ready`). 거기에 기본값을 채우면
+빈 노트를 다 만들어진 것처럼 그린다.
+
+---
+
 ---
 
 ## 열린 질문
