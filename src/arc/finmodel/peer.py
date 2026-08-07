@@ -110,10 +110,58 @@ class PeerColumn:
     ready: bool = False
 
 
+# 관점 판정 → 표에 세울 말. **「긍정/부정」이 아니다** — 그건 투자의견처럼
+# 읽힌다(D4는 투자의견을 애초에 안 낸다). 렌즈가 실제로 말하는 것은 그 질문에
+# 대해 **근거가 받쳐 주는가**다.
+VERDICT_LABEL: dict[str, str] = {
+    "supportive": "받쳐 줌",
+    "adverse": "부담",
+    "neutral": "중립",
+}
+
+
+@dataclass
+class PeerLensCell:
+    """관점 칸. **숫자 칸과 다른 자료다** — 레지스트리 키가 없다."""
+
+    verdict: str = ""  # supportive / adverse / neutral
+    label: str = ""  # 화면에 세울 말
+    headline: str = ""  # 평문. 표에서는 길어서 툴팁으로 간다
+    card_id: str = ""
+    absent: bool = True
+
+
+@dataclass
+class PeerLensRow:
+    """관점 한 줄 — 같은 질문을 다섯 종목에 던진 결과.
+
+    **피어 비교는 실적 비교만이 아니다.** 사용자의 말이 그대로 요구였다:
+    *"실적 분석도 있겠으나, 예측도 있겠으나, 주가 차이, 분석에 대한 관점도
+    일부 있다"*. 같은 질문에 다섯 종목이 다른 답을 내놓는 지점이 곧 볼 거리다.
+    """
+
+    label: str
+    question: str = ""
+    cells: list[PeerLensCell] = field(default_factory=list)
+
+    @property
+    def coverage(self) -> int:
+        return sum(0 if c.absent else 1 for c in self.cells)
+
+    @property
+    def split(self) -> bool:
+        """**답이 갈리는가.** 다섯이 다 같으면 표에서 볼 것이 없다."""
+        said = {c.verdict for c in self.cells if not c.absent and c.verdict}
+        return len(said) > 1
+
+
 @dataclass
 class PeerTable:
     columns: list[PeerColumn] = field(default_factory=list)
     rows: list[PeerRow] = field(default_factory=list)
+    # 관점 층 — 숫자 아래. **줄을 섞지 않는다**: 숫자 칸은 레지스트리 키를
+    # 들고 되짚기가 되지만 관점 칸은 그렇지 않다
+    lens_rows: list[PeerLensRow] = field(default_factory=list)
     mixed_basis: bool = False
     note: str = ""
 
@@ -134,6 +182,55 @@ def basis_label(year: int, period: str) -> str:
     if not year:
         return ""
     return f"{year}년 {_PERIOD_BASIS.get(period, period)}"
+
+
+def _lens_rows(columns: list[PeerColumn], members: list[dict]) -> list[PeerLensRow]:
+    """관점 층. 구성원 카드가 이미 들고 있는 판독을 열로 세운다.
+
+    **순서는 첫 카드가 정한다.** 렌즈 목록은 어느 회사나 같지만, 회사마다
+    답한 것과 침묵한 것이 다르다 — 그 차이가 이 층의 내용이다.
+
+    **한 종목도 답하지 않은 관점은 싣지 않는다.** 전부 「—」인 줄이 서 있으면
+    표가 아니라 빈칸 격자가 된다(숫자 줄과 같은 규칙).
+    """
+    order: list[tuple[str, str]] = []
+    by_card: dict[str, dict[str, dict]] = {}
+    for m in members:
+        card_id = str(m.get("card_id") or "")
+        seen: dict[str, dict] = {}
+        for lens in m.get("lenses") or []:
+            label = str(lens.get("label") or "")
+            if not label:
+                continue
+            seen[label] = lens
+            if all(label != x[0] for x in order):
+                order.append((label, str(lens.get("question") or "")))
+        if card_id:
+            by_card[card_id] = seen
+
+    out: list[PeerLensRow] = []
+    for label, question in order:
+        row = PeerLensRow(label=label, question=question)
+        for col in columns:
+            lens = by_card.get(col.card_id, {}).get(label)
+            verdict = str(lens.get("verdict") or "") if lens else ""
+            # **결론이 없으면 없는 것이다.** 침묵한 렌즈를 「중립」으로 적으면
+            # 「모른다」가 「보통이다」로 바뀐다 — 이 제품이 피하려는 것 그 자체다.
+            if not lens or not verdict:
+                row.cells.append(PeerLensCell(card_id=col.card_id))
+                continue
+            row.cells.append(
+                PeerLensCell(
+                    verdict=verdict,
+                    label=VERDICT_LABEL.get(verdict, verdict),
+                    headline=str(lens.get("headline_text") or ""),
+                    card_id=col.card_id,
+                    absent=False,
+                )
+            )
+        if row.coverage:
+            out.append(row)
+    return out
 
 
 def build_peer_table(members: list[dict]) -> PeerTable:
@@ -196,6 +293,7 @@ def build_peer_table(members: list[dict]) -> PeerTable:
     return PeerTable(
         columns=columns,
         rows=rows,
+        lens_rows=_lens_rows(columns, members),
         mixed_basis=mixed,
         note=_note(columns, rows, mixed),
     )

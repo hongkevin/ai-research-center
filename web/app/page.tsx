@@ -563,6 +563,7 @@ export default function Workbench() {
                   open.peer_table ?? {
                     columns: [],
                     rows: [],
+                    lens_rows: [],
                     mixed_basis: false,
                     note: "",
                   }

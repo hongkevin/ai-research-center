@@ -427,6 +427,9 @@ def resolve_peer_members(store: CardStore, members: list[dict]) -> list[dict]:
         # 열지 않아도 되게.
         resolved["registry"] = card.registry
         resolved["gate_passed"] = bool(card.vm.get("gate_passed"))
+        # **피어 비교는 실적 비교만이 아니다.** 같은 질문에 종목마다 다른 답이
+        # 나오는 지점이 볼 거리다 — 관점을 함께 싣는다 (D73).
+        resolved["lenses"] = card.vm.get("lenses") or []
         out.append(resolved)
     return out
 

@@ -356,18 +356,23 @@ def _lens_rows(r: ReportResult) -> tuple[list[dict], list[str]]:
         return substitute_with_spans(text, r.registry) if text else ""
 
     section = _lens_section(r.lenses, lambda k: _ph(k) if k in r.registry else None)
+    # `_lens_section`은 views의 순서를 그대로 지킨다 — 판정을 붙이려면
+    # 원본이 필요하다. 판정은 **피어 표의 관점 층**이 쓴다.
     views = [
         {
             "label": x["label"],
             "question": x["question"],
             "headline": fill(x["headline"]),
+            # 평문 — 표의 툴팁처럼 마크업이 못 들어가는 자리용
+            "headline_text": r.registry.render_text(x["headline"]) if x["headline"] else "",
+            "verdict": src.verdict or "",
             "caveats": [fill(t) for t in x["caveats"]],
             "readings": [fill(t) for t in x["readings"]],
             "watch": x["watch"],
             "unanswered": x["unanswered"],
             "note": x["note"],
         }
-        for x in section["views"]
+        for x, src in zip(section["views"], r.lenses.views, strict=True)
     ]
     return views, list(section["tensions"])
 
