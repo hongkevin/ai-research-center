@@ -44,6 +44,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from arc.data.kr.dart import DartProvider
+from arc.finmodel.peer import build_peer_table
 from arc.ingest.convert import ConvertError, convert
 from arc.ingest.model_fill import fill_model
 from arc.ingest.prior import (
@@ -70,12 +71,16 @@ from arc.render.xlsx import collect_series, note_to_xlsx
 from arc.store.cards import (
     DRAFT,
     HANDOFF,
+    PEER,
     Card,
     CardStore,
     attention_reasons,
     column_for,
     next_version,
     now_iso,
+    peer_attention_reasons,
+    peer_member,
+    resolve_peer_members,
 )
 from arc.store.notes import (
     NOTE_DATASET,
@@ -1239,7 +1244,18 @@ def api_cards():
     cards = _open_cards()
     if cards is None:
         return {"cards": [], "note": "저장소를 열 수 없어 이력이 남지 않습니다."}
-    return {"cards": [c.summary() for c in cards.list()]}
+    out = []
+    for c in cards.list():
+        s = c.summary()
+        if c.kind == PEER:
+            # 피어 카드는 구성원 상태가 곧 카드 상태다. 저장된 값이 아니라
+            # 지금 저장소를 보고 말한다 — 종목 카드를 방금 만들었으면 그게
+            # 바로 반영돼야 한다.
+            resolved = resolve_peer_members(cards, c.members)
+            s["attention"] = peer_attention_reasons(resolved)
+            s["member_ready"] = sum(1 for m in resolved if m["status"] == "ready")
+        out.append(s)
+    return {"cards": out}
 
 
 @app.get("/api/cards/{card_id}")
@@ -1253,7 +1269,107 @@ def api_card(card_id: str):
         return JSONResponse({"error": str(exc)}, status_code=400)
     if card is None:
         return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
-    return dict(card.__dict__, vm=_complete_vm(card.vm))
+    body = dict(card.__dict__, vm=_complete_vm(card.vm))
+    if card.kind == PEER:
+        resolved = resolve_peer_members(cards, card.members)
+        table = build_peer_table(resolved)
+        body["members"] = [{k: v for k, v in m.items() if k != "registry"} for m in resolved]
+        body["peer_table"] = dataclasses.asdict(table)
+        body["attention"] = peer_attention_reasons(resolved)
+    return body
+
+
+@app.post("/api/peers")
+def api_create_peer(payload: dict):
+    """피어 카드를 만든다 — 여러 종목을 한 표로.
+
+    **여기서 종목 카드를 만들지 않는다.** 구성원은 저장소에 이미 있는 종목
+    카드를 읽을 때마다 찾아 붙인다(`resolve_peer_members`). 없는 종목은
+    `pending`으로 남고, 사람이 평소대로 그 종목 카드를 만들면 다음에 열 때
+    표에 들어와 있다.
+
+    생성까지 여기서 떠맡으면 「N종목 동시 생성」이라는 다른 기능이 되고,
+    실패·중복·비용 처리를 전부 다시 만들게 된다. 이미 `/api/jobs`가 그걸 한다.
+    """
+    name = str(payload.get("name", "")).strip()
+    raw = payload.get("symbols") or []
+    if not isinstance(raw, list) or not raw:
+        return JSONResponse({"error": "종목을 하나 이상 지정하십시오."}, status_code=400)
+    if len(raw) > 12:
+        # 표의 열이 열둘을 넘으면 화면에서 못 읽는다. 코퍼스의 피어 표도
+        # 대개 4~8종목이다.
+        return JSONResponse({"error": "한 표에 12종목까지 세울 수 있습니다."}, status_code=400)
+
+    members: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        try:
+            symbol = _resolve_symbol(str(item).strip())
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        members.append(peer_member(symbol, company=_company_name(symbol)))
+
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+
+    card = Card(
+        id=cards.new_id(),
+        symbol="",  # 피어 카드는 종목 하나에 매이지 않는다
+        year=0,
+        created_at=now_iso(),
+        column=DRAFT,
+        kind=PEER,
+        company=name or f"{members[0]['company'] or members[0]['symbol']} 외 {len(members) - 1}종목",
+        members=members,
+    )
+    cards.save(card)
+    return {"card_id": card.id, "members": card.members}
+
+
+@app.post("/api/cards/{card_id}/members")
+def api_set_peer_members(card_id: str, payload: dict):
+    """피어 카드의 구성원을 바꾼다 — 종목을 넣거나 뺀다."""
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+    try:
+        card = cards.get(card_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if card is None:
+        return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    if card.kind != PEER:
+        return JSONResponse({"error": "피어 카드가 아닙니다."}, status_code=400)
+
+    raw = payload.get("symbols")
+    if not isinstance(raw, list):
+        return JSONResponse({"error": "종목 목록이 필요합니다."}, status_code=400)
+    if len(raw) > 12:
+        return JSONResponse({"error": "한 표에 12종목까지 세울 수 있습니다."}, status_code=400)
+
+    members: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        try:
+            symbol = _resolve_symbol(str(item).strip())
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        members.append(peer_member(symbol, company=_company_name(symbol)))
+
+    card.members = members
+    cards.save(card)
+    resolved = resolve_peer_members(cards, card.members)
+    return {
+        "members": [{k: v for k, v in m.items() if k != "registry"} for m in resolved],
+        "attention": peer_attention_reasons(resolved),
+    }
 
 
 @app.post("/api/cards/{card_id}/confirm")
