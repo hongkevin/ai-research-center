@@ -60,6 +60,49 @@ PUBLISHED = HANDOFF  # 옛 이름 (import 호환)
 
 _ID_RE = re.compile(r"^[a-f0-9]{16}$")
 
+# 카드의 종류. 보드에는 둘이 나란히 선다.
+#
+# **왜 새 칸이 아니라 새 종류인가**: 피어 뷰는 진행 단계가 아니다. 초안이고,
+# 검토하고, 넘긴다 — 종목 카드와 **똑같은 수명**을 산다. 칸을 늘리면 그
+# 수명을 두 번 구현하게 되고, 버전·직전 대비 변화·내보내기가 전부 갈라진다.
+#
+# 인터뷰가 꺼낸 고통이 *"커버 밖 종목"*이었다. 그건 종목 카드 안의 탭으로는
+# 안 된다 — 「방산 섹터」가 종목 하나에 종속돼 버린다.
+SINGLE = "single"  # 종목 하나
+PEER = "peer"  # 여러 종목을 한 표로
+KINDS = (SINGLE, PEER)
+
+
+def peer_member(
+    symbol: str,
+    *,
+    company: str = "",
+    card_id: str = "",
+    year: int = 0,
+    period: str = "ANNUAL",
+    status: str = "pending",
+    error: str = "",
+) -> dict:
+    """피어 카드의 구성원 한 줄.
+
+    **`card_id`가 핵심이다.** 피어 카드는 숫자를 자기가 만들지 않고 종목
+    카드를 **가리킨다**. 그래야 표의 모든 칸이 이미 게이트를 통과한 수치이고
+    (불변식 1), 클릭하면 원문 절까지 되짚힌다(D44). 피어 뷰가 자기 파이프라인을
+    따로 가지면 그 둘을 다시 만들어야 하고, 그 순간 검증 안 된 표가 된다.
+
+    커버 밖 종목이라 카드가 아직 없으면 `card_id`가 비고 `status`가
+    `pending`이다 — 그때 종목 카드를 만들어 채운다.
+    """
+    return {
+        "symbol": symbol,
+        "company": company,
+        "card_id": card_id,
+        "year": year,
+        "period": period,
+        "status": status,  # pending | running | ready | failed
+        "error": error,
+    }
+
 
 @dataclass
 class Card:
@@ -103,10 +146,27 @@ class Card:
     prior_note: dict = field(default_factory=dict)
     published_path: str = ""
 
+    # ── 피어 카드 ────────────────────────────────────────────────────
+    # 종목 카드는 `kind`가 없던 시절에 만들어졌다. 기본값이 `SINGLE`이라
+    # 옛 카드는 읽는 순간 종목 카드가 된다 — 이관이 필요 없다.
+    kind: str = SINGLE
+    members: list[dict] = field(default_factory=list)  # peer_member() 목록
+
+    def attention_now(self) -> list[str]:
+        """이 카드에서 사람이 봐야 하는 것. 종류에 따라 **보는 곳이 다르다.**
+
+        종목 카드는 `vm`의 단계 진단을 읽고, 피어 카드는 구성원을 읽는다.
+        (`attention` 필드는 저장된 옛 값이라 이름을 못 쓴다.)
+        """
+        if self.kind == PEER:
+            return peer_attention_reasons(self.members)
+        return attention_reasons(self.vm) if self.vm else self.attention
+
     def summary(self) -> dict:
         """목록용 — 본문을 뺀다. 카드 하나에 60KB가 붙어 있다."""
         return {
             "id": self.id,
+            "kind": self.kind,
             "symbol": self.symbol,
             "year": self.year,
             "period": self.period,
@@ -118,7 +178,7 @@ class Card:
             # **저장된 문구를 쓰지 않고 지금 다시 계산한다.** 생성 시점에
             # 굳혀 두면 문구를 고쳐도 이미 만든 카드에는 영영 옛말이 남는다
             # (실측으로 밟았다 — D51에서 문구를 고쳤는데 보드가 안 바뀌었다).
-            "attention": attention_reasons(self.vm) if self.vm else self.attention,
+            "attention": self.attention_now(),
             "error": self.error,
             "gate_passed": bool(self.vm.get("gate_passed")),
             "registry_size": self.vm.get("registry_size", 0),
@@ -126,6 +186,9 @@ class Card:
             "version": self.version,
             "revision_count": len(self.versions),
             "published_path": self.published_path,
+            # 보드가 피어 카드를 다르게 그리려면 본문 없이도 알아야 한다.
+            "member_count": len(self.members),
+            "member_symbols": [m.get("symbol", "") for m in self.members],
         }
 
 
@@ -196,6 +259,54 @@ def attention_reasons(vm: dict) -> list[str]:
             todo = _WHAT_TO_DO.get(label, "")
             head = f"{label} 합계가 {gap} 어긋납니다" if gap else f"{label} 검산이 맞지 않습니다"
             out.append(f"{head}{f' — {todo}' if todo else ''}")
+    return out
+
+
+_PERIOD_LABEL = {
+    "ANNUAL": "연간",
+    "HALF": "반기",
+    "Q1": "1분기",
+    "Q3": "3분기",
+}
+
+
+def peer_attention_reasons(members: list[dict]) -> list[str]:
+    """피어 카드에서 사람이 봐야 하는 것.
+
+    **가장 중요한 것이 마지막 항목이다 — 기준 기간이 섞이면 표가 거짓말을
+    한다.** 한 종목은 2025 연간이고 다른 종목은 2025 3분기 누적인데 매출이
+    나란히 서면, 화면상 아무 이상이 없으면서 값이 4:3으로 어긋난다. 종목
+    카드에는 없던 종류의 결함이다 — 카드 하나짜리에서는 기간이 섞일 수가
+    없었다.
+
+    검산 불일치를 자동으로 고치지 않고 **표시만 한다**는 점은 종목 카드와
+    같다(D51). 피어 그룹을 다시 짤지 기간을 맞출지는 사람이 정한다.
+    """
+    out: list[str] = []
+
+    failed = [m for m in members if m.get("status") == "failed"]
+    for m in failed:
+        name = m.get("company") or m.get("symbol") or "종목"
+        note = str(m.get("error") or "").split(" — ")[0]
+        out.append(f"{name}을(를) 가져오지 못했습니다{f' — {note}' if note else ''}")
+
+    pending = [m for m in members if m.get("status") in ("pending", "running")]
+    if pending:
+        out.append(f"{len(pending)}종목이 아직 준비되지 않았습니다 — 비교표가 비어 있습니다")
+
+    # 기간 정합성은 **준비된 구성원끼리만** 본다. 아직 안 만들어진 것의
+    # 기간은 아직 정해지지 않은 것이라 섞였다고 말할 수 없다.
+    ready = [m for m in members if m.get("status") == "ready"]
+    basis = {(m.get("year"), m.get("period")) for m in ready}
+    if len(basis) > 1:
+        shown = ", ".join(
+            sorted(f"{y}년 {_PERIOD_LABEL.get(str(p), p)}" for y, p in basis if y)
+        )
+        out.append(f"기준 기간이 섞여 있어 나란히 비교할 수 없습니다 — {shown}")
+
+    blocked = sum(1 for m in ready if m.get("gate_passed") is False)
+    if blocked:
+        out.append(f"{blocked}종목이 내보낼 수 없는 상태입니다 — 출처 없는 숫자가 있습니다")
     return out
 
 
