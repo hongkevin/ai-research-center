@@ -125,7 +125,10 @@ class Retrieval:
         수주잔고?」 다음에 「그럼 매출은?」이 오면 이어져야 한다."""
         cards = self.cards or ([self.subject] if self.subject else [])
         return Context(
-            symbols=tuple(c.symbol for c in cards),
+            # **같은 종목의 카드가 여럿일 수 있다** — 분기가 다르거나 다시
+            # 만들었거나. 그대로 실으면 「064350, 064350」이 넘어가고, 다음
+            # 턴의 앵커가 종목 하나를 두 번 세는 꼴이 된다. 순서는 지킨다.
+            symbols=tuple(dict.fromkeys(c.symbol for c in cards if c.symbol)),
             tokens=tuple(self.matched or self.unmatched),
             year=cards[0].year if cards else None,
         )
