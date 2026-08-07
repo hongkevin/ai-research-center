@@ -7,15 +7,21 @@
 
 from __future__ import annotations
 
+import json
+
 from arc.store.cards import (
     DRAFT,
     HANDOFF,
+    PEER,
     REVIEW,
+    SINGLE,
     Card,
     CardStore,
     attention_reasons,
     column_for,
     now_iso,
+    peer_attention_reasons,
+    peer_member,
 )
 
 
@@ -187,3 +193,110 @@ class TestStore:
             vm=_vm(body_html="x" * 50_000),
         )
         assert "body_html" not in c.summary()
+
+
+class TestPeerCard:
+    """피어 카드 — 여러 종목을 한 표로.
+
+    종목 카드에 없던 결함이 하나 생긴다: **기준 기간이 섞이는 것**. 카드
+    하나짜리에서는 섞일 수가 없었다.
+    """
+
+    def _member(self, symbol, **over):
+        return peer_member(symbol, **over)
+
+    def test_old_cards_become_single_on_read(self, tmp_path):
+        """`kind`가 없던 시절 카드를 이관 없이 읽는다."""
+        store = CardStore(tmp_path)
+        raw = {"id": "a" * 16, "symbol": "005930", "year": 2025}
+        (store.dir / f"{'a' * 16}.json").write_text(json.dumps(raw), encoding="utf-8")
+        card = store.get("a" * 16)
+        assert card is not None
+        assert card.kind == SINGLE
+        assert card.members == []
+
+    def test_a_healthy_group_needs_nothing(self):
+        members = [
+            self._member("047810", company="한국항공우주", year=2025, status="ready"),
+            self._member("064350", company="현대로템", year=2025, status="ready"),
+        ]
+        assert peer_attention_reasons(members) == []
+
+    def test_mixed_basis_is_caught(self):
+        """**표가 조용히 거짓말하는 자리.** 화면상 아무 이상이 없다."""
+        members = [
+            self._member("047810", year=2025, period="ANNUAL", status="ready"),
+            self._member("064350", year=2025, period="Q3", status="ready"),
+        ]
+        reasons = peer_attention_reasons(members)
+        assert any("기준 기간이 섞여" in r for r in reasons)
+        assert any("3분기" in r and "연간" in r for r in reasons)
+
+    def test_pending_members_do_not_count_as_mixed(self):
+        """아직 안 만들어진 것의 기간은 **정해지지 않은 것**이지 어긋난 게 아니다."""
+        members = [
+            self._member("047810", year=2025, period="ANNUAL", status="ready"),
+            self._member("064350", status="pending"),
+        ]
+        reasons = peer_attention_reasons(members)
+        assert not any("기준 기간이 섞여" in r for r in reasons)
+        assert any("아직 준비되지 않았습니다" in r for r in reasons)
+
+    def test_failed_member_names_the_company(self):
+        members = [
+            self._member("079550", company="LIG넥스원", status="failed", error="DART 조회 실패 — 없음")
+        ]
+        assert peer_attention_reasons(members) == [
+            "LIG넥스원을(를) 가져오지 못했습니다 — DART 조회 실패"
+        ]
+
+    def test_blocked_member_is_reported(self):
+        members = [
+            {**self._member("047810", year=2025, status="ready"), "gate_passed": False},
+            self._member("064350", year=2025, status="ready"),
+        ]
+        assert any("내보낼 수 없는 상태" in r for r in peer_attention_reasons(members))
+
+    def test_peer_card_reads_members_not_vm(self):
+        """피어 카드는 `vm`의 단계 진단이 아니라 구성원을 본다."""
+        card = Card(
+            id="b" * 16,
+            symbol="",
+            year=2025,
+            kind=PEER,
+            company="방산 4종",
+            vm=_vm(gate_passed=False, violations=[{"key": "x"}]),
+            members=[self._member("047810", year=2025, status="ready")],
+        )
+        # vm이 막혀 있어도 피어 카드에서는 그게 이유가 아니다
+        assert card.attention_now() == []
+
+    def test_summary_carries_the_group_without_the_body(self, tmp_path):
+        card = Card(
+            id="c" * 16,
+            symbol="",
+            year=2025,
+            kind=PEER,
+            company="방산 4종",
+            members=[self._member("047810"), self._member("064350")],
+        )
+        s = card.summary()
+        assert s["kind"] == PEER
+        assert s["member_count"] == 2
+        assert s["member_symbols"] == ["047810", "064350"]
+
+    def test_roundtrip_keeps_members(self, tmp_path):
+        store = CardStore(tmp_path)
+        card = Card(
+            id=store.new_id(),
+            symbol="",
+            year=2025,
+            kind=PEER,
+            members=[self._member("047810", company="한국항공우주", card_id="d" * 16)],
+        )
+        store.save(card)
+        back = store.get(card.id)
+        assert back is not None
+        assert back.kind == PEER
+        assert back.members[0]["company"] == "한국항공우주"
+        assert back.members[0]["card_id"] == "d" * 16
