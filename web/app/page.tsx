@@ -630,6 +630,7 @@ export default function Workbench() {
                     onOpen={openCard}
                     onConfirm={confirm}
                     onDelete={remove}
+                    onComposePeer={() => setComposingPeer(true)}
                   />
                   <BoardHint />
                 </>

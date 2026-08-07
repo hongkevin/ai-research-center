@@ -35,7 +35,114 @@ const TONE: Record<Column, string> = {
   handoff: "text-ok",
 };
 
+/**
+ * **칸반이 둘이다.** 종목 카드와 피어 카드를 한 칸반에 섞으면 「4종목짜리」와
+ * 「1종목짜리」가 같은 칸에서 나란히 서서 읽히지 않는다.
+ *
+ * 그렇다고 다른 화면으로 보내지는 않는다 — 둘 다 초안이고, 검토하고, 넘기는
+ * 같은 수명을 살고(D68), RA가 알고 싶은 것은 **오늘 내가 굴리는 일 전체**다.
+ * 그래서 한 화면, 칸반 둘이다.
+ */
 export function Board({
+  cards,
+  onOpen,
+  onConfirm,
+  onDelete,
+  onComposePeer,
+}: {
+  cards: CardSummary[];
+  onOpen: (id: string) => void;
+  onConfirm: (id: string) => void;
+  onDelete: (id: string) => void;
+  onComposePeer?: () => void;
+}) {
+  const singles = cards.filter((c) => c.kind !== "peer");
+  const peers = cards.filter((c) => c.kind === "peer");
+
+  return (
+    <div className="space-y-8">
+      <Lane
+        title="종목"
+        cards={singles}
+        onOpen={onOpen}
+        onConfirm={onConfirm}
+        onDelete={onDelete}
+      />
+      <div>
+        <SectionTitle title="피어 그룹" count={peers.length} />
+        {peers.length > 0 ? (
+          <Columns
+            cards={peers}
+            onOpen={onOpen}
+            onConfirm={onConfirm}
+            onDelete={onDelete}
+          />
+        ) : (
+          /* **빈 칸 세 개를 세우지 않는다.** 피어가 없을 때 빈 칸반을 그리면
+             화면 절반이 비어 보이고, 그게 보드를 무겁게 만든다. */
+          <div className="rounded-lg border border-dashed px-4 py-5">
+            <p className="text-[13px]">
+              커버 밖 종목을 한 표로 볼 수 있습니다.
+            </p>
+            <p className="mt-1 text-[12px] leading-[1.7] text-muted-foreground">
+              커버하는 종목을 씨앗으로 주면 <strong>같이 움직이는</strong>{" "}
+              종목을 찾아 드립니다 — 업종 분류로는 못 찾는 것들입니다.
+            </p>
+            {onComposePeer && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onComposePeer}
+                className="mt-3 h-7 text-[12px]"
+              >
+                피어 그룹 만들기
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Lane({
+  title,
+  cards,
+  onOpen,
+  onConfirm,
+  onDelete,
+}: {
+  title: string;
+  cards: CardSummary[];
+  onOpen: (id: string) => void;
+  onConfirm: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div>
+      <SectionTitle title={title} count={cards.length} />
+      <Columns
+        cards={cards}
+        onOpen={onOpen}
+        onConfirm={onConfirm}
+        onDelete={onDelete}
+      />
+    </div>
+  );
+}
+
+function SectionTitle({ title, count }: { title: string; count: number }) {
+  return (
+    <h2 className="mb-3 flex items-baseline gap-2 border-b pb-1.5 text-[12px] font-semibold">
+      {title}
+      <span className="font-mono text-[11px] font-normal text-muted-foreground">
+        {count}
+      </span>
+    </h2>
+  );
+}
+
+function Columns({
   cards,
   onOpen,
   onConfirm,
@@ -52,12 +159,12 @@ export function Board({
         const inCol = cards.filter((c) => c.column === col);
         return (
           <section key={col} className="min-w-0">
-            <h2 className="mb-2.5 flex items-baseline gap-1.5 text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
+            <h3 className="mb-2.5 flex items-baseline gap-1.5 text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
               <span className={TONE[col]}>{COLUMN_LABEL[col]}</span>
               <span className="font-mono normal-case tracking-normal">
                 {inCol.length}
               </span>
-            </h2>
+            </h3>
             <p className="mb-2 text-[11.5px] text-muted-foreground">
               {COLUMN_HINT[col]}
             </p>
