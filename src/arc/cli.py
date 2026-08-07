@@ -434,13 +434,30 @@ def _tg_client():
 
 
 @telegram_app.command("login")
-def telegram_login() -> None:
-    """텔레그램에 로그인한다. **한 번만 하면 세션이 남는다.**"""
+def telegram_login(
+    phone: str = typer.Option("", "--phone", help="+821012345678 형식. 비우면 물어본다"),
+) -> None:
+    """텔레그램에 로그인한다. **한 번만 하면 세션이 남는다.**
+
+    **진짜 터미널에서 실행해야 한다.** 인증 코드를 받아 쳐야 하는데, 표준입력이
+    안 붙은 셸(에디터 안의 실행 창 등)에서는 프롬프트가 바로 EOF를 받고
+    `Aborted.`로 끝난다.
+    """
     import asyncio
+    import sys
+
+    if not sys.stdin.isatty():
+        typer.secho(
+            "\n  표준입력이 없습니다 — **터미널에서 직접 실행**해 주십시오.\n"
+            "  인증 코드를 받아 쳐야 해서 대신 할 수 없습니다.\n",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(1)
 
     async def run() -> None:
         client = _tg_client()
-        await client.start()  # 전화번호·코드를 여기서 묻는다
+        # 전화번호를 미리 주면 프롬프트가 하나 줄어든다. 코드는 어차피 물어본다.
+        await client.start(phone=phone or (lambda: typer.prompt("  전화번호 (+82…)")))
         me = await client.get_me()
         typer.secho(
             f"\n  로그인됨: {me.first_name or ''} (@{me.username or '-'})", fg=typer.colors.GREEN
