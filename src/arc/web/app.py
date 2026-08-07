@@ -47,6 +47,8 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
+from arc.chat import answer_question
+from arc.chat.retrieval import Context
 from arc.data.kr.dart import DartProvider
 from arc.finmodel.peer import build_peer_table
 from arc.ingest.convert import ConvertError, convert
@@ -76,6 +78,7 @@ from arc.store.cards import (
     DRAFT,
     HANDOFF,
     PEER,
+    SINGLE,
     Card,
     CardStore,
     attention_reasons,
@@ -655,6 +658,29 @@ def _search_news(symbol: str, *, months: int = 3, limit: int = 10):
         _NEWS_CACHE[ck] = cached
     name, raw = cached
     return select(raw, now=now, months=months, limit=limit, company=name) or None
+
+
+def _news_by_name(company: str):
+    """회사 **이름**으로 기사를 찾는다. `_search_news()`와 달리 DART를 안 탄다.
+
+    채팅의 힌트 레인이 주는 것은 종목코드가 아니라 카드에 적힌 회사명이다.
+    이름이 이미 있는데 코드로 되돌려 DART에 다시 묻는 것은 낭비이고,
+    무엇보다 **DART가 막혀도 채팅은 살아야 한다**([D69](../../docs/decisions.md)).
+    """
+    from arc.data.kr.naver_news import NaverNewsProvider
+    from arc.data.kr.news_filter import plain_name, select
+
+    name = plain_name(company)
+    if not name:
+        return []
+    now = dt.datetime.now(dt.UTC)
+    key = (f"name:{name}", now.date().isoformat())
+    cached = _NEWS_CACHE.get(key)
+    if cached is None:
+        cached = (name, NaverNewsProvider().get_news(name, limit=100))
+        _NEWS_CACHE[key] = cached
+    _, raw = cached
+    return list(select(raw, now=now, months=3, limit=10, company=name) or [])
 
 
 def _open_store() -> SnapshotStore | None:
@@ -1281,6 +1307,65 @@ def api_card(card_id: str):
         body["peer_table"] = dataclasses.asdict(table)
         body["attention"] = peer_attention_reasons(resolved)
     return body
+
+
+@app.post("/api/ask")
+def api_ask(payload: dict):
+    """리서치 채팅 — **카드를 근거로 답하고 출처를 낸다.**
+
+    인터뷰가 준 가장 큰 발견이 여기 있다: *"리포트 쓰는 시간보다 훨씬 많은
+    비중은 클라이언트 리퀘스트"* — 하루 10~15건. 일반 챗봇이 아니라 **모르면
+    모른다고 하는** 것이 설계 원칙이다. 답을 지어내면 청구가 안 되고, 한 번
+    틀리면 다음부터 안 쓴다.
+
+    **대화를 서버가 들고 있지 않다.** 직전 턴이 남긴 `context`(종목·주제·연도
+    셋뿐)를 화면이 돌려주고 우리는 그걸 그대로 다음 검색의 앵커로 쓴다.
+    세션 상태를 서버에 두면 워커가 늘어나는 순간 대화가 갈라진다 — 그리고
+    이 좁은 것만 이월하는 편이 대화 전체를 이고 다니는 것보다 정확하다.
+    """
+    question = str(payload.get("question", "")).strip()
+    if not question:
+        return JSONResponse({"error": "질문을 입력하십시오."}, status_code=400)
+
+    cards = _open_cards()
+    if cards is None:
+        return JSONResponse({"error": "저장소를 열 수 없습니다."}, status_code=503)
+
+    raw = payload.get("context") or {}
+    context = (
+        Context(
+            symbols=tuple(str(s) for s in (raw.get("symbols") or [])),
+            tokens=tuple(str(t) for t in (raw.get("tokens") or [])),
+            year=raw.get("year") if isinstance(raw.get("year"), int) else None,
+        )
+        if isinstance(raw, dict) and raw
+        else None
+    )
+
+    if not LLM_BUDGET.take():
+        return JSONResponse(
+            {"error": f"LLM 호출 한도({LLM_BUDGET.limit}건)에 도달했습니다."}, status_code=429
+        )
+    from arc.llm.client import get_client
+
+    # 기사 레인은 **켤 수 있으면 켠다.** 없으면 답변이 그 사실을 `problems`에
+    # 남기고 앞의 두 레인은 그대로 돈다.
+    news = _news_by_name if news_available() else None
+    try:
+        answer = answer_question(
+            question,
+            [c for c in cards.list() if c.kind == SINGLE],
+            client=get_client(),
+            news=news,
+            context=context,
+        )
+    except Exception as exc:
+        # 채팅 실패가 화면을 죽이지 않는다.
+        log.exception("답변 생성 실패")
+        return JSONResponse(
+            {"error": f"답변을 만들지 못했습니다 — {type(exc).__name__}"}, status_code=500
+        )
+    return dataclasses.asdict(answer)
 
 
 @app.post("/api/peers")
