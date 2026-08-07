@@ -61,6 +61,34 @@ _W_YEAR = 8.0
 _W_PERIOD = 8.0
 _W_TOKEN = 1.0
 
+# 상대 연도. **카드를 바꾸지 않는다** — 전기 수치는 같은 카드 안에 비교표시로
+# 들어 있다(`revenue_2025a`). 그래서 「작년」은 다른 카드를 찾으라는 말이 아니라
+# **연도 어휘를 하나 더 주는 것**이다. 실측: 2026 1분기 카드 하나에
+# 2025A·2024A가 다 있다.
+_RELATIVE_YEAR: dict[str, int] = {
+    "재작년": -2,
+    "작년": -1,
+    "전년": -1,
+    "지난해": -1,
+    "올해": 0,
+    "금년": 0,
+    "당해": 0,
+}
+
+
+@dataclass(frozen=True)
+class Context:
+    """직전 턴이 남긴 것. **웹이 세션에 들고 있다가 다음 질문에 넘긴다.**
+
+    대화 전체를 들고 다니지 않는다. 후속 질문이 실제로 기대는 것은 셋뿐이고
+    (누구 얘기였나 · 무슨 얘기였나 · 어느 해였나), 나머지를 이월하면 오래된
+    주제가 새 질문에 묻어 들어온다.
+    """
+
+    symbols: tuple[str, ...] = ()  # 직전에 본 종목코드
+    tokens: tuple[str, ...] = ()  # 직전 질문의 내용어 — 「그럼 작년은?」이 기댈 것
+    year: int | None = None  # 직전 카드의 사업연도 — 상대 연도 해소용
+
 
 @dataclass
 class Retrieval:
@@ -79,6 +107,8 @@ class Retrieval:
     # 때가 기사 힌트가 가장 쓸모 있는 순간이고, 그러려면 어느 회사인지는
     # 알고 있어야 한다.
     subject: CardRef | None = None
+    # 직전 턴에서 이어받은 것. **비어 있지 않으면 답변이 그것을 밝혀야 한다.**
+    carried: list[str] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
@@ -89,6 +119,16 @@ class Retrieval:
 
     def tags(self) -> list[str]:
         return [c.tag for c in self.cards]
+
+    def next_context(self) -> Context:
+        """다음 턴에 넘길 것. **근거가 비어도 주어는 넘긴다** — 「현대로템
+        수주잔고?」 다음에 「그럼 매출은?」이 오면 이어져야 한다."""
+        cards = self.cards or ([self.subject] if self.subject else [])
+        return Context(
+            symbols=tuple(c.symbol for c in cards),
+            tokens=tuple(self.matched or self.unmatched),
+            year=cards[0].year if cards else None,
+        )
 
 
 def _usable(cards: Sequence[Card]) -> list[Card]:
@@ -167,11 +207,16 @@ def retrieve(
     question: str,
     cards: Sequence[Card],
     *,
+    context: Context | None = None,
     max_cards: int = 2,
     max_passages: int = 8,
     max_keys: int = 60,
 ) -> Retrieval:
-    """질문에 걸리는 카드·발췌·수치를 모은다. 없으면 비운 채 이유를 남긴다."""
+    """질문에 걸리는 카드·발췌·수치를 모은다. 없으면 비운 채 이유를 남긴다.
+
+    `context`를 주면 직전 턴의 종목·주제·연도를 이어받는다. 이어받은 것은
+    `carried`에 남고, 답변이 그것을 밝힌다.
+    """
     query = parse_query(question)
     pool = _usable(cards)
     out = Retrieval(question=question, query=query)
@@ -184,15 +229,22 @@ def retrieve(
     scored = [(*_card_score(c, query), c) for c in pool]
     named = [(s, c) for s, is_named, c in scored if is_named]
     any_named = bool(named)
+    carried_symbols = False
     if query.symbols or any_named:
         # **종목이 지목되면 그 종목의 카드만 쓴다.** 못 찾으면 다른 회사로
-        # 대신 답하지 않고 없다고 말한다.
+        # 대신 답하지 않고 없다고 말한다. 이어받기보다 새 주어가 이긴다.
         chosen = [c for _, c in sorted(named, key=lambda p: -p[0])]
         if not chosen:
             out.reason = f"질문에 나온 종목({', '.join(query.symbols)})의 카드가 없습니다."
             out.unmatched = list(query.tokens)
             return out
+    elif context and context.symbols:
+        # 회사를 부르지 않은 후속 질문 — 직전 종목을 이어받는다.
+        chosen = [c for c in pool if c.symbol in context.symbols]
+        carried_symbols = bool(chosen)
     else:
+        chosen = []
+    if not chosen and not carried_symbols:
         chosen = [c for s, _, c in sorted(scored, key=lambda p: -p[0]) if s > 0]
         if not chosen:
             out.reason = "질문의 어휘가 어느 카드에도 나오지 않습니다."
@@ -209,10 +261,13 @@ def retrieve(
         passages.extend(card_passages(card, tag))
     out.subject = out.cards[0]
     out.registry = build_registry(entries)
+    if carried_symbols:
+        out.carried.append(f"직전 질문의 종목({out.subject.company})")
 
     # **회사 이름은 발췌를 고르는 데 쓰지 않는다.** 그 카드의 모든 절이 그
     # 회사 얘기라 아무 절이나 걸리고, 정작 무엇을 물었는지가 묻힌다.
     content = [t for t in query.tokens if not _is_name(t, out.cards)]
+    content += _carry_content(question, content, context, out)
 
     ranked = sorted((_score_passage(p, content) for p in passages), key=lambda p: -p.score)
     hit = [p for p in ranked if p.score > 0][:max_passages]
@@ -257,6 +312,33 @@ def _nothing(out: Retrieval, tokens: list[str], template: str) -> Retrieval:
     out.keys = []
     out.registry = NumberRegistry()
     return out
+
+
+def _carry_content(
+    question: str, content: list[str], context: Context | None, out: Retrieval
+) -> list[str]:
+    """후속 질문이 생략한 것을 채워 넣는다. `carried`에 흔적을 남긴다."""
+    if context is None:
+        return []
+    extra: list[str] = []
+
+    # 「그럼 작년은?」 — 주제가 통째로 생략됐다. 직전 주제를 이어받는다.
+    if not content and context.tokens:
+        extra += [t for t in context.tokens if t not in content]
+        out.carried.append(f"직전 질문의 주제(«{', '.join(context.tokens[:3])}»)")
+
+    # 「작년」 → 연도 어휘. 카드를 바꾸지 않는다 — 전기는 같은 카드 안에 있다.
+    flat = normalize(question)
+    base = out.subject.year if out.subject else context.year
+    if base:
+        for word, offset in _RELATIVE_YEAR.items():
+            if word in flat:
+                year = str(base + offset)
+                if year not in extra:
+                    extra.append(year)
+                    out.carried.append(f"«{word}» → {year}년")
+                break
+    return extra
 
 
 def _is_name(token: str, cards: list[CardRef]) -> bool:

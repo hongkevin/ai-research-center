@@ -159,9 +159,7 @@ def _pearson(a: dict[str, float], b: dict[str, float]) -> tuple[float | None, in
     return (cov / math.sqrt(vx * vy), n)
 
 
-def _beta_residual(
-    rets: dict[str, float], market: dict[str, float]
-) -> dict[str, float] | None:
+def _beta_residual(rets: dict[str, float], market: dict[str, float]) -> dict[str, float] | None:
     """시장 요인을 걷어낸 잔차 수익률. `r - β·r_시장`.
 
     **이걸 안 하면 상관의 대부분이 시장이다** — 무작위 8종목의 상호 상관이

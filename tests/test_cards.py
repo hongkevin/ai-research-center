@@ -244,7 +244,9 @@ class TestPeerCard:
 
     def test_failed_member_names_the_company(self):
         members = [
-            self._member("079550", company="LIG넥스원", status="failed", error="DART 조회 실패 — 없음")
+            self._member(
+                "079550", company="LIG넥스원", status="failed", error="DART 조회 실패 — 없음"
+            )
         ]
         assert peer_attention_reasons(members) == [
             "LIG넥스원을(를) 가져오지 못했습니다 — DART 조회 실패"

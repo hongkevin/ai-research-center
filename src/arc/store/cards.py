@@ -299,9 +299,7 @@ def peer_attention_reasons(members: list[dict]) -> list[str]:
     ready = [m for m in members if m.get("status") == "ready"]
     basis = {(m.get("year"), m.get("period")) for m in ready}
     if len(basis) > 1:
-        shown = ", ".join(
-            sorted(f"{y}년 {_PERIOD_LABEL.get(str(p), p)}" for y, p in basis if y)
-        )
+        shown = ", ".join(sorted(f"{y}년 {_PERIOD_LABEL.get(str(p), p)}" for y, p in basis if y))
         out.append(f"기준 기간이 섞여 있어 나란히 비교할 수 없습니다 — {shown}")
 
     blocked = sum(1 for m in ready if m.get("gate_passed") is False)

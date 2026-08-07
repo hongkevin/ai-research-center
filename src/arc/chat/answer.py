@@ -48,7 +48,7 @@ from arc.chat.evidence import CardRef
 from arc.chat.guard import NO_EVIDENCE, POLICY_REFUSAL, asks_for_opinion, check_answer
 from arc.chat.hints import Hint, HintResult, build_hints
 from arc.chat.observations import rank_observations
-from arc.chat.retrieval import Retrieval, retrieve
+from arc.chat.retrieval import Context, Retrieval, retrieve
 from arc.data.base import NewsItem
 from arc.llm.client import LLMClient, Tier
 from arc.llm.narrate import parse_response
@@ -188,6 +188,12 @@ class Answer:
     unsourced: list[str] = field(default_factory=list)  # 출처 표시가 없던 문장
     refused: str = ""  # 답을 내지 않은 이유 (D4 등)
     cards: list[CardRef] = field(default_factory=list)
+    # 후속 질문용. 웹이 세션에 들고 있다가 다음 `answer_question`에 넘긴다.
+    context: Context = field(default_factory=Context)
+    # 직전 턴에서 이어받은 것. **비어 있지 않으면 화면이 반드시 보여야 한다** —
+    # 조용히 이어받으면 사용자가 다른 회사를 생각하고 있었을 때 틀린 답을
+    # 확신 있게 하게 된다.
+    carried_over: list[str] = field(default_factory=list)
     used_llm: bool = False
     model: str = ""
     cost_usd: float | None = None
@@ -305,6 +311,10 @@ def _no_evidence(question: str, retrieval: Retrieval, hint: HintResult | None = 
         hints=hint.hints,
         unanswered=[question],
         grounded=False,
+        # **주어는 넘긴다.** 「수주잔고?」에 못 답했다고 다음 「그럼 매출은?」이
+        # 처음부터 시작하면 대화가 아니다.
+        context=retrieval.next_context(),
+        carried_over=retrieval.carried,
         used_llm=hint.used_llm,
         model=hint.model,
         cost_usd=hint.cost_usd,
@@ -318,6 +328,7 @@ def answer_question(
     *,
     client: LLMClient | None = None,
     news: NewsFetcher | None = None,
+    context: Context | None = None,
     max_cards: int = 2,
     max_passages: int = 8,
     max_attempts: int = 2,
@@ -334,9 +345,19 @@ def answer_question(
     """
     refusal = asks_for_opinion(question)
     if refusal:
-        return Answer(text=POLICY_REFUSAL, grounded=False, refused=refusal, unanswered=[question])
+        # 거부해도 대화는 끊지 않는다 — 다음 질문이 앞 주어를 이어받을 수 있게
+        # 받은 문맥을 그대로 돌려준다.
+        return Answer(
+            text=POLICY_REFUSAL,
+            grounded=False,
+            refused=refusal,
+            unanswered=[question],
+            context=context or Context(),
+        )
 
-    retrieval = retrieve(question, cards, max_cards=max_cards, max_passages=max_passages)
+    retrieval = retrieve(
+        question, cards, context=context, max_cards=max_cards, max_passages=max_passages
+    )
     if retrieval.empty:
         if client is None:
             return _no_evidence(question, retrieval)
@@ -349,6 +370,8 @@ def answer_question(
             unanswered=[question],
             grounded=False,
             cards=retrieval.cards,
+            context=retrieval.next_context(),
+            carried_over=retrieval.carried,
             problems=["LLM 클라이언트가 없습니다."],
         )
 
@@ -378,6 +401,8 @@ def answer_question(
                 text=f"{NO_EVIDENCE} 서술 레이어 호출이 실패했습니다.",
                 cards=retrieval.cards,
                 unanswered=[question],
+                context=retrieval.next_context(),
+                carried_over=retrieval.carried,
                 problems=[f"{type(exc).__name__}: {exc}"],
             )
         if str(payload.get("facts") or "").strip():
@@ -392,6 +417,8 @@ def answer_question(
             text=f"{NO_EVIDENCE} 서술 레이어가 답을 만들지 못했습니다.",
             cards=retrieval.cards,
             unanswered=[question],
+            context=retrieval.next_context(),
+            carried_over=retrieval.carried,
             problems=problems,
         )
     analysis_raw = str(payload.get("analysis") or "").strip()
@@ -412,6 +439,8 @@ def answer_question(
             refused=verdict.refused,
             cards=retrieval.cards,
             unanswered=[question],
+            context=retrieval.next_context(),
+            carried_over=retrieval.carried,
             used_llm=True,
             model=model,
             cost_usd=cost,
@@ -422,6 +451,8 @@ def answer_question(
             rejected=verdict.rejected,
             cards=retrieval.cards,
             unanswered=[question],
+            context=retrieval.next_context(),
+            carried_over=retrieval.carried,
             used_llm=True,
             model=model,
             cost_usd=cost,
@@ -463,6 +494,8 @@ def answer_question(
         rejected=rejected,
         unsourced=unsourced,
         cards=retrieval.cards,
+        context=retrieval.next_context(),
+        carried_over=retrieval.carried,
         used_llm=True,
         model=model,
         # 두 레인의 호출을 합산한다. 화면에 한 질문의 값이 나와야 한다.

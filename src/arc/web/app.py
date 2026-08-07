@@ -1327,7 +1327,8 @@ def api_create_peer(payload: dict):
         created_at=now_iso(),
         column=DRAFT,
         kind=PEER,
-        company=name or f"{members[0]['company'] or members[0]['symbol']} 외 {len(members) - 1}종목",
+        company=name
+        or f"{members[0]['company'] or members[0]['symbol']} 외 {len(members) - 1}종목",
         members=members,
     )
     cards.save(card)
