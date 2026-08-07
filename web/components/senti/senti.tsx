@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ChannelPicker } from "@/components/senti/channel-picker";
+import { Recommended } from "@/components/senti/recommended";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   getSentiment,
@@ -89,8 +90,12 @@ export function Senti() {
         </p>
       </div>
 
-      {/* **채널은 센티의 재료다.** 소비하는 자리에서 관리한다. */}
-      <ChannelPicker onChanged={() => setDay((d) => d)} />
+      {/* **채널은 센티의 재료다.** 소비하는 자리에서 관리한다.
+          추천이 먼저인 이유: 빈 목록을 채우는 것이 첫 일이다. */}
+      <div className="space-y-2">
+        <Recommended onAdopted={() => setDay((d) => d)} />
+        <ChannelPicker onChanged={() => setDay((d) => d)} />
+      </div>
 
       {data.total > 0 && <Rhythm data={data} />}
 

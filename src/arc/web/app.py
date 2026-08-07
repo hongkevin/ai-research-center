@@ -2015,6 +2015,108 @@ def api_set_telegram_channels(payload: dict):
     return {"enabled": profile.enabled_channels()}
 
 
+@app.get("/api/telegram/recommended")
+def api_recommended_channels():
+    """추천 채널 — **고르게 하되 실측한 것만 준다** (D75).
+
+    볼 채널 목록이 「내가 이미 들어가 있는 방」뿐이면, 무엇을 구독해야 하는지
+    모르는 사람에게 빈 목록은 계속 빈 목록이다. 섹터 시드와 같은 문제이고
+    같은 답이다.
+
+    **내 섹터에 맞는 것이 먼저 온다.** 이미 목록에 있는 것은 표시만 하고
+    빼지 않는다 — 빼면 「내가 이미 넣었나?」를 화면에서 알 수 없다.
+    """
+    from arc.data.tg_channels import CHECKED_AT, recommended_for
+
+    profile = ProfileStore(_my_dir()).load(current_user())
+    have = {(c.username or "").lower() for c in profile.channels if c.username}
+    return {
+        "checked_at": CHECKED_AT,
+        "channels": [
+            {
+                "username": c.username,
+                "title": c.title,
+                "kind": c.kind,
+                "sector": c.sector,
+                "subscribers": c.subscribers,
+                "note": c.note,
+                "have": c.username.lower() in have,
+                "mine": c.sector in set(profile.sectors),
+            }
+            for c in recommended_for(profile.sectors)
+        ],
+    }
+
+
+@app.post("/api/telegram/adopt")
+def api_adopt_channel(payload: dict):
+    """추천 채널을 내 목록에 넣는다. **구독하지 않는다.**
+
+    공개 채널은 들어가지 않고도 읽힌다 — username으로 실체를 찾아 chat_id만
+    받아 둔다. 남의 계정으로 방에 들어가는 것은 되돌리기 어려운 일이고,
+    **읽는 데 필요하지도 않다.**
+
+    **`BLOCKED`를 먼저 본다.** 사칭방(`@nhsemicon`)이 목록에 들어가면 그
+    뒤로는 우리가 그걸 신뢰할 만한 출처처럼 다루게 된다.
+    """
+    from arc.data.tg_channels import blocked_reason
+    from arc.ingest.telegram_parse import classify_channel
+    from arc.store.profile import TgChannel
+
+    username = str(payload.get("username", "")).strip().lstrip("@")
+    if not username:
+        return JSONResponse({"error": "채널 username을 주십시오."}, status_code=400)
+    if reason := blocked_reason(username):
+        return JSONResponse({"error": reason}, status_code=400)
+
+    async def run(client):
+        from telethon.tl.functions.channels import GetFullChannelRequest
+
+        entity = await client.get_entity(username)
+        subs = 0
+        try:
+            full = await client(GetFullChannelRequest(entity))
+            subs = int(getattr(full.full_chat, "participants_count", 0) or 0)
+        except Exception as exc:  # noqa: BLE001 — 있으면 좋은 것이지 필수가 아니다
+            log.debug("구독자 수를 못 읽었습니다 (%s): %s", username, exc)
+        last = ""
+        async for msg in client.iter_messages(entity, limit=1):
+            last = msg.date.date().isoformat()
+        return entity, subs, last
+
+    try:
+        entity, subs, last = _run_telethon(run)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": _telegram_hint(exc)}, status_code=400)
+
+    chat_id = int(getattr(entity, "id", 0))
+    # Telethon의 채널 id는 앞에 `-100`이 붙어야 대화방 id가 된다
+    if chat_id > 0:
+        chat_id = int(f"-100{chat_id}")
+
+    store = ProfileStore(_my_dir())
+    profile = store.load(current_user())
+    if any(c.chat_id == chat_id for c in profile.channels):
+        return JSONResponse({"error": "이미 목록에 있습니다."}, status_code=400)
+
+    profile.channels.append(
+        TgChannel(
+            chat_id=chat_id,
+            name=getattr(entity, "title", "") or username,
+            username=getattr(entity, "username", "") or username,
+            kind=classify_channel(
+                getattr(entity, "title", "") or username, chat_type="public_channel"
+            ).value,
+            subscribers=subs,
+            last_post=last,
+            # **켜서 넣는다.** 골라서 넣은 것을 다시 켜라고 하면 두 번 일이다
+            enabled=True,
+        )
+    )
+    store.save(profile)
+    return {"chat_id": chat_id, "name": getattr(entity, "title", ""), "last_post": last}
+
+
 @app.post("/api/telegram/refresh")
 def api_telegram_refresh():
     """구독 채널 목록을 다시 받는다. **터미널에 미루지 않는다.**

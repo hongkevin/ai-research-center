@@ -1423,3 +1423,50 @@ export async function syncTgMessages(days = 7): Promise<{
   if (!r.ok) await fail(r);
   return r.json();
 }
+
+/* ── 추천 채널 ────────────────────────────────────────────────────────
+ *
+ * **고르게 하되 실측한 것만 줍니다.** 볼 채널 목록이 「내가 이미 들어가 있는
+ * 방」뿐이면, 무엇을 구독해야 하는지 모르는 사람에게 빈 목록은 계속 빈
+ * 목록입니다. 섹터 시드와 같은 문제이고 같은 답입니다.
+ *
+ * 전부 `arc telegram check`로 직접 확인했습니다 — 조사로 모은 이름에는
+ * 지어낸 것이 섞이고, 실제로 셋은 존재하지 않았습니다.
+ */
+export interface RecommendedChannel {
+  username: string;
+  title: string;
+  kind: string;
+  sector: string;
+  /** 확인 시점 스냅숏입니다 — 「지금 몇 명」이 아닙니다 */
+  subscribers: number;
+  note: string;
+  /** 이미 내 목록에 있는가 */
+  have: boolean;
+  /** 내가 맡은 섹터인가 */
+  mine: boolean;
+}
+
+export async function getRecommendedChannels(): Promise<{
+  checked_at: string;
+  channels: RecommendedChannel[];
+}> {
+  const r = await api(`/api/telegram/recommended`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/** 추천 채널을 목록에 넣습니다. **구독하지 않습니다** — 공개 채널은 안 들어가고도 읽힙니다. */
+export async function adoptChannel(username: string): Promise<{
+  chat_id: number;
+  name: string;
+  last_post: string;
+}> {
+  const r = await api(`/api/telegram/adopt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
