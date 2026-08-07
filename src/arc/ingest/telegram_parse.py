@@ -227,13 +227,18 @@ def entity_links(entities: Sequence[Mapping[str, object]] | None) -> tuple[str, 
     return tuple(seen)
 
 
-def permalink_for(chat_id: int, message_id: int, chat_type: str) -> str | None:
-    """딥링크. **공개 채널은 만들 수 없다.**
+def permalink_for(
+    chat_id: int, message_id: int, chat_type: str, username: str | None = None
+) -> str | None:
+    """딥링크.
 
-    비공개는 `t.me/c/{id}/{msg}`로 조립된다(내보내기의 `id`가 `-100` 접두 없는
-    그 값이다). 공개 채널은 내보내기 JSON에 username이 없어서 주소를 지어낼
-    방법이 없다 — **없는 것이 정상 상태**이지 파싱 실패가 아니다.
+    비공개는 `t.me/c/{id}/{msg}`로 조립된다(`id`가 `-100` 접두 없는 그 값이다).
+    공개 채널은 **username이 있어야** 주소가 된다 — 내보내기 JSON에는 없지만
+    Telethon 수집기는 알고 있어서 실어 보낸다. 없으면 `None`이고, 그건
+    **정상 상태**이지 파싱 실패가 아니다.
     """
+    if username:
+        return f"https://t.me/{username.lstrip('@')}/{message_id}"
     if chat_type.startswith("private") and chat_id > 0:
         return f"https://t.me/c/{chat_id}/{message_id}"
     return None
@@ -263,6 +268,7 @@ def parse_messages(
     chat_name: str,
     chat_type: str = "public_channel",
     kind: ChannelKind = ChannelKind.UNKNOWN,
+    username: str | None = None,
 ) -> tuple[list[Message], int]:
     """메시지 dict 리스트 → (`Message` 리스트, 건너뛴 수).
 
@@ -317,7 +323,7 @@ def parse_messages(
                 reactions=total,
                 edited=bool(raw.get("edited")),
                 has_photo=bool(raw.get("photo")),
-                permalink=permalink_for(chat_id, message_id, chat_type),
+                permalink=permalink_for(chat_id, message_id, chat_type, username),
                 time_is_local_guess=guessed,
             )
         )
@@ -333,11 +339,14 @@ def parse_export(chat: Mapping[str, object]) -> Channel:
     """
     chat_id = int(str(chat.get("id") or 0))
     name = str(chat.get("name") or "")
+    username = str(chat.get("username") or "") or None
     chat_type = str(chat.get("type") or "public_channel")
     raw = chat.get("messages")
     raw = raw if isinstance(raw, list) else []
 
-    first, skipped = parse_messages(raw, chat_id=chat_id, chat_name=name, chat_type=chat_type)
+    first, skipped = parse_messages(
+        raw, chat_id=chat_id, chat_name=name, chat_type=chat_type, username=username
+    )
     # 8,638건짜리 채널의 전량을 형태 통계에 넣을 이유가 없다. **최근 것**을
     # 본다 — 봇이 형식을 바꾸면 옛 메시지가 판정을 과거에 붙들어 둔다.
     kind = classify_channel(name, first[-CLASSIFY_SAMPLE:], chat_type=chat_type)
@@ -588,6 +597,23 @@ _LABEL = re.compile(r"([가-힣]{2,8})\s*:\s*")
 # 길이 제한에 잘려 오는 일이 잦다.
 _CODE_IN_NAME = re.compile(r"^(?P<name>[^(\n]+?)\s*\(\s*(?P<code>\d{6})?")
 
+# **실물에서는 코드가 괄호 밖에 `A043710`으로 붙는다.**
+#
+#     기업명: 코스리거글로벌(시가총액: 596억) A043710
+#
+# 괄호 안만 보던 파서는 「시가총액: 596억」을 집고 코드를 놓쳤다 — 실측
+# 400건에서 종목코드가 **전부 비어 있었다.** 괄호 안(구형)과 A접두(실물)를
+# 둘 다 본다.
+_CODE_A_PREFIX = re.compile(r"\bA(?P<code>\d{6})\b")
+
+# 「단기과열/투자경고 종목 현황 / 종목명 : 로보티즈 / 2026-08-05 : [투자주의]… 」
+# 실측 400건 중 38건(9.5%)이 이 형식이었다.
+_ALERT = re.compile(
+    r"^\s*(?P<title>[^\n]*(?:단기과열|투자경고|투자주의|투자위험)[^\n]*)\n"
+    r"(?P<rest>.*)",
+    re.DOTALL,
+)
+
 # 「✅ 안국약품(+2.31%) 📁 키워드 콜레스테롤 …」
 _HIGH52 = re.compile(
     r"^\s*(?P<mark>[✅❗️🔺🔻⭕️🟢🔴]+)?\s*"
@@ -625,12 +651,18 @@ def _parse_awake_disclosure(msg: Message) -> BotRow | None:
     if not fields:
         return None
     company = fields.get("기업명") or fields.get("회사명") or fields.get("종목명")
-    symbol = None
+    # **코드는 메시지 전체에서 찾는다.** 「기업명: 코스리거글로벌(시가총액:
+    # 596억) A043710」에서 `시가총액:`이 라벨로 잘려 코드가 다른 필드로
+    # 넘어간다 — 기업명 필드만 보면 실측 400건에서 코드가 전부 비었다.
+    a = _CODE_A_PREFIX.search(msg.text)
+    symbol = a.group("code") if a else None
     if company:
         hit = _CODE_IN_NAME.match(company)
         if hit:
             company = hit.group("name").strip()
-            symbol = hit.group("code")
+            symbol = symbol or hit.group("code")
+        # 이름 뒤에 붙은 괄호·코드 부스러기를 턴다.
+        company = _CODE_A_PREFIX.sub("", company).strip(" ()")
     headline = fields.get("보고서명") or fields.get("공시명") or fields.get("제목")
     try:
         at = dt.datetime(
@@ -653,6 +685,41 @@ def _parse_awake_disclosure(msg: Message) -> BotRow | None:
         symbol=symbol,
         headline=headline,
         url=msg.links[0] if msg.links else None,
+        fields=fields,
+        permalink=msg.permalink,
+    )
+
+
+def _parse_alert(msg: Message) -> BotRow | None:
+    """단기과열·투자경고·투자주의 알림.
+
+    **거래소가 붙이는 딱지라 공시와 성격이 다르다** — 회사가 낸 것이 아니라
+    시장이 그 종목에 붙인 표시다. 그래서 `headline`에 사유를 그대로 담고
+    `보고서명`으로 부르지 않는다.
+    """
+    m = _ALERT.match(msg.text)
+    if m is None:
+        return None
+    fields = _split_labels(m.group("rest"))
+    raw = (fields.get("종목명") or fields.get("기업명") or "").strip()
+    if not raw:
+        return None
+    # **라벨이 날짜라 안 잘린다.** 「종목명 : 로보티즈 / 2026-08-05 :
+    # [투자주의]투자경고종목 지정예고」가 통째로 한 값으로 들어온다 —
+    # 첫 줄이 종목명이고 나머지가 사유다.
+    lines = [x.strip() for x in raw.splitlines() if x.strip()]
+    company = lines[0] if lines else ""
+    reason = " ".join(lines[1:]).strip()
+    if not company:
+        return None
+    return BotRow(
+        format="awake_alert",
+        at=msg.at,
+        chat_name=msg.chat_name,
+        message_id=msg.message_id,
+        company=company or None,
+        headline=reason or m.group("title").strip() or None,
+        url=fields.get("공시링크") or (msg.links[0] if msg.links else None),
         fields=fields,
         permalink=msg.permalink,
     )
@@ -711,7 +778,10 @@ def _parse_notice(msg: Message) -> BotRow | None:
 
 
 # 순서가 있다. 공시 알림이 신고가 알림보다 먼저다 — 앞엣것이 더 좁다.
-_PARSERS = (_parse_awake_disclosure, _parse_notice, _parse_awake_high52)
+# **순서가 규칙이다** — 좁은 형식이 먼저다. 알림(`단기과열…`)은 공시 파서의
+# 타임스탬프 조건에 안 걸리므로 어디 있어도 되지만, 넓은 것이 앞에 오면
+# 좁은 것이 영영 안 돈다.
+_PARSERS = (_parse_awake_disclosure, _parse_alert, _parse_notice, _parse_awake_high52)
 
 
 def parse_bot_row(msg: Message) -> BotRow | None:

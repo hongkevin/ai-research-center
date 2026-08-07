@@ -52,15 +52,21 @@ class Fetched:
     name: str
     chat_type: str
     messages: list[dict]
+    # **내보내기 JSON에는 없는 것.** 공개 채널의 딥링크를 만들려면 username이
+    # 있어야 하는데, 내보내기는 안 주고 Telethon은 안다. 실어 보낸다.
+    username: str | None = None
 
     def as_export(self) -> dict:
-        """내보내기 JSON의 Chat 객체와 **같은 모양**."""
-        return {
+        """내보내기 JSON의 Chat 객체와 **같은 모양** + username."""
+        out = {
             "id": self.chat_id,
             "name": self.name,
             "type": self.chat_type,
             "messages": self.messages,
         }
+        if self.username:
+            out["username"] = self.username
+        return out
 
 
 def session_path(base: str | Path) -> Path:
@@ -209,4 +215,5 @@ async def fetch_channel(client, chat_id: int, *, limit: int = DEFAULT_LIMIT, sin
         name=name,
         chat_type=_chat_type(entity),
         messages=messages,
+        username=getattr(entity, "username", None),
     )
