@@ -342,14 +342,21 @@ def _nothing(
 ) -> Retrieval:
     """근거 없음으로 되돌린다. **모은 것을 비우고 이유와 대상만 남긴다.**
 
-    `keep_subject`가 이 함수의 전부다. 「공시에는 그 사실이 없다」면 회사는
-    남겨야 힌트 레인이 살고(공시에 없을 때가 기사가 가장 쓸모 있는 순간이다),
-    「그 회사가 우리에게 없다」면 **남기면 안 된다** — 엉뚱한 회사가 주어로
-    앉아 다음 턴까지 따라간다.
+    「공시에는 그 사실이 없다」면 회사는 남겨야 힌트 레인이 산다 — 공시에
+    없을 때가 기사가 가장 쓸모 있는 순간이다. 「그 회사가 우리에게 없다」면
+    남기면 안 된다.
+
+    **그런데 그 둘을 분기로 가르는 것은 약했다.** 실측: 「한화오션은?」이
+    엉뚱한 분기를 타고 현대로템을 이월했다. 그래서 규칙을 하나 더 둔다 —
+    **주어를 이어받아 얻었는데 아무것도 못 찾았으면 버린다.** 질문에서 직접
+    얻은 주어는 사용자가 그 회사를 말한 것이라 남겨도 되지만, 이어받은
+    주어는 「지금 질문도 그 회사에 관한 것」이라는 **추측**이고, 못 찾았다는
+    것은 그 추측이 틀렸다는 신호다.
     """
     out.reason = template.format(", ".join(tokens[:4]))
     out.unmatched = tokens
-    out.subject = out.cards[0] if (keep_subject and out.cards) else None
+    named_here = not out.carried
+    out.subject = out.cards[0] if (keep_subject and named_here and out.cards) else None
     out.cards = []
     out.passages = []
     out.keys = []

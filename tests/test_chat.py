@@ -643,3 +643,24 @@ class TestUnknownCompanyDoesNotLeak:
         r = retrieve("현대로템 영업이익률 어때?", [_card()])
         assert [c.symbol for c in r.cards] == ["064350"]
         assert r.next_context().symbols == ("064350",)
+
+    def test_a_carried_subject_is_dropped_when_nothing_matches(self):
+        """**이어받은 주어는 추측이다.** 못 찾았다는 것은 그 추측이 틀렸다는 신호다.
+
+        실측: 현대로템을 이어받은 상태에서 「한화오션은?」을 물었더니
+        현대로템이 다음 턴으로 또 넘어갔다.
+        """
+        from arc.chat.retrieval import Context
+
+        ctx = Context(symbols=("064350",), tokens=("영업이익률",), year=2026)
+        r = retrieve("한화오션은?", [_card()], context=ctx)
+        assert r.carried  # 이어받기는 일어났고
+        assert r.subject is None  # 그런데 못 찾았으니 버린다
+        assert r.next_context().symbols == ()
+
+    def test_a_carried_subject_survives_a_normal_follow_up(self):
+        from arc.chat.retrieval import Context
+
+        ctx = Context(symbols=("064350",), tokens=("영업이익률",), year=2026)
+        r = retrieve("부문별로는?", [_card()], context=ctx)
+        assert r.next_context().symbols == ("064350",)
