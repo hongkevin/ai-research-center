@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { AskPanel } from "@/components/ask/ask-panel";
 import { Board, BoardHint } from "@/components/board/board";
 import { PeerCompose } from "@/components/peer/peer-compose";
+import { PeerEdit } from "@/components/peer/peer-edit";
 import { PeerTable } from "@/components/peer/peer-table";
 import {
   Dialog,
@@ -95,6 +96,8 @@ export default function Workbench() {
   const [tab, setTab] = useState<"board" | "ask">("board");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
+  // 피어 그룹 고치기 — 이름과 구성원. 한 번 만들고 끝나는 것이 아니다.
+  const [editingPeer, setEditingPeer] = useState(false);
   const [sections, setSections] = useState<DocSection[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const { phase, steps, error, elapsed, run } = useGeneration();
@@ -457,7 +460,10 @@ export default function Workbench() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setOpen(null)}
+                  onClick={() => {
+                    setOpen(null);
+                    setEditingPeer(false);
+                  }}
                   className="-ml-2 h-7 text-[12px] text-muted-foreground"
                 >
                   ← 보드로
@@ -465,7 +471,29 @@ export default function Workbench() {
                 <span className="text-[12px] text-muted-foreground">
                   {open.members?.length ?? 0}종목
                 </span>
+                <Button
+                  size="sm"
+                  variant={editingPeer ? "secondary" : "outline"}
+                  onClick={() => setEditingPeer((v) => !v)}
+                  className="h-7 text-[12px]"
+                >
+                  {editingPeer ? "닫기" : "그룹 수정"}
+                </Button>
               </div>
+              {editingPeer && (
+                <div className="mb-4">
+                  <PeerEdit
+                    cardId={open.id}
+                    name={open.company}
+                    members={open.members ?? []}
+                    onCancel={() => setEditingPeer(false)}
+                    onDone={() => {
+                      setEditingPeer(false);
+                      void openCard(open.id);
+                    }}
+                  />
+                </div>
+              )}
               <PeerTable
                 table={
                   open.peer_table ?? {

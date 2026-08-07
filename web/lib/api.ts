@@ -812,7 +812,8 @@ export async function suggestPeers(
 export async function createPeerCard(
   name: string,
   symbols: string[],
-): Promise<{ card_id: string; members: PeerMember[] }> {
+  /** 카드가 없는 종목은 **수치만** 자동으로 채운다 — 리포트를 안 쓴다 */
+): Promise<{ card_id: string; members: PeerMember[]; filling: string[] }> {
   const r = await api(`/api/peers`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -825,11 +826,25 @@ export async function createPeerCard(
 export async function setPeerMembers(
   cardId: string,
   symbols: string[],
-): Promise<{ members: PeerMember[]; attention: string[] }> {
+): Promise<{ members: PeerMember[]; attention: string[]; filling: string[] }> {
   const r = await api(`/api/cards/${cardId}/members`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ symbols }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/** 피어 그룹 이름을 고친다. **이름이 곧 그 그룹의 정체다.** */
+export async function renameCard(
+  cardId: string,
+  name: string,
+): Promise<{ company: string }> {
+  const r = await api(`/api/cards/${cardId}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
   });
   if (!r.ok) await fail(r);
   return r.json();
