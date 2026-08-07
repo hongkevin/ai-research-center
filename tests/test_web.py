@@ -182,6 +182,14 @@ class TestViewModel:
             segments = None
             business = None
             narration = None
+            # **엔진이 계산하는 것은 전부 여기 있다** (D73). 가짜가 진짜보다
+            # 얇으면 화면이 버리는 필드를 테스트가 못 잡는다 — 실제로 못 잡았다.
+            lenses = None
+            report_info = None
+            valuation = None
+            segment_profit = None
+            info_error = None
+            quarters = None
             # 파이프라인 단계 기록. 실제 ReportResult는 항상 채운다.
             stages = [
                 type(
