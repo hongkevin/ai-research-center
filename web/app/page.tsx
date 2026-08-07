@@ -5,7 +5,7 @@ import { PenLineIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import { AskPanel } from "@/components/ask/ask-panel";
+import { AskWidget } from "@/components/ask/ask-widget";
 import { Board, BoardHint } from "@/components/board/board";
 import { Coverage } from "@/components/profile/coverage";
 import { PeerCompose } from "@/components/peer/peer-compose";
@@ -94,7 +94,7 @@ export default function Workbench() {
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [open, setOpen] = useState<CardDetail | null>(null);
   // 보드와 채팅. **카드를 여는 것은 탭이 아니라 보드 안의 행동이다.**
-  const [tab, setTab] = useState<"board" | "ask" | "me">("board");
+  const [tab, setTab] = useState<"board" | "me">("board");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
   // 피어 그룹 고치기 — 이름과 구성원. 한 번 만들고 끝나는 것이 아니다.
@@ -320,7 +320,6 @@ export default function Workbench() {
           {(
             [
               ["board", "보드"],
-              ["ask", "물어보기"],
               ["me", "내 커버리지"],
             ] as const
           ).map(([key, label]) => (
@@ -454,8 +453,6 @@ export default function Workbench() {
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
           {tab === "me" ? (
             <Coverage />
-          ) : tab === "ask" ? (
-            <AskPanel cardCount={cards.length} />
           ) : open && open.kind === "peer" ? (
             /* **피어 카드는 본문이 없다.** 표가 본문이다 — 단계 레일도
                근거 패널도 붙지 않는다(그건 종목 카드의 것이다). */
@@ -708,6 +705,8 @@ export default function Workbench() {
           )}
         </div>
       </div>
+
+      <AskWidget cardCount={cards.length} />
 
       {open && editingSection && (
         <SectionEditor
