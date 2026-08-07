@@ -62,6 +62,22 @@ class TestNoise:
         assert is_noise("SK하이닉스 또 -8%↓…코스피 6400선 무너졌다")
         assert is_noise("SK하이닉스, 10프로 넘게 하락")
 
+    def test_truncated_bracket_tags_are_caught(self):
+        """**제목이 잘려 온다.** 네이버 검색 API가 「…[주식 초고…」처럼
+        대괄호 안에서 끊어 주므로 `초고수`가 완성되지 않는다 — 실측으로
+        수급 기사가 통과했다."""
+        assert is_noise("이틀 연속 SK하이닉스 던졌다…삼성전기는 매수 [주식 초고...")
+        assert is_noise("오늘의 매매 [증시 브리")
+
+    def test_real_news_still_survives_the_wider_net(self):
+        """넓히면서 정상 기사를 잡으면 안 된다."""
+        for title in (
+            "삼성전기 베트남, AI 기판 생산라인 2.4배 확대 나섰다",
+            "삼성물산, 카타르 플랜트 수주",
+            "삼성전기·LG이노텍, 자율주행 넘어 휴머노이드 눈 잡는다",
+        ):
+            assert not is_noise(title), title
+
     def test_multi_company_roundups_are_noise(self):
         """여러 회사를 늘어놓는 묶음 기사는 우리 회사 얘기가 아니라 목록이다."""
         assert is_noise("[제약 브리핑] 동국제약·차바이오·부광약품·파마리서치")
