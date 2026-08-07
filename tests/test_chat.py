@@ -616,3 +616,30 @@ def test_check_answer_uses_the_same_rules_as_the_report_gate():
     v = check_answer("매출은 반드시 늘어난다 [c1].", r)
     assert v.rejected  # 단정 표현 — G0의 §3 불변식 4
     assert v.text == ""
+
+
+class TestUnknownCompanyDoesNotLeak:
+    """**「그 사실이 없다」와 「그 회사가 없다」는 다르다.**
+
+    실측으로 밟았다 — 「한화오션 영업이익률?」이 카드에 없는 회사인데
+    한국항공우주를 주어로 남겼고, 그게 다음 턴으로 이월됐다. 다른 회사의
+    숫자로 답하는 것이 이 시스템이 할 수 있는 가장 나쁜 오답이다.
+    """
+
+    def test_an_unknown_company_carries_nothing(self):
+        r = retrieve("한화오션 영업이익률 어때?", [_card()])
+        assert r.cards == []
+        assert r.subject is None
+        assert r.next_context().symbols == ()
+
+    def test_a_known_company_without_the_fact_keeps_the_subject(self):
+        """공시에 없을 때가 **기사 힌트가 가장 쓸모 있는 순간**이다."""
+        r = retrieve("현대로템 수주잔고 어때?", [_card()])
+        assert r.subject is not None
+        assert r.subject.symbol == "064350"
+        assert r.next_context().symbols == ("064350",)
+
+    def test_a_normal_question_is_unaffected(self):
+        r = retrieve("현대로템 영업이익률 어때?", [_card()])
+        assert [c.symbol for c in r.cards] == ["064350"]
+        assert r.next_context().symbols == ("064350",)

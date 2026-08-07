@@ -319,6 +319,11 @@ def retrieve(
             out,
             unmatched,
             "«{}»가 무엇을 가리키는지 카드에서 찾지 못했습니다. 종목명을 함께 적어 주십시오.",
+            # **여기서는 주어를 남기지 않는다.** 못 찾은 그 말이 회사 이름일
+            # 수 있고, 그런데 다른 회사를 주어로 남기면 그것이 다음 턴으로
+            # 넘어간다 — 실측: 「한화오션 영업이익률?」이 한국항공우주를
+            # 이월했다. 「공시에 그 사실이 없다」와 「그 회사가 없다」는 다르다.
+            keep_subject=False,
         )
     if not hit:
         # 회사·기간만 물었다면 요약이 답이다 ("현대로템 어때").
@@ -332,12 +337,19 @@ def retrieve(
     return out
 
 
-def _nothing(out: Retrieval, tokens: list[str], template: str) -> Retrieval:
-    """근거 없음으로 되돌린다. **모은 것을 비우고 이유와 대상만 남긴다.**"""
+def _nothing(
+    out: Retrieval, tokens: list[str], template: str, *, keep_subject: bool = True
+) -> Retrieval:
+    """근거 없음으로 되돌린다. **모은 것을 비우고 이유와 대상만 남긴다.**
+
+    `keep_subject`가 이 함수의 전부다. 「공시에는 그 사실이 없다」면 회사는
+    남겨야 힌트 레인이 살고(공시에 없을 때가 기사가 가장 쓸모 있는 순간이다),
+    「그 회사가 우리에게 없다」면 **남기면 안 된다** — 엉뚱한 회사가 주어로
+    앉아 다음 턴까지 따라간다.
+    """
     out.reason = template.format(", ".join(tokens[:4]))
     out.unmatched = tokens
-    # 회사는 남긴다 — 「공시에는 없다」와 「어느 회사인지 모른다」는 다르다.
-    out.subject = out.cards[0] if out.cards else None
+    out.subject = out.cards[0] if (keep_subject and out.cards) else None
     out.cards = []
     out.passages = []
     out.keys = []
