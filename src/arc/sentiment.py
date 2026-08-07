@@ -32,6 +32,13 @@ from dataclasses import dataclass, field
 
 from arc.ingest.telegram_parse import ChannelKind, Message
 
+# **내 것이 먼저다.** 언급이 아무리 몰려도 내가 안 보는 종목은 그 아래다 —
+# 아침에 알고 싶은 것은 「시장에서 뜬 것」이 아니라 「내 것 중에 뜬 것」이다.
+#
+# 「내 섹터」는 자유 텍스트라 코드가 못 읽는다(D68). 대신 **피어 그룹**을
+# 쓴다 — 그게 그 섹터의 실질적 정의이고, 사람이 확정해 고정한 것이다.
+MINE_RANK = {"cover": 0, "watch": 1, "peer": 2}
+
 # 한국 시장의 하루. 정규장 09:00~15:30(동시호가 포함 15:20~15:30).
 SESSIONS: tuple[tuple[str, str, int, int], ...] = (
     ("pre", "장전", 0, 9),
@@ -62,8 +69,14 @@ class Mention:
     # 장전/장중/장후 건수. **언제 돌았는지가 절반이다.**
     by_session: dict[str, int] = field(default_factory=dict)
     samples: list[dict] = field(default_factory=list)
-    # 내 커버·관심 종목인가. 화면이 이걸로 위에 올린다.
+    # **내 것인가, 어느 정도로.** 화면이 이걸로 위에 올린다.
+    #   cover 내가 리포트를 내는 종목
+    #   watch 옆에서 보는 종목
+    #   peer  내 피어 그룹 안에 있는 종목 — 「내 섹터」의 실질적 정의다
+    #   ""    나머지
     mine: str = ""
+    # 어느 피어 그룹에서 왔는가 (`mine == "peer"`일 때).
+    via: str = ""
 
     @property
     def peak(self) -> str:
@@ -118,14 +131,16 @@ def build_sentiment(
     *,
     day: dt.date,
     mine: dict[str, str] | None = None,
+    peers: dict[str, str] | None = None,
     samples_per_mention: int = 3,
 ) -> Sentiment:
     """메시지 + 급증 목록 → 화면이 쓸 하루치 센티. **순수 함수다.**
 
-    `mine`은 `{종목코드: "cover"|"watch"}`. 내 종목이 도는지가 가장 먼저
-    알고 싶은 것이라 위로 올린다.
+    `mine`은 `{종목코드: "cover"|"watch"}`, `peers`는 `{종목코드: 그룹이름}`.
+    **내 것이 먼저다** — 언급이 아무리 몰려도 내가 안 보는 종목은 그 아래다.
     """
     mine = mine or {}
+    peers = peers or {}
     today = [m for m in messages if m.day == day]
     out = Sentiment(day=day.isoformat(), total=len(today))
 
@@ -156,12 +171,13 @@ def build_sentiment(
                 channels=tuple(surge.channels),
                 by_session=sessions,
                 samples=picked,
-                mine=mine.get(surge.symbol, ""),
+                mine=mine.get(surge.symbol) or ("peer" if surge.symbol in peers else ""),
+                via=peers.get(surge.symbol, "") if surge.symbol not in mine else "",
             )
         )
 
-    # **내 종목이 먼저다.** 그다음이 급증 배수 — 아침에 알고 싶은 순서다.
-    out.mentions.sort(key=lambda x: (0 if x.mine else 1, -x.ratio, -x.today))
+    # 커버 → 관심 → 피어 그룹 → 나머지. 그 안에서 급증 배수 순이다.
+    out.mentions.sort(key=lambda x: (MINE_RANK.get(x.mine, 9), -x.ratio, -x.today))
 
     counts: dict[tuple[str, str], int] = {}
     for m in today:
@@ -179,10 +195,13 @@ def _note(s: Sentiment) -> str:
     """맨 위 한 줄. **없으면 없다고 말한다.**"""
     if s.total == 0:
         return "이 날짜에 받아 둔 메시지가 없습니다 — `arc telegram sync`로 가져옵니다."
-    mine = sum(1 for m in s.mentions if m.mine)
     parts = [f"메시지 {s.total:,}건"]
     if s.mentions:
         parts.append(f"급증 {len(s.mentions)}종목")
-    if mine:
-        parts.append(f"그중 내 종목 {mine}건")
+    owned = sum(1 for m in s.mentions if m.mine in ("cover", "watch"))
+    near = sum(1 for m in s.mentions if m.mine == "peer")
+    if owned:
+        parts.append(f"내 종목 {owned}건")
+    if near:
+        parts.append(f"내 피어 {near}건")
     return " · ".join(parts)

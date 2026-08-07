@@ -22,7 +22,9 @@ from arc.store.profile import (
     Covered,
     Profile,
     ProfileStore,
+    TgChannel,
     add_stock,
+    merge_channels,
     pin_peer,
     remove_stock,
     set_sectors,
@@ -38,12 +40,15 @@ class TestWhatIsStored:
         굳는다.
         """
         fields = set(Profile.__dataclass_fields__)
+        # **전부 사람이 정한 것이다.** 커버 종목·섹터·고정한 피어 그룹·볼 채널 —
+        # 출처가 본인이라 쌓아도 안전하다.
         assert fields == {
             "uid",
             "display_name",
             "sectors",
             "stocks",
             "pinned_peers",
+            "channels",
             "updated_at",
         }
         for banned in ("summary", "notes_ai", "insights", "memory"):
@@ -209,3 +214,81 @@ class TestOldSchema:
     def test_a_garbage_kind_falls_back_to_cover(self, tmp_path):
         p = self._write(tmp_path, {"symbol": "064350", "kind": "아무거나"})
         assert p.stocks[0].kind == COVER
+
+
+class TestChannels:
+    """볼 채널도 **커버 종목처럼 고른다.**
+
+    다 긁으면 하루 3,000건이 쏟아지고 그중 대부분은 이미 DART·뉴스 API로
+    갖고 있는 것이다(D66).
+    """
+
+    def test_nothing_is_on_by_default(self):
+        """목록에 나타났다고 자동으로 긁으면 고르는 의미가 없다."""
+        p = merge_channels(Profile(), [TgChannel(chat_id=1, name="A")])
+        assert p.enabled_channels() == []
+
+    def test_enabling_survives_a_refresh(self):
+        """이름·구독자는 갱신하되 **사람이 켜 둔 것은 지킨다** — 안 그러면
+        목록을 새로 받을 때마다 다시 골라야 한다."""
+        p = merge_channels(Profile(), [TgChannel(chat_id=1, name="A")])
+        p.channels[0].enabled = True
+        merge_channels(p, [TgChannel(chat_id=1, name="A(개명)", subscribers=100)])
+        assert p.enabled_channels() == [1]
+        assert p.channels[0].name == "A(개명)"
+        assert p.channels[0].subscribers == 100
+
+    def test_a_channel_that_vanished_is_kept_if_it_was_on(self):
+        """나갔거나 못 읽은 채널을 조용히 지우면 켜 둔 표시가 사라진다."""
+        p = merge_channels(Profile(), [TgChannel(chat_id=1, name="A")])
+        p.channels[0].enabled = True
+        merge_channels(p, [TgChannel(chat_id=2, name="B")])
+        assert 1 in p.enabled_channels()
+
+    def test_a_channel_that_vanished_is_dropped_if_it_was_off(self):
+        p = merge_channels(Profile(), [TgChannel(chat_id=1, name="A")])
+        merge_channels(p, [TgChannel(chat_id=2, name="B")])
+        assert [c.chat_id for c in p.channels] == [2]
+
+    def test_trusted_is_broker_and_research(self):
+        """추천 목록의 기준 — 증권사 공식·리서치가 위로 간다."""
+        assert TgChannel(chat_id=1, kind="broker").trusted
+        assert TgChannel(chat_id=1, kind="research").trusted
+        assert not TgChannel(chat_id=1, kind="chatter").trusted
+        assert not TgChannel(chat_id=1, kind="bot_feed").trusted
+
+    def test_it_round_trips(self, tmp_path):
+        store = ProfileStore(tmp_path)
+        p = merge_channels(Profile(uid="u1"), [TgChannel(chat_id=-100123, name="A", kind="broker")])
+        p.channels[0].enabled = True
+        store.save(p)
+        back = store.load("u1")
+        assert back.enabled_channels() == [-100123]
+        assert back.channels[0].kind == "broker"
+
+    def test_an_old_profile_without_channels_is_fine(self, tmp_path):
+        (tmp_path / "profile.json").write_text(
+            json.dumps({"uid": "u1", "sectors": ["방산"]}), encoding="utf-8"
+        )
+        assert ProfileStore(tmp_path).load("u1").channels == []
+
+    def test_a_big_channel_can_be_dead(self):
+        """**구독자 수만 보면 시체를 잡는다.**
+
+        실측: 박석중의 글로벌전략 20,437명 · 219일째 정지, wemakebull
+        18,638명 · 943일째 정지. 규모는 남고 채널은 죽는다.
+        """
+        import datetime as dt
+
+        today = dt.date(2026, 8, 7)
+        dead = TgChannel(chat_id=1, subscribers=20437, last_post="2025-12-31")
+        alive = TgChannel(chat_id=2, subscribers=1917, last_post="2026-08-07")
+        assert dead.stale(today) is True
+        assert alive.stale(today) is False
+
+    def test_an_unknown_last_post_is_not_dead(self):
+        """**모르는 것을 죽었다고 하지 않는다.**"""
+        import datetime as dt
+
+        assert TgChannel(chat_id=1).stale(dt.date(2026, 8, 7)) is False
+        assert TgChannel(chat_id=1, last_post="깨진값").stale(dt.date(2026, 8, 7)) is False

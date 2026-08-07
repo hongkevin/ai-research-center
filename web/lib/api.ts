@@ -1072,8 +1072,10 @@ export interface SentiMention {
   /** 장전/장중/장후 건수 — **언제 돌았는지가 절반이다** */
   by_session: Record<string, number>;
   samples: SentiSample[];
-  /** 내 커버·관심 종목인가 (cover | watch | "") */
+  /** `cover` 커버 · `watch` 관심 · `peer` 내 피어 그룹 · `""` 나머지 */
   mine: string;
+  /** 어느 피어 그룹에서 왔는가 (`mine === "peer"`일 때) */
+  via: string;
 }
 
 export interface Sentiment {

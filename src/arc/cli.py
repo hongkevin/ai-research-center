@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import os
 from pathlib import Path
 
@@ -19,6 +20,8 @@ from arc.data.base import ConsolidationType
 from arc.data.kr.dart import DartProvider
 from arc.finmodel.metrics import extract_metrics, fmt_krw
 from arc.pipeline.earnings_review import build_report
+
+log = logging.getLogger("arc.cli")
 
 app = typer.Typer(add_completion=False, help="AI Research Center — 실적 리뷰 노트 생성")
 
@@ -475,17 +478,48 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
 
     from arc.ingest.telegram_collect import fetch_dialogs
     from arc.ingest.telegram_parse import classify_channel
+    from arc.store.profile import ProfileStore, TgChannel, merge_channels
 
     async def run() -> None:
+        from telethon.tl.functions.channels import GetFullChannelRequest
+
         client = _tg_client()
         await client.start()
         rows = await fetch_dialogs(client, limit=limit)
-        await client.disconnect()
-        typer.echo(f"\n  채널 {len(rows)}개\n")
+        found: list[TgChannel] = []
         for r in rows:
-            kind = classify_channel(r["name"], chat_type=r["chat_type"])
-            typer.echo(f"  {r['chat_id']!s:>14}  {kind.value:<9} {r['unread']:>6}  {r['name']}")
-        typer.echo("")
+            subs = 0
+            try:
+                entity = await client.get_entity(r["chat_id"])
+                full = await client(GetFullChannelRequest(entity))
+                subs = int(getattr(full.full_chat, "participants_count", 0) or 0)
+            except Exception as exc:  # noqa: BLE001 — 있으면 좋은 것이지 필수가 아니다
+                log.debug("구독자 수를 못 읽었습니다 (%s): %s", r["name"], exc)
+            found.append(
+                TgChannel(
+                    chat_id=r["chat_id"],
+                    name=r["name"],
+                    username=r.get("username") or "",
+                    kind=classify_channel(r["name"], chat_type=r["chat_type"]).value,
+                    subscribers=subs,
+                )
+            )
+        await client.disconnect()
+
+        # **화면이 고르게 하려면 목록이 프로필에 있어야 한다.** 켜 둔 표시는
+        # 지키고 이름·구독자·분류만 갱신한다.
+        store = ProfileStore(_tg_store())
+        store.save(merge_channels(store.load(), found))
+
+        typer.echo(f"\n  채널 {len(found)}개 (프로필에 저장됨)\n")
+        on = {c.chat_id for c in store.load().channels if c.enabled}
+        for c in sorted(found, key=lambda x: (not x.trusted, -x.subscribers)):
+            mark = "●" if c.chat_id in on else "○"
+            typer.echo(f"  {mark} {c.kind:<9} {c.subscribers:>8,}  {c.name[:32]:34} {c.chat_id}")
+        typer.secho(
+            "\n  「커버리지」 탭에서 켜고 끕니다 — 켜 둔 채널만 sync가 긁습니다.\n",
+            fg=typer.colors.CYAN,
+        )
 
     asyncio.run(run())
 
@@ -531,18 +565,29 @@ def telegram_check(
                 entity = await client.get_entity(name)
                 full = await client(GetFullChannelRequest(entity))
                 subs = getattr(full.full_chat, "participants_count", None)
-                rows.append((subs or 0, name, getattr(entity, "title", "") or "", "있음"))
+                # **마지막 글을 함께 본다.** 구독자 수만 보면 시체를 잡는다 —
+                # 20,437명짜리 채널이 8개월째 정지인 경우가 실제로 있다.
+                last = ""
+                async for msg in client.iter_messages(entity, limit=1):
+                    last = msg.date.date().isoformat()
+                rows.append((subs or 0, name, getattr(entity, "title", "") or "", last))
                 ok += 1
             except Exception as exc:  # noqa: BLE001 — 없는 채널이 정상 결과다
-                rows.append((-1, name, f"{type(exc).__name__}", "없음"))
+                rows.append((-1, name, f"{type(exc).__name__}", ""))
                 miss += 1
         await client.disconnect()
         rows.sort(key=lambda r: -r[0])
+        today = dt.datetime.now(dt.UTC).date()
         typer.echo("")
-        for subs, name, title, state in rows:
-            mark = "✓" if state == "있음" else "✗"
+        for subs, name, title, last in rows:
+            mark = "✓" if subs >= 0 else "✗"
             count = f"{subs:>9,}" if subs >= 0 else "        -"
-            typer.echo(f"  {mark} {count}  @{name:<24} {title[:40]}")
+            age = ""
+            if last:
+                gap = (today - dt.date.fromisoformat(last)).days
+                age = f"{last} ({gap}일 전)" if gap > 30 else last
+            flag = " 💀" if last and (today - dt.date.fromisoformat(last)).days > 30 else ""
+            typer.echo(f"  {mark} {count}  {age:<20} @{name:<22} {title[:28]}{flag}")
         typer.secho(f"\n  확인 {ok}개 · 없음 {miss}개\n", fg=typer.colors.GREEN)
 
     asyncio.run(run())
@@ -562,14 +607,26 @@ def telegram_sync(
     import datetime as dt
     import json
 
-    from arc.ingest.telegram_collect import fetch_channel, fetch_dialogs
+    from arc.ingest.telegram_collect import fetch_channel
+    from arc.store.profile import ProfileStore
 
     async def run() -> None:
         client = _tg_client()
         await client.start()
         targets = list(chat or [])
         if not targets:
-            targets = [r["chat_id"] for r in await fetch_dialogs(client)]
+            # **켜 둔 것만 긁는다.** 다 긁으면 하루 3,000건이 쏟아지고 그중
+            # 대부분은 이미 DART·뉴스 API로 갖고 있다(D66).
+            targets = ProfileStore(_tg_store()).load().enabled_channels()
+        if not targets:
+            typer.secho(
+                "\n  켜 둔 채널이 없습니다 — `arc telegram channels`로 목록을 받고\n"
+                "  「커버리지」 탭에서 볼 채널을 고르십시오.\n"
+                "  (전부 긁으려면 --chat 으로 직접 지정하십시오)\n",
+                fg=typer.colors.YELLOW,
+            )
+            await client.disconnect()
+            return
         since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
 
         out_dir = _tg_store() / "telegram"

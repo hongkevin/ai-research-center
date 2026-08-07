@@ -91,19 +91,30 @@ export function Senti() {
       {data.total > 0 && <Rhythm data={data} />}
 
       {data.mentions.length > 0 ? (
-        <section>
-          <h3 className="mb-2 border-b pb-1.5 text-[12px] font-semibold">
-            언급 급증{" "}
-            <span className="font-normal text-muted-foreground">
-              기준 기간 일평균 대비
-            </span>
-          </h3>
-          <div className="divide-y">
-            {data.mentions.map((m) => (
-              <MentionRow key={m.symbol} mention={m} />
-            ))}
-          </div>
-        </section>
+        <>
+          {/* **내 것이 먼저다.** 언급이 아무리 몰려도 내가 안 보는 종목은
+              그 아래다 — 아침에 알고 싶은 것은 「시장에서 뜬 것」이 아니라
+              「내 것 중에 뜬 것」이다. 순서만 바꾸면 눈에 안 띄어서
+              **구획을 나눈다.** */}
+          <MentionGroup
+            title="내 커버·관심 종목"
+            hint="리포트를 내거나 옆에서 보는 종목"
+            mentions={data.mentions.filter(
+              (m) => m.mine === "cover" || m.mine === "watch",
+            )}
+          />
+          <MentionGroup
+            title="내 피어 그룹"
+            hint="확정해 고정한 그룹 안의 종목 — 「내 섹터」의 실질적 정의입니다"
+            mentions={data.mentions.filter((m) => m.mine === "peer")}
+          />
+          <MentionGroup
+            title="그 밖"
+            hint="시장에서 돌지만 내 목록에는 없는 종목"
+            mentions={data.mentions.filter((m) => !m.mine)}
+            muted
+          />
+        </>
       ) : (
         <div className="rounded-lg border border-dashed px-4 py-6">
           <p className="text-[14px] font-medium">아직 볼 것이 없습니다.</p>
@@ -154,6 +165,40 @@ function Rhythm({ data }: { data: Sentiment }) {
   );
 }
 
+function MentionGroup({
+  title,
+  hint,
+  mentions,
+  muted = false,
+}: {
+  title: string;
+  hint: string;
+  mentions: SentiMention[];
+  muted?: boolean;
+}) {
+  // **빈 구획을 세우지 않는다.** 「내 종목 0건」이 매일 떠 있으면 눈이
+  // 그 자리를 지나치게 된다.
+  if (mentions.length === 0) return null;
+  return (
+    <section className={cn(muted && "opacity-75")}>
+      <h3 className="mb-1 flex items-baseline gap-2 border-b pb-1.5 text-[12px] font-semibold">
+        {title}
+        <span className="font-mono font-normal text-muted-foreground">
+          {mentions.length}
+        </span>
+        <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+          {hint}
+        </span>
+      </h3>
+      <div className="divide-y">
+        {mentions.map((m) => (
+          <MentionRow key={m.symbol} mention={m} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function MentionRow({ mention: m }: { mention: SentiMention }) {
   const [open, setOpen] = useState(false);
   const total = SESSIONS.reduce((a, s) => a + (m.by_session[s] ?? 0), 0);
@@ -166,7 +211,7 @@ function MentionRow({ mention: m }: { mention: SentiMention }) {
       >
         <span className="text-[13.5px] font-medium">
           {/* 내 종목이 도는 것이 가장 먼저 알고 싶은 것이다 */}
-          {m.mine && (
+          {(m.mine === "cover" || m.mine === "watch") && (
             <span className="mr-1 text-[10.5px] text-ok">
               {m.mine === "cover" ? "커버" : "관심"}
             </span>
@@ -175,6 +220,7 @@ function MentionRow({ mention: m }: { mention: SentiMention }) {
         </span>
         <span className="font-mono text-[11px] text-muted-foreground">
           {m.symbol}
+          {m.via && <span className="ml-1.5 font-sans">· {m.via}</span>}
         </span>
 
         {/* 시간대 분포 — **언제 돌았는지가 절반이다** */}
