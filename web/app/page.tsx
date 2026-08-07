@@ -113,6 +113,12 @@ export default function Workbench() {
   >("brief");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
+  // 커버리지에서 「피어 그룹 만들기」를 누르면 그 섹터의 커버 종목이 씨앗으로
+  // 따라온다 — **다시 치게 하지 않는다.**
+  const [peerSeeds, setPeerSeeds] = useState<
+    { symbol: string; company: string }[]
+  >([]);
+  const [peerName, setPeerName] = useState("");
   // 피어 그룹 고치기 — 이름과 구성원. 한 번 만들고 끝나는 것이 아니다.
   const [editingPeer, setEditingPeer] = useState(false);
   const [sections, setSections] = useState<DocSection[]>([]);
@@ -471,8 +477,12 @@ export default function Workbench() {
             <DialogTitle>피어 그룹 만들기</DialogTitle>
           </DialogHeader>
           <PeerCompose
+            key={`${peerName}-${peerSeeds.length}`}
+            initialSeeds={peerSeeds}
+            initialName={peerName}
             onCreated={(id) => {
               setComposingPeer(false);
+              setTab("peer");
               void openCard(id);
             }}
           />
@@ -487,7 +497,19 @@ export default function Workbench() {
       >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
           {tab === "me" ? (
-            <Coverage />
+            <Coverage
+              onOpenCard={(id) => {
+                setTab("peer");
+                void openCard(id);
+              }}
+              onComposePeer={(seeds, name) => {
+                setPeerSeeds(
+                  seeds.map((symbol) => ({ symbol, company: symbol })),
+                );
+                setPeerName(name);
+                setComposingPeer(true);
+              }}
+            />
           ) : tab === "senti" ? (
             <Senti />
           ) : tab === "brief" ? (
@@ -686,7 +708,14 @@ export default function Workbench() {
                 </span>
                 <span className="flex items-center gap-2">
                   {tab === "peer" ? (
-                    <Button size="sm" onClick={() => setComposingPeer(true)}>
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setPeerSeeds([]);
+                        setPeerName("");
+                        setComposingPeer(true);
+                      }}
+                    >
                       피어 그룹 만들기
                     </Button>
                   ) : (
