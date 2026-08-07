@@ -613,3 +613,95 @@ export async function eventsUrl(jobId: string): Promise<string> {
   const q = token ? `?access_token=${encodeURIComponent(token)}` : "";
   return `${BASE}/api/jobs/${jobId}/events${q}`;
 }
+
+/* ── 리서치 채팅 ────────────────────────────────────────────────────
+ *
+ * 인터뷰가 준 가장 큰 발견: *"리포트 쓰는 시간보다 훨씬 많은 비중은 클라이언트
+ * 리퀘스트"* — 하루 10~15건. 일반 챗봇이 아니라 **모르면 모른다고 하는** 것이
+ * 설계 원칙이다.
+ */
+
+/** 답이 딛고 선 것 하나. **항목마다 다르다** (D36). */
+export interface AskSource {
+  /** `"number"` = 수치 하나 · `"card"` = 카드 전체 */
+  kind: string;
+  /** 본문의 `[c1]` */
+  marker: string;
+  card_id: string;
+  symbol: string;
+  company: string;
+  period_label: string;
+  key: string;
+  label: string;
+  value: string;
+  formula: string;
+  sections: string[];
+  dataset: string;
+  document: string;
+  /** 공시 뷰어 — 눌렀던 숫자의 그 절로 간다 (D44) */
+  verify_url: string;
+  source_url: string;
+}
+
+export interface AskArticle {
+  /** 숫자가 `⟨수치⟩`로 가려진 제목 */
+  title: string;
+  url: string;
+  press: string;
+  date: string;
+}
+
+/** 기사에서 온 추측. **검증한 것이 아니라 되짚을 수 있는 것이다** (D45). */
+export interface AskHint {
+  text: string;
+  articles: AskArticle[];
+}
+
+/**
+ * 다음 질문에 되돌려 줄 것.
+ *
+ * **서버는 대화를 안 들고 있다.** 화면이 이걸 들고 있다가 다음 요청에 그대로
+ * 넘긴다 — 워커가 늘어나도 대화가 갈라지지 않는다.
+ */
+export interface AskContext {
+  symbols: string[];
+  tokens: string[];
+  year: number | null;
+}
+
+export interface Answer {
+  /** 검증 레인만(`facts` + `analysis`). **힌트는 여기 없다.** */
+  text: string;
+  facts: string;
+  analysis: string;
+  hints: AskHint[];
+  sources: AskSource[];
+  unanswered: string[];
+  /** 근거에 연결됐는가. 확신도가 아니다 */
+  grounded: boolean;
+  rejected: string[];
+  unsourced: string[];
+  /** D4로 답을 안 낸 이유. 비어 있지 않으면 답이 없다 */
+  refused: string;
+  cards: { tag: string; card_id: string; symbol: string; company: string }[];
+  context: AskContext;
+  /** 직전 턴에서 이어받은 것. **비어 있지 않으면 반드시 보여준다** */
+  carried_over: string[];
+  used_llm: boolean;
+  model: string;
+  cost_usd: number | null;
+  problems: string[];
+}
+
+export async function ask(
+  question: string,
+  context: AskContext | null,
+): Promise<Answer> {
+  const r = await api(`/api/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, context }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}

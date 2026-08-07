@@ -5,6 +5,7 @@ import { PenLineIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+import { AskPanel } from "@/components/ask/ask-panel";
 import { Board, BoardHint } from "@/components/board/board";
 import {
   Dialog,
@@ -88,6 +89,8 @@ export default function Workbench() {
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [open, setOpen] = useState<CardDetail | null>(null);
+  // 보드와 채팅. **카드를 여는 것은 탭이 아니라 보드 안의 행동이다.**
+  const [tab, setTab] = useState<"board" | "ask">("board");
   const [sections, setSections] = useState<DocSection[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const { phase, steps, error, elapsed, run } = useGeneration();
@@ -302,6 +305,35 @@ export default function Workbench() {
             {BRAND_LINE}
           </span>
         )}
+        {/* **채팅은 보드 옆 탭이다.** 리포트 작성과 무관하게 도는 일이라
+            (하루 10~15건의 클라이언트 리퀘스트) 카드 안에 두면 갈 곳이 없다.
+            카드가 열려 있어도 탭을 누르면 그쪽으로 간다. */}
+        <nav className="flex items-center gap-0.5 rounded-md border p-0.5">
+          {(
+            [
+              ["board", "보드"],
+              ["ask", "물어보기"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                setTab(key);
+                if (key === "ask") setOpen(null);
+              }}
+              className={cn(
+                "rounded px-2.5 py-1 text-[12px] transition-colors",
+                tab === key
+                  ? "bg-accent font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
         <div className="ml-auto flex items-center gap-1">
           <ThemeToggle />
           {authEnabled && (
@@ -395,7 +427,9 @@ export default function Workbench() {
         )}
       >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
-          {open ? (
+          {tab === "ask" ? (
+            <AskPanel cardCount={cards.length} />
+          ) : open ? (
             <>
               <div className="mb-3 flex items-center gap-2">
                 <Button
