@@ -1017,10 +1017,36 @@ export interface MarketIndex {
 /** 섹터 한 줄. **내 종목들의 중앙값**이지 섹터 지수가 아니다. */
 export interface SectorLine {
   sector: string;
+  /** **내** 종목 수 */
   count: number;
   moves: Move[];
   /** 구간별 시장 대비 초과(%p) */
   excess: Record<string, number>;
+  /** 중앙값을 낸 종목 수. `count`와 다를 수 있습니다 */
+  universe: number;
+  /**
+   * `"peer"` — 그 섹터의 피어 그룹 **전체**로 냈습니다. 「섹터가 어땠나」의 답.
+   * `"mine"` — 피어 그룹이 없어 내 종목만입니다. 그러면 이 줄은 「내 것들이
+   * 어땠나」지 섹터 얘기가 아니고, **화면이 그렇게 말해야 합니다.**
+   */
+  basis: "peer" | "mine";
+  basis_label: string;
+}
+
+/** 환율·금리. **값마다 자기 날짜를 답니다** — 지수와 다를 수 있습니다 */
+export interface MacroPoint {
+  key: string;
+  label: string;
+  value: number;
+  display: string;
+  date: string;
+  unit: string;
+  digits: number;
+  /** 직전 관측 대비. 환율은 원, 금리는 %p — **퍼센트가 아닙니다** */
+  change: number | null;
+  /** 계단형(기준금리)이 마지막으로 바뀐 때 */
+  changed_at: string;
+  stale_days: number | null;
 }
 
 export interface Brief {
@@ -1037,6 +1063,14 @@ export interface Brief {
   watch: BriefLine[];
   /** 맨 위 한 줄. **없으면 없다고 말한다** */
   note: string;
+  macro: MacroPoint[];
+  /**
+   * 칸마다 맨 위 한 줄 — `macro` · `sectors` · `stocks`.
+   *
+   * **LLM이 아니라 배열입니다.** 아래 숫자를 다시 읽어 문장 꼴로 세운 것이라
+   * 새 사실이 생기지 않고, 값이 없으면 그 절이 통째로 빠집니다.
+   */
+  heads: Partial<Record<"macro" | "sectors" | "stocks", string>>;
 }
 
 export async function getBrief(): Promise<Brief> {
@@ -1173,4 +1207,59 @@ export function isStale(c: TgChannel, days = 30): boolean {
   const t = Date.parse(c.last_post);
   if (Number.isNaN(t)) return false;
   return (Date.now() - t) / 86400000 > days;
+}
+
+/* ── 섹터 시드 ──────────────────────────────────────────────────────
+ *
+ * **정답이 아니라 출발점.** 빈 화면에서 섹터를 직접 치고 종목을 하나씩 넣는
+ * 것은 마찰이 큽니다. 그렇다고 분류를 확정해 주면 D68이 거부한 문제로
+ * 돌아갑니다 — 그래서 시드입니다. 고르고, 고칩니다.
+ */
+export interface SectorSeed {
+  name: string;
+  symbols: string[];
+  companies: string[];
+  /** 시장 요인을 뺀 내부 상관. 무작위 8종목이 0.102입니다 */
+  cohesion: number;
+}
+
+export async function getSectorSeeds(): Promise<{
+  seeds: SectorSeed[];
+  random_baseline: number;
+}> {
+  const r = await api(`/api/sectors/seed`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/* ── 텔레그램 가져오기 ────────────────────────────────────────────────
+ *
+ * **터미널에 미루지 않습니다.** 화면이 "터미널에서 `arc telegram sync`로
+ * 가져오면 여기 뜹니다"라고 말하는 것은 막다른 길입니다 — 무엇을 해야 하는지는
+ * 알려주지만 할 수는 없게 만듭니다. 로그인만 터미널에서 합니다(인증 코드를
+ * 받아 쳐야 해서 어쩔 수 없습니다).
+ */
+export async function refreshTgChannels(): Promise<{
+  found: number;
+  channels: number;
+}> {
+  const r = await api(`/api/telegram/refresh`, { method: "POST" });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function syncTgMessages(days = 7): Promise<{
+  messages: number;
+  channels: { name: string; count: number }[];
+  /** 켰지만 아무것도 못 받은 채널 수 — 죽었거나 그 기간에 글이 없습니다 */
+  skipped: number;
+  days: number;
+}> {
+  const r = await api(`/api/telegram/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ days }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
 }
