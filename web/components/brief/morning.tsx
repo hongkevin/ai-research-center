@@ -6,11 +6,14 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   fmtPct,
   getBrief,
+  BRIEF_SESSION_LABEL,
+  BRIEF_SESSIONS,
   type Brief,
   type BriefLine,
   type MacroPoint,
   type Move,
   type SectorLine,
+  type Session,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -40,12 +43,14 @@ export function MorningBrief({
 }) {
   const [data, setData] = useState<Brief | null>(null);
   const [error, setError] = useState("");
+  // **지금 시각이 정한다.** 고르는 것은 그 다음이다 — 아침에 열면 모닝이다
+  const [want, setWant] = useState<Session | null>(null);
 
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
-        const b = await getBrief();
+        const b = await getBrief(want ?? undefined);
         if (alive) setData(b);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -54,7 +59,7 @@ export function MorningBrief({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [want]);
 
   if (error) {
     return (
@@ -79,9 +84,34 @@ export function MorningBrief({
           모른다 — EOD 시세라 장 마감 전에는 어제 종가가 최신이다. */}
       <div className="flex flex-wrap items-baseline gap-x-3">
         <span className="text-[15px] font-medium">
-          {data.asof_label || "시세 없음"} 종가 기준
+          {data.session_label}
+        </span>
+        {/* **장중에는 「종가 기준」이라고 안 적는다.** 오늘 종가가 없다 */}
+        <span className="text-[12.5px] text-muted-foreground">
+          {data.session === "midday"
+            ? data.session_why
+            : `${data.asof_label || "시세 없음"} 종가 기준`}
         </span>
         <span className="text-[12.5px] text-muted-foreground">{data.note}</span>
+
+        {/* 하루에 세 번. **지금 시각이 기본을 정하고**, 눌러서 옮긴다 */}
+        <span className="ml-auto flex rounded-md border p-0.5">
+          {BRIEF_SESSIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => setWant(s)}
+              className={cn(
+                "rounded px-2 py-0.5 text-[11.5px] transition-colors",
+                data.session === s
+                  ? "bg-accent font-medium"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {BRIEF_SESSION_LABEL[s]}
+            </button>
+          ))}
+        </span>
       </div>
 
       {empty && (

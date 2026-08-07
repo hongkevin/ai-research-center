@@ -51,6 +51,49 @@ from arc.store.profile import COVER, Profile
 # 어제와 최근이지 1년이 아니다. 1년은 카드에서 본다.
 BRIEF_KEYS = ("1d", "5d", "1m")
 
+
+# ── 하루에 세 번 ──────────────────────────────────────────────────────
+#
+# 요구가 그대로였다: *"지금은 모닝 브리프지만, 장중 브리프(예를 들어
+# 점심시간), 마감 후 브리프 등이 있을 수도 있겠다"*.
+#
+# **셋을 가르는 것은 시각이 아니라 「지금 무엇이 확정됐나」다.** 우리 시세는
+# 금융위 EOD라 장중에는 오늘 값이 **없다**. 그때 「1일 -2.4%」를 세우면 그건
+# 어제 얘기인데 화면은 오늘로 읽힌다 — 그래서 장중에는 **주가를 아예 뺀다.**
+# 대신 장중에 실제로 갱신되는 것(공시·센티)을 앞으로 올린다.
+MORNING, MIDDAY, CLOSE = "morning", "midday", "close"
+
+SESSIONS: tuple[tuple[str, str, int, str], ...] = (
+    # key, 이름, 시작 시각(KST), 무엇을 보는가
+    (MORNING, "모닝 브리프", 0, "어젯밤 사이 무슨 일이 있었나"),
+    (MIDDAY, "장중 브리프", 9, "지금 무엇이 나오고 무슨 말이 도나"),
+    (CLOSE, "마감 브리프", 16, "오늘 어떻게 끝났나"),
+)
+
+# 장중에는 주가를 안 낸다. **오늘 값이 없기 때문이지 덜 중요해서가 아니다.**
+PRICELESS = (MIDDAY,)
+
+KST = dt.timezone(dt.timedelta(hours=9))
+
+
+def current_session(now: dt.datetime | None = None) -> str:
+    """지금이 어느 브리프인가. **한국 장 시간 기준이다.**"""
+    hour = (now or dt.datetime.now(dt.UTC)).astimezone(KST).hour
+    picked = MORNING
+    for key, _, start, _ in SESSIONS:
+        if hour >= start:
+            picked = key
+    return picked
+
+
+def session_label(key: str) -> tuple[str, str]:
+    """`("장중 브리프", "지금 무엇이 나오고 무슨 말이 도나")`."""
+    for k, label, _, why in SESSIONS:
+        if k == key:
+            return label, why
+    return "브리프", ""
+
+
 # 「크게 움직였다」의 기준(%). 넘으면 위로 올리고 표시한다. 코스피 일간
 # 표준편차가 1% 안팎이라 3%면 눈에 띄는 움직임이다.
 NOTABLE = 3.0
@@ -128,6 +171,8 @@ class Line:
     articles: list[dict] = field(default_factory=list)
     # 구간별 시장 대비 초과(%p). 시장 계열이 없으면 빈 dict.
     excess: dict[str, float] = field(default_factory=dict)
+    # 오늘 텔레그램에서 몇 번 나왔나. **미검증 레인이다** (D45)
+    mention_count: int = 0
 
     @property
     def day_change(self) -> float | None:
@@ -157,6 +202,12 @@ class Brief:
     note: str = ""
     # 환율·금리. 지수와 **날짜가 다를 수 있어** 값마다 자기 날짜를 달고 온다
     macro: list[dict] = field(default_factory=list)
+    # 어느 브리프인가 — 아침·장중·마감. **장중에는 주가가 없다**
+    session: str = MORNING
+    session_label: str = ""
+    session_why: str = ""
+    # 장중에 갱신되는 것. 주가를 뺀 자리를 이것이 채운다
+    mentions: list[dict] = field(default_factory=list)
     # 칸마다 맨 위 한 줄. **LLM이 아니라 배열이다** — 아래 숫자를 다시 읽어
     # 문장 꼴로 세운 것이고, 없는 사실은 여기서도 없다
     heads: dict[str, str] = field(default_factory=dict)
@@ -186,12 +237,16 @@ def _rank(lines: list[Line]) -> list[Line]:
 
     이름순으로 세우면 매일 같은 순서라 눈이 훑고 지나간다. 아침에 알고 싶은
     것은 「무엇이 달라졌나」이고, 순서가 그 답의 일부다.
+
+    **장중에는 주가가 없다.** 그때 이름순으로 떨어지면 순서가 정보를 잃으므로
+    언급 수가 그 자리를 대신한다 — 장중에 실제로 갱신되는 것이 그것이다.
     """
     return sorted(
         lines,
         key=lambda x: (
             0 if x.filings else 1,
             -abs(x.day_change) if x.day_change is not None else 0.0,
+            -x.mention_count,
             x.company or x.symbol,
         ),
     )
@@ -206,6 +261,9 @@ def build_brief(
     market: Moves | None = None,
     indices: list[dict] | None = None,
     macro: list[dict] | None = None,
+    # `{종목코드: 오늘 언급 수}`. 장중 브리프가 주가 대신 세우는 것
+    mentions: dict[str, int] | None = None,
+    session: str = "",
     # 섹터별 모수. `{섹터: [종목코드…]}` — **피어 그룹 전체**가 들어온다.
     # 비면 내 종목만으로 떨어지고, 그 사실이 `SectorLine.basis`에 남는다
     universe: dict[str, list[str]] | None = None,
@@ -220,7 +278,16 @@ def build_brief(
     """
     filings = filings or {}
     articles = articles or {}
-    brief = Brief(asof=asof)
+    mentions = mentions or {}
+    session = session or current_session()
+    brief = Brief(asof=asof, session=session)
+    brief.session_label, brief.session_why = session_label(session)
+
+    # **장중에는 주가를 안 낸다.** 우리 시세는 EOD라 오늘 값이 없고, 어제
+    # 값을 「1일」이라고 세우면 화면은 그걸 오늘로 읽는다.
+    priceless = session in PRICELESS
+    if priceless:
+        moves, market, indices = {}, None, None
 
     for stock in profile.stocks:
         line = Line(
@@ -231,6 +298,7 @@ def build_brief(
             last_close=(moves.get(stock.symbol).last_close if moves.get(stock.symbol) else None),
             moves=_pick(moves.get(stock.symbol), keys),
         )
+        line.mention_count = mentions.get(stock.symbol, 0)
         if stock.kind == COVER:
             # 관심 종목에는 안 붙인다 — API 호출이 배로 늘고 화면이 길어져
             # 정작 볼 것을 못 본다.
@@ -249,7 +317,11 @@ def build_brief(
     brief.indices = list(indices or [])
     # **섹터는 커버 종목으로만 낸다.** 관심 종목까지 섞으면 「내 섹터가
     # 어땠나」가 아니라 「내가 보는 것들이 어땠나」가 된다.
-    brief.sectors = _sectors(brief.cover, keys, moves=moves, universe=universe or {})
+    # **장중에는 섹터도 안 낸다.** 등락이 없으면 이름만 남은 줄이 서고,
+    # 그 빈 줄이 「섹터가 안 움직였다」로 읽힌다.
+    brief.sectors = (
+        [] if priceless else _sectors(brief.cover, keys, moves=moves, universe=universe or {})
+    )
 
     # **시장 대비 초과.** 아침에 알고 싶은 것은 이쪽이다 — 5% 빠진 것이
     # 시장이 5% 빠져서인지 이 종목만인지는 완전히 다른 얘기다.
@@ -261,6 +333,11 @@ def build_brief(
             m.key: value for m in row.moves if (value := relative(m, brief.market)) is not None
         }
     brief.macro = list(macro or [])
+    brief.mentions = [
+        {"symbol": s, "count": n}
+        for s, n in sorted(mentions.items(), key=lambda kv: -kv[1])
+        if n > 0
+    ]
     brief.note = _note(brief, profile)
     brief.heads = _heads(brief)
     return brief
@@ -391,14 +468,24 @@ def _heads(brief: Brief) -> dict[str, str]:
         stock.append(f"관심 {len(brief.watch)}종목")
     if brief.filing_count:
         stock.append(f"공시 {brief.filing_count}건")
-    moved = [x for x in brief.cover if x.day_change is not None and abs(x.day_change) >= NOTABLE]
-    if moved:
-        big = max(moved, key=lambda x: abs(x.day_change or 0.0))
-        stock.append(
-            f"{NOTABLE:.0f}% 이상 {len(moved)}건 (최대 {big.company} {big.day_change:+.2f}%)"
-        )
-    elif brief.cover:
-        stock.append(f"{NOTABLE:.0f}% 이상 움직인 커버 종목 없음")
+    if brief.session in PRICELESS:
+        # **「움직인 종목 없음」이라고 하지 않는다.** 안 움직인 게 아니라
+        # 안 본 것이다 — 장중에는 오늘 시세가 없다.
+        said = sum(x["count"] for x in brief.mentions)
+        if said:
+            stock.append(f"텔레그램 언급 {said}건")
+        stock.append("주가는 마감 뒤")
+    else:
+        moved = [
+            x for x in brief.cover if x.day_change is not None and abs(x.day_change) >= NOTABLE
+        ]
+        if moved:
+            big = max(moved, key=lambda x: abs(x.day_change or 0.0))
+            stock.append(
+                f"{NOTABLE:.0f}% 이상 {len(moved)}건 (최대 {big.company} {big.day_change:+.2f}%)"
+            )
+        elif brief.cover:
+            stock.append(f"{NOTABLE:.0f}% 이상 움직인 커버 종목 없음")
     if stock:
         out["stocks"] = " · ".join(stock)
     return out
@@ -408,11 +495,22 @@ def _note(brief: Brief, profile: Profile) -> str:
     """맨 위 한 줄. **없으면 없다고 말한다.**"""
     if not profile.stocks:
         return "커버 종목을 먼저 넣으십시오 — 「내 커버리지」에서 정합니다."
-    if not brief.asof:
-        return "시세를 아직 받지 않아 등락을 낼 수 없습니다."
+
     parts = []
     if brief.filing_count:
         parts.append(f"공시 {brief.filing_count}건")
+
+    # **장중에는 주가로 말하지 않는다.** 오늘 값이 없기 때문이다.
+    if brief.session in PRICELESS:
+        said = sum(x["count"] for x in brief.mentions)
+        if said:
+            parts.append(f"텔레그램 언급 {said}건")
+        if not parts:
+            return "장중에 새로 나온 공시도, 도는 말도 없습니다."
+        return " · ".join(parts) + " · 주가는 마감 뒤에 나옵니다"
+
+    if not brief.asof:
+        return "시세를 아직 받지 않아 등락을 낼 수 없습니다."
     moved = brief.notable_count
     if moved:
         parts.append(f"{NOTABLE:.0f}% 이상 움직인 종목 {moved}건")

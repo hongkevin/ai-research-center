@@ -1202,6 +1202,18 @@ export interface Brief {
   note: string;
   macro: MacroPoint[];
   /**
+   * 어느 브리프인가 — `morning` · `midday` · `close`.
+   *
+   * **셋을 가르는 것은 시각이 아니라 「지금 무엇이 확정됐나」입니다.** 우리
+   * 시세는 EOD라 장중에는 오늘 값이 **없습니다.** 그때 「1일 -2.4%」를 세우면
+   * 그건 어제 얘기인데 화면은 오늘로 읽습니다 — 그래서 장중에는 주가를 뺍니다.
+   */
+  session: "morning" | "midday" | "close";
+  session_label: string;
+  session_why: string;
+  /** 오늘 텔레그램 언급. **미검증 레인입니다** (D45) */
+  mentions: { symbol: string; count: number }[];
+  /**
    * 칸마다 맨 위 한 줄 — `macro` · `sectors` · `stocks`.
    *
    * **LLM이 아니라 배열입니다.** 아래 숫자를 다시 읽어 문장 꼴로 세운 것이라
@@ -1210,8 +1222,19 @@ export interface Brief {
   heads: Partial<Record<"macro" | "sectors" | "stocks", string>>;
 }
 
-export async function getBrief(): Promise<Brief> {
-  const r = await api(`/api/brief`);
+/* 브리프의 세션 — 센티의 `SESSION_LABEL`(장전·장중·장후)과 **다른 축입니다.**
+ * 저쪽은 메시지가 언제 올라왔나이고, 이쪽은 지금 무엇이 확정됐나입니다. */
+export const BRIEF_SESSIONS = ["morning", "midday", "close"] as const;
+export type Session = (typeof BRIEF_SESSIONS)[number];
+
+export const BRIEF_SESSION_LABEL: Record<Session, string> = {
+  morning: "모닝",
+  midday: "장중",
+  close: "마감",
+};
+
+export async function getBrief(session?: Session): Promise<Brief> {
+  const r = await api(`/api/brief${session ? `?session=${session}` : ""}`);
   if (!r.ok) await fail(r);
   return r.json();
 }
