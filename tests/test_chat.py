@@ -103,6 +103,7 @@ REGISTRY = [
     _entry("opseg1_revenue_2026a", "방산 부문 매출 (2026A)", "원", "8,100억원", value=8100),
     _entry("opseg2_revenue_2026a", "철도 부문 매출 (2026A)", "원", "5,200억원", value=5200),
     _entry("opseg3_revenue_2026a", "플랜트 매출 (2026A)", "원", "-1,200억원", value=-1200),
+    _entry("total_assets_2025a", "자산총계 (2025A)", "원", "9조 3,180억원"),
     _entry("payout_2026a", "배당성향 (2026A)", "%", "12.0%", DIVIDEND_PROV),
 ]
 
@@ -443,6 +444,23 @@ def test_a_relative_year_stays_in_the_same_card():
     assert second.tags() == ["c1"]
     assert "2025" in second.matched
     assert "c1.revenue_2025a" in second.keys
+
+
+def test_a_relative_year_does_not_drag_in_the_whole_balance_sheet():
+    """실측: 「그럼 작년은?」(주제=영업이익률)이 묻지도 않은 전기 자산·부채를 실었다."""
+    first = _turn("현대로템 영업이익률 알려줘")
+    second = _turn("그럼 작년은?", first.next_context())
+    labels = [second.registry._entries[k].label or "" for k in second.keys]
+    assert not any("자산총계" in x for x in labels)
+    assert any("영업이익률" in x for x in labels)
+
+
+def test_a_year_alone_is_the_question_when_there_is_no_topic():
+    """주제가 아예 없으면 그때는 연도가 곧 질문이다."""
+    first = _turn("현대로템")
+    second = _turn("작년은?", first.next_context())
+    labels = [second.registry._entries[k].label or "" for k in second.keys]
+    assert any("2025A" in x for x in labels)
 
 
 def test_a_demonstrative_is_resolved_by_the_context():
