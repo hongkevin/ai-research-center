@@ -231,9 +231,7 @@ def build_brief(
     # 곧바로 덮어써서 섹터 줄만 초과가 비어 있었다.
     for row in (*brief.cover, *brief.watch, *brief.sectors):
         row.excess = {
-            m.key: value
-            for m in row.moves
-            if (value := relative(m, brief.market)) is not None
+            m.key: value for m in row.moves if (value := relative(m, brief.market)) is not None
         }
     brief.note = _note(brief, profile)
     return brief
