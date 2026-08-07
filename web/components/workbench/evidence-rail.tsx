@@ -64,6 +64,69 @@ export function EvidenceRail({
 
       {/* **RA가 새 분기 노트를 열고 가장 먼저 묻는 것** — 지난번 내 노트에서
           뭐가 바뀌었지. 목차 바로 밑에 둔다. */}
+      {/* **숫자 비교가 「얼마가」라면 이쪽은 「무엇이」다** (D64).
+          RA가 새 분기 노트를 열고 처음 묻는 것이 그쪽이다. */}
+      {vm.areas.length > 0 && (
+        <RailSection
+          title="직전 리포트 대비"
+          count={vm.areas.length}
+          defaultOpen
+        >
+          <Card>
+            <CardContent className="py-3">
+              <Hint>
+                올린 리포트 「{vm.areas_basis}」가 본 그림이 이번 공시로
+                유지되는지 대조했습니다. <b>공시 밖 근거는 「확인불가」</b>
+                입니다.
+              </Hint>
+              <div className="mt-2.5 space-y-3">
+                {vm.areas.map((a) => (
+                  <div
+                    key={a.area}
+                    className="border-b pb-2.5 last:border-b-0 last:pb-0"
+                  >
+                    <div className="flex items-baseline gap-1.5">
+                      <Badge
+                        className={`border-transparent px-1.5 py-0 text-[10.5px] ${
+                          a.verdict === "강화"
+                            ? "bg-ok/15 text-ok"
+                            : a.verdict === "약화"
+                              ? "bg-bad/15 text-bad"
+                              : a.verdict === "유지"
+                                ? "bg-num/15 text-num"
+                                : "bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {a.verdict}
+                      </Badge>
+                      <span className="text-[12.5px] font-medium">
+                        {a.area}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px] leading-[1.7] text-muted-foreground">
+                      <span className="text-foreground/70">직전</span> {a.prior}
+                    </p>
+                    <p className="mt-0.5 text-[12px] leading-[1.7]">
+                      <span className="text-muted-foreground">지금</span>{" "}
+                      {a.now}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </RailSection>
+      )}
+      {vm.areas.length === 0 && vm.areas_note && (
+        <RailSection title="직전 리포트 대비" count="—">
+          <Card>
+            <CardContent className="py-3">
+              <Hint>{vm.areas_note}</Hint>
+            </CardContent>
+          </Card>
+        </RailSection>
+      )}
+
       {vm.changes.length > 0 && (
         <RailSection
           title="직전 노트 대비"

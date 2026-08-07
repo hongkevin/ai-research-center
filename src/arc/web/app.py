@@ -216,6 +216,11 @@ class ViewModel:
     # 직전 발간 노트 대비 무엇이 달라졌는가 (D46). 비교 대상이 없으면 빈 목록.
     changes: list[dict] = field(default_factory=list)
     changes_basis: str = ""
+    # **「얼마가」가 아니라 「무엇이」** 달라졌는가 (D64). 올린 직전 리포트가
+    # 본 그림이 이번 공시로 유지되는지 영역별로 대조한 것.
+    areas: list[dict] = field(default_factory=list)
+    areas_basis: str = ""
+    areas_note: str = ""
     notice: str = ""
     error: str = ""
 

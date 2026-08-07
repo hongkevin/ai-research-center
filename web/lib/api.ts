@@ -110,6 +110,14 @@ export interface NoteChange {
   change: string;
 }
 
+export interface AreaDiff {
+  area: string;
+  prior: string;
+  now: string;
+  /** 유지 · 강화 · 약화 · 확인불가 */
+  verdict: string;
+}
+
 export interface ViewModel {
   symbol: string;
   year: number;
@@ -149,6 +157,10 @@ export interface ViewModel {
   /** 직전 발간 노트 대비 변화 (D46). 비교 대상이 없으면 빈 목록. */
   changes: NoteChange[];
   changes_basis: string;
+  /** 「얼마가」가 아니라 **「무엇이」** 달라졌는가 (D64). */
+  areas: AreaDiff[];
+  areas_basis: string;
+  areas_note: string;
   notice: string;
   error: string;
 }
