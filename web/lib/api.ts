@@ -244,6 +244,8 @@ export interface CardDetail extends Omit<
   /** 피어 카드만. 구성원은 **읽을 때마다 저장소에서 다시 찾은 것**이다. */
   members?: PeerMember[];
   peer_table?: PeerTable;
+  /** 기간 등락. **리포트를 기다리지 않는다** — 시세는 매일 있다 */
+  moves?: Moves[];
 }
 
 export async function listCards(): Promise<CardSummary[]> {
@@ -995,9 +997,32 @@ export interface BriefLine {
   articles: BriefArticle[];
 }
 
+/** 코스피·코스닥 실제 지수. **아침 회의가 여기서 시작한다.** */
+export interface MarketIndex {
+  name: string;
+  date: string;
+  close: number | null;
+  change_pct: number | null;
+  members: number | null;
+}
+
+/** 섹터 한 줄. **내 종목들의 중앙값**이지 섹터 지수가 아니다. */
+export interface SectorLine {
+  sector: string;
+  count: number;
+  moves: Move[];
+}
+
 export interface Brief {
   /** 시세 기준일 (YYYYMMDD) */
   asof: string;
+  /** 「어제(8/6 목)」 — **언제 얘기인지가 먼저다** */
+  asof_label: string;
+  indices: MarketIndex[];
+  /** 동일가중 중앙값 지수의 기간 등락 */
+  market: Move[];
+  market_label: string;
+  sectors: SectorLine[];
   cover: BriefLine[];
   watch: BriefLine[];
   /** 맨 위 한 줄. **없으면 없다고 말한다** */

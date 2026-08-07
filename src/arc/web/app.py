@@ -51,7 +51,7 @@ from arc.brief import build_brief
 from arc.chat import answer_question
 from arc.chat.retrieval import Context
 from arc.data.kr.dart import DartProvider
-from arc.finmodel.moves import moves_for_symbols
+from arc.finmodel.moves import MARKET_LABEL, Moves, market_series, moves_for, moves_for_symbols
 from arc.finmodel.peer import build_peer_table
 from arc.finmodel.peer_suggest import load_prices, suggest_group
 from arc.ingest.convert import ConvertError, convert
@@ -1331,6 +1331,11 @@ def api_card(card_id: str):
         body["members"] = [{k: v for k, v in m.items() if k != "registry"} for m in resolved]
         body["peer_table"] = dataclasses.asdict(table)
         body["attention"] = peer_attention_reasons(resolved)
+        # **주가는 리포트를 기다리지 않는다.** 카드가 없는 구성원도 등락은
+        # 나온다 — 재무는 공시가 있어야 하지만 시세는 매일 있다.
+        body["moves"] = _moves_payload([m["symbol"] for m in resolved])
+    elif card.symbol:
+        body["moves"] = _moves_payload([card.symbol])
     return body
 
 
@@ -1551,8 +1556,48 @@ def api_brief(news: bool = True):
                 for i in items[:3]
             ]
 
-    brief = build_brief(profile, moves, filings=filings, articles=articles, asof=asof)
+    brief = build_brief(
+        profile,
+        moves,
+        filings=filings,
+        articles=articles,
+        market=_market_moves(prices),
+        indices=_index_today(asof),
+        asof=asof,
+    )
     return dataclasses.asdict(brief)
+
+
+def _market_moves(prices: dict) -> Moves | None:
+    """시장 계열의 기간 등락. 지수는 오늘 등락만 주므로 **기간은 우리가 만든
+    동일가중 중앙값 지수**로 낸다 — 둘은 다른 것을 말한다."""
+    if not prices:
+        return None
+    series = market_series(prices)
+    return moves_for(series, symbol="MARKET", company=MARKET_LABEL) if series else None
+
+
+_INDEX_CACHE: dict[str, list[dict]] = {}
+
+
+def _index_today(asof: str) -> list[dict]:
+    """코스피·코스닥. **하루 1콜이면 168개 지수가 다 온다.**"""
+    if not asof or len(asof) != 8:
+        return []
+    cached = _INDEX_CACHE.get(asof)
+    if cached is not None:
+        return cached
+    from arc.data.kr.krx_index import MAIN, fetch_day
+
+    day = dt.date(int(asof[:4]), int(asof[4:6]), int(asof[6:8]))
+    try:
+        got = fetch_day(day)
+    except Exception as exc:  # noqa: BLE001 — 지수가 없어도 브리프는 나간다
+        log.warning("지수를 못 읽었습니다 (%s): %s", asof, exc)
+        return []
+    out = [got[n] for n in MAIN if n in got]
+    _INDEX_CACHE[asof] = out
+    return out
 
 
 @app.get("/api/prices/moves")

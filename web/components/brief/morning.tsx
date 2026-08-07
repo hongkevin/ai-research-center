@@ -3,13 +3,24 @@
 import { useEffect, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { fmtPct, getBrief, type Brief, type BriefLine } from "@/lib/api";
+import {
+  fmtPct,
+  getBrief,
+  type Brief,
+  type BriefLine,
+  type Move,
+  type SectorLine,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
  * 모닝 브리프 — **아침에 이것만 봐도 되게.**
  *
  * 인터뷰의 말이 그대로 요구다: *"이것만 아침에 해줘도 되는데"*.
+ *
+ * **시장 → 섹터 → 종목** 순이다. 아침 회의가 그렇게 간다 — 오늘 한국 증시가
+ * 어땠고, 내 섹터가 어땠고, 그래서 내 종목이 어땠나. 종목만 나열하면 「이
+ * 종목이 5% 빠졌다」가 시장이 5% 빠져서인지 이 종목만인지 알 수 없다.
  *
  * **요약 문장이 없다.** 브리프는 서술이 아니라 배열이다 — 크게 움직인 것을
  * 위로 올리고 그 옆에 공시와 기사를 놓는 것이 전부다. 문장으로 요약하면
@@ -62,16 +73,61 @@ export function MorningBrief({
 
   return (
     <div className="max-w-[900px] space-y-7">
+      {/* **언제 얘기인지가 먼저다.** 「1일 -2.4%」만 있으면 오늘인지 어제인지
+          모른다 — EOD 시세라 장 마감 전에는 어제 종가가 최신이다. */}
       <div>
-        <p className="text-[15px] font-medium">{data.note}</p>
-        {data.asof && (
-          <p className="mt-1 text-[11.5px] text-muted-foreground">
-            종가 {data.asof.slice(0, 4)}-{data.asof.slice(4, 6)}-
-            {data.asof.slice(6, 8)} 기준 · 공시는 최근 3일 ·{" "}
-            <strong>기사는 검증된 것이 아닙니다</strong>
-          </p>
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <span className="text-[15px] font-medium">
+            {data.asof_label || "시세 없음"} 종가 기준
+          </span>
+          <span className="text-[12.5px] text-muted-foreground">
+            {data.note}
+          </span>
+        </div>
+
+        {data.indices.length > 0 && (
+          <div className="mt-2.5 flex flex-wrap gap-x-6 gap-y-1">
+            {data.indices.map((i) => (
+              <span key={i.name} className="text-[14px]">
+                <span className="text-muted-foreground">{i.name} </span>
+                <span className="font-mono">
+                  {i.close?.toLocaleString(undefined, {
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+                <span
+                  className={cn(
+                    "ml-1.5 font-mono",
+                    (i.change_pct ?? 0) > 0
+                      ? "text-bad"
+                      : (i.change_pct ?? 0) < 0
+                        ? "text-num"
+                        : "text-muted-foreground",
+                  )}
+                >
+                  {fmtPct(i.change_pct)}
+                </span>
+              </span>
+            ))}
+          </div>
         )}
+
+        <p className="mt-2 text-[11.5px] text-muted-foreground">
+          공시는 최근 3일 · <strong>기사는 검증된 것이 아닙니다</strong>
+          {data.market.length > 0 && (
+            <>
+              {" · "}
+              {data.market_label}{" "}
+              {data.market
+                .filter((m) => m.change_pct != null)
+                .map((m) => `${m.label} ${fmtPct(m.change_pct)}`)
+                .join(" ")}
+            </>
+          )}
+        </p>
       </div>
+
+      {data.sectors.length > 0 && <Sectors sectors={data.sectors} />}
 
       {empty && (
         <button
@@ -91,6 +147,65 @@ export function MorningBrief({
         <Section title="관심 종목" lines={data.watch} muted />
       )}
     </div>
+  );
+}
+
+/** 섹터 층 — **시장과 종목 사이.** 내 종목들의 중앙값이지 섹터 지수가 아니다. */
+function Sectors({ sectors }: { sectors: SectorLine[] }) {
+  return (
+    <section>
+      <h3 className="mb-2 border-b pb-1.5 text-[12px] font-semibold">
+        내 섹터{" "}
+        <span className="font-normal text-muted-foreground">
+          커버 종목의 중앙값
+        </span>
+      </h3>
+      <div className="divide-y">
+        {sectors.map((s) => (
+          <div
+            key={s.sector}
+            className="flex flex-wrap items-baseline gap-x-3 py-2"
+          >
+            <span className="text-[13.5px] font-medium">{s.sector}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {s.count}종목
+            </span>
+            <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
+              {s.moves.map((m) => (
+                <Pct key={m.key} move={m} />
+              ))}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Pct({ move: m }: { move: Move }) {
+  return (
+    <span
+      title={
+        m.change_pct == null
+          ? "비교할 자료가 없습니다"
+          : `${m.from_date} → ${m.to_date}`
+      }
+    >
+      <span className="text-[10.5px] text-muted-foreground">{m.label} </span>
+      <span
+        className={cn(
+          m.change_pct == null
+            ? "text-muted-foreground"
+            : m.change_pct > 0
+              ? "text-bad"
+              : m.change_pct < 0
+                ? "text-num"
+                : "text-muted-foreground",
+        )}
+      >
+        {fmtPct(m.change_pct)}
+      </span>
+    </span>
   );
 }
 
@@ -138,31 +253,7 @@ function Line({ line: l, muted }: { line: BriefLine; muted: boolean }) {
         </span>
         <span className="ml-auto flex gap-2.5 font-mono text-[12px] tabular-nums">
           {l.moves.map((m) => (
-            <span
-              key={m.key}
-              title={
-                m.change_pct == null
-                  ? "비교할 자료가 없습니다"
-                  : `${m.from_date} → ${m.to_date}`
-              }
-            >
-              <span className="text-[10.5px] text-muted-foreground">
-                {m.label}{" "}
-              </span>
-              <span
-                className={cn(
-                  m.change_pct == null
-                    ? "text-muted-foreground"
-                    : m.change_pct > 0
-                      ? "text-bad"
-                      : m.change_pct < 0
-                        ? "text-num"
-                        : "text-muted-foreground",
-                )}
-              >
-                {fmtPct(m.change_pct)}
-              </span>
-            </span>
+            <Pct key={m.key} move={m} />
           ))}
         </span>
       </div>

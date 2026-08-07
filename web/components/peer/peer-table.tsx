@@ -1,7 +1,7 @@
 "use client";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import type { PeerColumn, PeerMember, PeerTable as Table } from "@/lib/api";
+import { fmtPct, type Move, type Moves, type PeerColumn, type PeerMember, type PeerTable as Table } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,14 +16,19 @@ export function PeerTable({
   table,
   members,
   attention,
+  moves,
   onOpenCard,
 }: {
   table: Table;
   members: PeerMember[];
   attention: string[];
+  moves?: Moves[];
   onOpenCard: (cardId: string) => void;
 }) {
   const groups = [...new Set(table.rows.map((r) => r.group))];
+  // **주가는 재무가 없어도 선다.** 재무는 공시가 있어야 하지만 시세는 매일
+  // 있어서, 카드를 아직 안 만든 그룹에서도 볼 것이 남는다.
+  const hasPrices = (moves ?? []).some((m) => m.items.some((x) => x.change_pct != null));
 
   return (
     <div className="max-w-full space-y-4">
@@ -44,7 +49,7 @@ export function PeerTable({
           </Alert>
         ))}
 
-      {table.rows.length > 0 ? (
+      {table.rows.length > 0 || hasPrices ? (
         /* 표가 넓다. **본문이 가로로 스크롤되면 안 되므로** 표만 흐른다. */
         <div className="overflow-x-auto rounded-lg border">
           <table className="w-full min-w-[560px] border-collapse text-[13px]">
@@ -59,6 +64,9 @@ export function PeerTable({
               </tr>
             </thead>
             <tbody>
+              {/* **주가가 맨 위다.** 재무는 분기에 한 번 바뀌지만 주가는
+                  매일 바뀌고, 「지금 무슨 일이 있나」가 먼저 궁금하다. */}
+              <PriceRows table={table} moves={moves ?? []} />
               {groups.map((g) => (
                 <GroupRows key={g} group={g} table={table} />
               ))}
@@ -180,5 +188,64 @@ function Pending({ members }: { members: PeerMember[] }) {
         ))}
       </div>
     </div>
+  );
+}
+
+
+/**
+ * 주가 줄. **재무 줄과 달리 카드가 없어도 나온다** — 재무는 공시가 있어야
+ * 하지만 시세는 매일 있다.
+ */
+function PriceRows({ table, moves }: { table: Table; moves: Moves[] }) {
+  const bySymbol = new Map(moves.map((m) => [m.symbol, m]));
+  const horizons: Move[] = moves.find((m) => m.items.length)?.items ?? [];
+  if (horizons.length === 0) return null;
+  return (
+    <>
+      <tr className="border-b bg-muted/20">
+        <td
+          colSpan={table.columns.length + 1}
+          className="px-3 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"
+        >
+          주가
+        </td>
+      </tr>
+      {horizons.map((h) => (
+        <tr key={h.key} className="border-b">
+          <td className="sticky left-0 z-10 bg-card px-3 py-1.5 whitespace-nowrap">
+            {h.label}
+          </td>
+          {table.columns.map((c) => {
+            const m = bySymbol.get(c.symbol)?.items.find((x) => x.key === h.key);
+            const pct = m?.change_pct ?? null;
+            return (
+              <td
+                key={c.symbol}
+                className={cn(
+                  "px-3 py-1.5 text-right font-mono tabular-nums",
+                  pct == null
+                    ? "text-muted-foreground"
+                    : pct > 0
+                      ? "text-bad"
+                      : pct < 0
+                        ? "text-num"
+                        : "text-muted-foreground",
+                )}
+                title={
+                  m && pct != null
+                    ? `${m.from_date} → ${m.to_date} (${m.days}거래일)${m.partial ? " · 자료가 짧습니다" : ""}`
+                    : "비교할 자료가 없습니다"
+                }
+              >
+                {fmtPct(pct)}
+                {m?.partial && pct != null && (
+                  <span className="text-muted-foreground">*</span>
+                )}
+              </td>
+            );
+          })}
+        </tr>
+      ))}
+    </>
   );
 }
