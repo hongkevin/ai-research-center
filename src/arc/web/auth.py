@@ -34,6 +34,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
+from arc.web.identity import reset_current_user, set_current_user
+
 log = logging.getLogger("arc.web")
 
 # 인증 없이 열어둘 경로 — 플랫폼 헬스체크는 인증을 통과할 수 없다
@@ -141,10 +143,15 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
                 # Basic과 달리 `WWW-Authenticate`를 주지 않는다 — 브라우저
                 # 기본 로그인 창이 뜨면 우리 로그인 화면으로 갈 수 없다.
                 return PlainTextResponse("로그인이 필요합니다.", status_code=401)
-            # 나중에 카드를 사람별로 나눌 때 쓸 자리 (소유자 필드)
             request.state.user_id = claims.get("sub", "")
             request.state.user_email = claims.get("email", "")
-            return await call_next(request)
+            # **여기서부터 저장소가 사람별로 갈린다.** `call_next` 앞에서
+            # 세팅해야 하위 태스크가 이 값을 물려받는다.
+            token = set_current_user(request.state.user_id)
+            try:
+                return await call_next(request)
+            finally:
+                reset_current_user(token)
 
         if not self.password:
             return await call_next(request)
