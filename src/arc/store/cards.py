@@ -386,6 +386,50 @@ class CardStore:
         return True
 
 
+def resolve_peer_members(store: CardStore, members: list[dict]) -> list[dict]:
+    """피어 카드의 구성원을 **읽을 때마다 저장소에서 다시 찾는다.**
+
+    `Card.members`에는 **의도**만 둔다 — 어느 종목을 묶었는가. `card_id`·연도·
+    기간·준비 상태는 여기서 매번 다시 채운다.
+
+    **굳혀 두면 안 되는 이유**를 이미 한 번 밟았다: `summary()`의 `attention`을
+    생성 시점에 저장해 뒀더니 문구를 고쳐도 옛 카드는 영영 옛말을 했다(D51).
+    구성원은 더하다 — 커버 밖 종목의 카드를 **나중에** 만드는 것이 이 기능의
+    본체인데, 그때 피어 카드가 「아직 없음」을 계속 말하면 쓸모가 없다.
+
+    같은 종목 카드가 여럿이면 **최신 것**을 쓴다(`store.list()`가 최신순).
+    """
+    latest: dict[str, Card] = {}
+    for c in store.list():
+        if c.kind != SINGLE or c.running or not c.symbol:
+            continue
+        latest.setdefault(c.symbol, c)
+
+    out: list[dict] = []
+    for m in members:
+        symbol = str(m.get("symbol") or "")
+        want = str(m.get("company") or "")
+        card = latest.get(symbol)
+        if card is None:
+            out.append(peer_member(symbol, company=want, status="pending"))
+            continue
+        resolved = peer_member(
+            symbol,
+            company=card.company or want,
+            card_id=card.id,
+            year=card.year,
+            period=card.period,
+            status="failed" if card.error else "ready",
+            error=card.error,
+        )
+        # 표를 세울 재료와 게이트 상태를 함께 싣는다 — 호출자가 카드를 다시
+        # 열지 않아도 되게.
+        resolved["registry"] = card.registry
+        resolved["gate_passed"] = bool(card.vm.get("gate_passed"))
+        out.append(resolved)
+    return out
+
+
 def _migrate(card: Card) -> Card:
     """예전 칸 이름을 지금 것으로. **저장된 카드를 고쳐 쓰지 않는다** — 읽을 때만."""
     if card.column in _LEGACY_COLUMN:
