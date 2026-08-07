@@ -1446,6 +1446,13 @@ def api_profile():
     cards = _open_cards()
     profile = ProfileStore(_my_dir()).load(current_user())
     body = dataclasses.asdict(profile)
+    # **피어 그룹은 섹터에 속한다.** D68에서 「섹터는 자유 텍스트라 코드가 못
+    # 읽고, 실질적 정의는 피어 그룹」이라고 정했다 — 뒤집으면 피어 그룹이 곧
+    # 그 섹터의 조작적 정의다.
+    #
+    # 스키마를 안 늘린다: 구성원 중 **내 종목의 섹터**로 붙인다. 커버리지가
+    # 바뀌면 저절로 따라오고, 카드에 필드를 하나 더 두면 그게 옛말을 한다(D51).
+    sector_of = {s.symbol: s.sector for s in profile.stocks if s.sector}
     body["peer_groups"] = (
         [
             {
@@ -1453,6 +1460,7 @@ def api_profile():
                 "name": c.company,
                 "member_count": len(c.members),
                 "pinned": c.id in profile.pinned_peers,
+                "sector": _peer_sector(c, sector_of),
             }
             for c in cards.list()
             if c.kind == PEER
@@ -1713,6 +1721,19 @@ def api_moves(symbols: str = ""):
     return {"moves": _moves_payload(codes)}
 
 
+def _peer_sector(card, sector_of: dict[str, str]) -> str:
+    """이 피어 그룹은 어느 섹터인가. **구성원 중 내 종목의 섹터로 정한다.**
+
+    여럿이면 최다. 하나도 없으면 빈 문자열 — 「섹터 없음」으로 모인다.
+    """
+    hits: dict[str, int] = {}
+    for member in card.members:
+        sector = sector_of.get(str(member.get("symbol") or ""))
+        if sector:
+            hits[sector] = hits.get(sector, 0) + 1
+    return max(hits.items(), key=lambda kv: kv[1])[0] if hits else ""
+
+
 @app.post("/api/profile")
 def api_save_profile(payload: dict):
     """커버 종목·섹터를 통째로 갈아 끼운다.
@@ -1750,6 +1771,17 @@ def api_save_profile(payload: dict):
                 )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
+    if "channels" in payload:
+        # **켜고 끄는 것만 받는다.** 이름·구독자·분류는 `arc telegram channels`가
+        # 갱신하는 것이지 화면이 정하는 게 아니다.
+        wanted = {
+            int(c.get("chat_id", 0)): bool(c.get("enabled"))
+            for c in (payload.get("channels") or [])
+            if isinstance(c, dict)
+        }
+        for channel in profile.channels:
+            if channel.chat_id in wanted:
+                channel.enabled = wanted[channel.chat_id]
     if "display_name" in payload:
         profile.display_name = str(payload.get("display_name", ""))[:60]
     profile.uid = current_user()

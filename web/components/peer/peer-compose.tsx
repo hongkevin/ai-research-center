@@ -30,12 +30,22 @@ import { cn } from "@/lib/utils";
  * 카드에 박는다. **섹터 이름은 우리가 붙이지 않는다** — 상관은 산업이 아니라
  * 지금 같이 움직이는 테마를 찾는다(현대건설 씨앗 → 원전 테마).
  */
-export function PeerCompose({ onCreated }: { onCreated: (id: string) => void }) {
+export function PeerCompose({
+  onCreated,
+  initialSeeds = [],
+  initialName = "",
+}: {
+  onCreated: (id: string) => void;
+  /** 커버리지에서 넘어온 씨앗. **다시 치게 하지 않는다** — 가장 큰 마찰이었다 */
+  initialSeeds?: { symbol: string; company: string }[];
+  initialName?: string;
+}) {
   const [seedInput, setSeedInput] = useState("");
-  const [seeds, setSeeds] = useState<{ symbol: string; company: string }[]>([]);
+  const [seeds, setSeeds] =
+    useState<{ symbol: string; company: string }[]>(initialSeeds);
   const [suggestion, setSuggestion] = useState<PeerSuggestion | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 

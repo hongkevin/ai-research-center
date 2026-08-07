@@ -916,6 +916,8 @@ export interface PeerGroupRef {
   name: string;
   member_count: number;
   pinned: boolean;
+  /** 구성원 중 내 종목의 섹터. **피어 그룹은 섹터의 조작적 정의다** (D68) */
+  sector: string;
 }
 
 export interface ProfileData {
@@ -929,6 +931,8 @@ export interface ProfileData {
   /** 카드에서 끌어온 것 — 사람에게 두 번 묻지 않는다 */
   peer_groups: PeerGroupRef[];
   with_cards: string[];
+  /** 구독 중인 텔레그램 채널. **켜 둔 것만 sync가 긁는다** */
+  channels: TgChannel[];
   /** 종목별 기간 등락 — 받아 둔 시세로 나눗셈만 한 것 */
   moves: Moves[];
 }
@@ -943,6 +947,8 @@ export async function saveProfile(patch: {
   display_name?: string;
   sectors?: string[];
   stocks?: { symbol: string; sector?: string; kind?: CoverKind; note?: string }[];
+  /** 켜고 끄는 것만 보낸다 — 이름·구독자는 CLI가 갱신한다 */
+  channels?: { chat_id: number; enabled: boolean }[];
 }): Promise<ProfileData> {
   const r = await api(`/api/profile`, {
     method: "POST",
@@ -1109,3 +1115,29 @@ export const KIND_LABEL: Record<string, string> = {
   internal: "내부",
   unknown: "미분류",
 };
+
+/**
+ * 구독 중인 텔레그램 채널 하나. **커버 종목처럼 고른다.**
+ *
+ * 다 긁으면 하루 3,000건이 쏟아지고 그중 대부분은 이미 DART·뉴스 API로
+ * 갖고 있는 것입니다 (D66).
+ */
+export interface TgChannel {
+  chat_id: number;
+  name: string;
+  username: string;
+  /** broker · research · chatter · bot_feed · internal · unknown */
+  kind: string;
+  subscribers: number;
+  /** 마지막 글 (YYYY-MM-DD). **구독자 수만 보면 시체를 잡는다** */
+  last_post: string;
+  enabled: boolean;
+}
+
+/** 한 달 넘게 글이 없는가. 모르면 `false` — 모르는 것을 죽었다고 하지 않는다. */
+export function isStale(c: TgChannel, days = 30): boolean {
+  if (!c.last_post) return false;
+  const t = Date.parse(c.last_post);
+  if (Number.isNaN(t)) return false;
+  return (Date.now() - t) / 86400000 > days;
+}
