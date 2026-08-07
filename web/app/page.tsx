@@ -6,6 +6,7 @@ import { PenLineIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { AskWidget } from "@/components/ask/ask-widget";
+import { MorningBrief } from "@/components/brief/morning";
 import { Board, BoardHint } from "@/components/board/board";
 import { Coverage } from "@/components/profile/coverage";
 import { PeerCompose } from "@/components/peer/peer-compose";
@@ -94,7 +95,9 @@ export default function Workbench() {
   const [cards, setCards] = useState<CardSummary[]>([]);
   const [open, setOpen] = useState<CardDetail | null>(null);
   // 보드와 채팅. **카드를 여는 것은 탭이 아니라 보드 안의 행동이다.**
-  const [tab, setTab] = useState<"board" | "me">("board");
+  // **브리프가 첫 화면이다.** RA의 하루는 「어젯밤 사이 뭐가 있었나」로
+  // 시작한다 — 보드는 그다음에 여는 것이다.
+  const [tab, setTab] = useState<"brief" | "board" | "me">("brief");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
   // 피어 그룹 고치기 — 이름과 구성원. 한 번 만들고 끝나는 것이 아니다.
@@ -319,6 +322,7 @@ export default function Workbench() {
         <nav className="flex items-center gap-0.5 rounded-md border p-0.5">
           {(
             [
+              ["brief", "브리프"],
               ["board", "보드"],
               ["me", "내 커버리지"],
             ] as const
@@ -451,7 +455,9 @@ export default function Workbench() {
         )}
       >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
-          {tab === "me" ? (
+          {tab === "brief" ? (
+            <MorningBrief onOpenCoverage={() => setTab("me")} />
+          ) : tab === "me" ? (
             <Coverage />
           ) : open && open.kind === "peer" ? (
             /* **피어 카드는 본문이 없다.** 표가 본문이다 — 단계 레일도

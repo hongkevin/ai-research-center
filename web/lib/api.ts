@@ -964,3 +964,48 @@ export async function pinPeerGroup(
   if (!r.ok) await fail(r);
   return r.json();
 }
+
+/* ── 모닝 브리프 ────────────────────────────────────────────────────
+ *
+ * 인터뷰의 말이 그대로 요구다: *"이것만 아침에 해줘도 되는데"*.
+ * **LLM을 안 쓴다** — 브리프는 서술이 아니라 배열이다.
+ */
+
+export interface BriefFiling {
+  title: string;
+  filed_at: string;
+  url: string;
+}
+
+/** 기사는 **미검증 레인**이다 (D45). 숫자를 여기서 읽지 않는다. */
+export interface BriefArticle {
+  title: string;
+  url: string;
+  date: string;
+}
+
+export interface BriefLine {
+  symbol: string;
+  company: string;
+  sector: string;
+  kind: CoverKind;
+  last_close: number | null;
+  moves: Move[];
+  filings: BriefFiling[];
+  articles: BriefArticle[];
+}
+
+export interface Brief {
+  /** 시세 기준일 (YYYYMMDD) */
+  asof: string;
+  cover: BriefLine[];
+  watch: BriefLine[];
+  /** 맨 위 한 줄. **없으면 없다고 말한다** */
+  note: string;
+}
+
+export async function getBrief(): Promise<Brief> {
+  const r = await api(`/api/brief`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
