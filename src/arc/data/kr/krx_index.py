@@ -69,6 +69,10 @@ def fetch_day(
             "/getStockMarketIndex",
             params={
                 "serviceKey": key,
+                # **이게 없으면 XML이 온다.** 기본이 XML이라 `resp.json()`이
+                # 「Expecting value: line 1 column 1」로 죽고, 호출자는 그걸
+                # 「휴장일」로 읽어 지수가 조용히 사라진다.
+                "resultType": "json",
                 "basDt": day.strftime("%Y%m%d"),
                 "numOfRows": "500",
                 "pageNo": "1",

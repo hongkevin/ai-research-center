@@ -1695,7 +1695,7 @@ def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
 
 
 @app.get("/api/brief")
-def api_brief(news: bool = True):
+def api_brief(news: bool = True, session: str = ""):
     """모닝 브리프 — **아침에 이것만 봐도 되게.**
 
     인터뷰의 말이 그대로 요구다: *"이것만 아침에 해줘도 되는데"*.
@@ -1705,10 +1705,27 @@ def api_brief(news: bool = True):
     비용이 들고, 틀릴 여지가 생기고, **RA가 원문을 안 보게 된다.** 아침에
     필요한 것은 판단이 아니라 **놓친 것이 없다는 확인**이다.
     """
+    from arc.brief import PRICELESS, current_session
+
+    session = session or current_session()
     profile = ProfileStore(_my_dir()).load(current_user())
     symbols = profile.symbols()
     if not symbols:
-        return dataclasses.asdict(build_brief(profile, {}))
+        return dataclasses.asdict(build_brief(profile, {}, session=session))
+
+    # **장중에는 시세를 아예 안 부른다.** 오늘 값이 없어 화면에 못 세우는데
+    # 부르는 것은 낭비다 — 그리고 부르면 「받아 놓고 안 보여준다」가 된다.
+    if session in PRICELESS:
+        return dataclasses.asdict(
+            build_brief(
+                profile,
+                {},
+                filings={s: _recent_filings(s, days=1) for s in profile.covering()},
+                macro=_macro_now(),
+                mentions=_mentions_today(profile),
+                session=session,
+            )
+        )
 
     prices, _ = _price_source()
     names = _names_for(symbols)
@@ -1753,9 +1770,53 @@ def api_brief(news: bool = True):
         indices=_index_today(asof),
         macro=_macro_now(),
         universe=universe,
+        mentions=_mentions_today(profile),
+        session=session,
         asof=asof,
     )
     return dataclasses.asdict(brief)
+
+
+def _mentions_today(profile) -> dict[str, int]:
+    """오늘 텔레그램에서 **내 종목이** 몇 번 나왔나. `{종목코드: 횟수}`.
+
+    **미검증 레인이다** ([D45](../../docs/decisions.md#d45)) — 숫자가 본문에
+    들어가지 않고 「볼 만하다」는 신호로만 쓴다. 장중 브리프가 주가를 뺀 자리를
+    이것이 채운다.
+
+    센티 탭과 **같은 판별기를 쓴다** — 종목명 매칭은 오탐이 많아(「한화」가
+    다섯 회사다) 따로 만들면 두 화면이 다른 말을 한다.
+
+    받아 둔 메시지가 없으면 빈 dict다 — **0으로 채우지 않는다.**
+    """
+    from arc.ingest.telegram_mentions import mention_surges
+
+    mine = set(profile.symbols())
+    if not mine:
+        return {}
+    messages = _telegram_messages()
+    if not messages:
+        return {}
+
+    days = sorted({m.day for m in messages})
+    if not days:
+        return {}
+    try:
+        surges = mention_surges(
+            messages,
+            _name_index(),
+            on=days[-1],
+            # 급증이 아니라 **오늘 몇 번 나왔나**를 센다 — 문턱을 최소로 둔다
+            min_today=1,
+            min_channels=1,
+            limit=200,
+        )
+    except Exception as exc:  # noqa: BLE001 — 센티 실패가 브리프를 막지 않는다
+        log.warning("언급을 못 셌습니다: %s", exc)
+        return {}
+    # **오늘을 우리가 정하지 않는다.** 받아 둔 메시지 중 가장 최근 날짜가
+    # 「오늘」이다 — 달력으로 정하면 주말·연휴에 늘 0이 나온다.
+    return {s.symbol: s.today for s in surges if s.symbol in mine and s.today > 0}
 
 
 def _sector_universe(profile) -> dict[str, list[str]]:
@@ -1765,11 +1826,14 @@ def _sector_universe(profile) -> dict[str, list[str]]:
     대형」과 「조선 기자재」를 둘 다 만들어 뒀다면 그 사람에게 조선은 둘 다다.
     """
     store = CardStore(_my_dir())
+    # `_peer_sector`가 받는 것은 `{종목코드: 섹터}`다 — 프로필 자체가 아니다.
+    # 피어 카드가 하나도 없을 때는 이 줄까지 안 와서 오래 안 드러났다.
+    sector_of = {s.symbol: s.sector for s in profile.stocks if s.sector}
     out: dict[str, set[str]] = {}
     for card in store.list():
         if card.kind != PEER:
             continue
-        sector = _peer_sector(profile, card)
+        sector = _peer_sector(card, sector_of)
         if not sector:
             continue
         out.setdefault(sector, set()).update(
