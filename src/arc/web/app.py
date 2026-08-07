@@ -4,8 +4,12 @@
 ----
 화면은 `web/`의 Next.js(App Router + shadcn/ui)이고, 여기서는 **API만** 낸다.
 빌드 산출물(`web/out`)을 이 앱이 정적 파일로 서빙하므로 컨테이너는 하나다 —
-`.arc-store`(추정 이력)가 볼륨에 있어야 하고 corpCode 캐시가 프로세스 메모리에
-있어서, 서비스를 둘로 쪼개면 둘 다 깨진다 (Dockerfile 주석 참조).
+`.arc-store`가 볼륨에 있어야 추정 이력(revision)과 corpCode 캐시가 살아남는다.
+서비스를 둘로 쪼개면 둘 다 깨진다 (Dockerfile 주석 참조).
+
+corpCode 캐시는 D69에서 **프로세스 메모리에서 `.arc-store/cache`로 내렸다.**
+전에는 워커가 재시작할 때마다 수 MB zip을 다시 받아 OpenDART 요청률 차단을
+불렀다 — 볼륨이 없으면 그 동작으로 되돌아간다.
 
 서버 렌더 Jinja 화면이 먼저 있었고 `/api/*`는 그때부터 이 이관을 전제로 열어둔
 것이다. 옮기면서 버린 코드는 없다.
