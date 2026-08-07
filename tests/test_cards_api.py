@@ -160,3 +160,42 @@ class TestCardList:
         rows = client.get("/api/cards").json()["cards"]
         assert len(rows) == 1
         assert "vm" not in json.dumps(rows[0])
+
+
+class TestViewModelCompleteness:
+    """**서버가 항상 완전한 모양을 준다** (D65).
+
+    카드는 만들어진 시점의 `vm`을 그대로 들고 있다. 그 뒤에 필드를 추가하면
+    옛 카드에는 그 필드가 없고, 화면이 `vm.areas.length`를 읽다가 터져
+    브라우저가 「This page couldn't load」를 띄운다 — 두 번 밟았다.
+
+    필드를 추가할 때마다 화면에 `?.`를 하나씩 다는 것은 못 지킨다.
+    """
+
+    def test_old_card_gets_todays_fields(self, client, tmp_path):
+        store = CardStore(tmp_path / "store")
+        card = _card(store)
+        # 필드가 몇 개뿐이던 시절의 카드
+        card.vm = {"gate_passed": True, "body_html": "<p>옛 카드</p>"}
+        store.save(card)
+
+        vm = client.get(f"/api/cards/{card.id}").json()["vm"]
+        for key in ("areas", "changes", "stages", "violations", "segment_items"):
+            assert key in vm, key
+        assert vm["areas"] == [] and vm["changes"] == []
+
+    def test_stored_values_win_over_defaults(self):
+        """채우는 것이지 덮어쓰는 것이 아니다."""
+        vm = client_vm({"gate_passed": True, "changes": [{"name": "매출액"}]})
+        assert vm["gate_passed"] is True
+        assert vm["changes"] == [{"name": "매출액"}]
+
+    def test_empty_vm_stays_empty(self):
+        """생성 중인 카드의 빈 `vm`은 그대로 둔다 — 화면이 그걸로 「아직」을 안다."""
+        assert client_vm({}) == {}
+
+
+def client_vm(stored: dict) -> dict:
+    from arc.web.app import _complete_vm
+
+    return _complete_vm(stored)
