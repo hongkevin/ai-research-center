@@ -31,25 +31,46 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-# 표의 줄. `(키 앞부분, 사람이 읽을 이름, 묶음)`
+# 표의 줄. `(키 앞부분, 이름, 묶음, 연도 모양)`
 #
 # 증권사 리포트 코퍼스에서 센 것과 맞춘다 — **글보다 표가 많고**, 그 표는
-# 규모 → 수익성 → 성장 → 재무 순으로 간다. 밸류에이션은 주식수가 필요해
-# 분기 카드에서는 자주 비어 있다(분기보고서에 주식수가 없다) — 없으면 줄이
-# 통째로 빠진다.
-ROWS: tuple[tuple[str, str, str], ...] = (
-    ("revenue", "매출액", "규모"),
-    ("operating_income", "영업이익", "규모"),
-    ("net_income", "당기순이익", "규모"),
-    ("operating_margin", "영업이익률", "수익성"),
-    ("net_margin", "순이익률", "수익성"),
-    ("gross_margin", "매출총이익률", "수익성"),
-    ("revenue_yoy", "매출액 YoY", "성장"),
-    ("operating_income_yoy", "영업이익 YoY", "성장"),
-    ("roe", "ROE", "수익성"),
-    ("debt_ratio", "부채비율", "재무"),
-    ("current_ratio", "유동비율", "재무"),
-    ("net_debt_ratio", "순차입금비율", "재무"),
+# 규모 → 수익성 → 성장 → 재무 → 밸류 → 추정 순으로 간다.
+#
+# **피어 비교는 실적 비교가 아니다.** 실적·주가·밸류·추정을 나란히 놓을 때
+# 생기는 **간극**이 답이다 — 실적이 비슷한데 주가가 갈렸다면 시장이 무언가를
+# 다르게 보고 있다는 뜻이고, 그게 파고들 자리다.
+#
+# 밸류에이션은 주식수가 필요해 분기 카드에서 자주 비어 있다(분기보고서에
+# 주식수가 없다). 없으면 줄이 통째로 빠진다 — 빈칸 격자를 세우지 않는다.
+#
+# 연도 모양은 `a`=실적 연도,. 연도 모양은 `a`=실적 연도,
+# `e`=다음 해 추정 — 레지스트리 키가 `revenue_2026a` / `revenue_2027e`다.
+ROWS: tuple[tuple[str, str, str, str], ...] = (
+    ("revenue", "매출액", "규모", "a"),
+    ("operating_income", "영업이익", "규모", "a"),
+    ("net_income", "당기순이익", "규모", "a"),
+    ("operating_margin", "영업이익률", "수익성", "a"),
+    ("net_margin", "순이익률", "수익성", "a"),
+    ("gross_margin", "매출총이익률", "수익성", "a"),
+    ("revenue_yoy", "매출액 YoY", "성장", "a"),
+    ("operating_income_yoy", "영업이익 YoY", "성장", "a"),
+    ("roe", "ROE", "수익성", "a"),
+    ("debt_ratio", "부채비율", "재무", "a"),
+    ("current_ratio", "유동비율", "재무", "a"),
+    ("net_debt_ratio", "순차입금비율", "재무", "a"),
+    # **밸류에이션이 실적과 주가 사이의 간극이다.** 실적이 비슷한데 주가가
+    # 갈렸다면 시장이 무언가를 다르게 보고 있다는 뜻이고, 그게 RA가 파고들
+    # 자리다. 실적만 나란히 놓으면 그 질문 자체가 안 나온다.
+    ("price", "주가", "밸류에이션", "a"),
+    ("per", "PER", "밸류에이션", "a"),
+    ("pbr", "PBR", "밸류에이션", "a"),
+    ("market_cap", "시가총액", "밸류에이션", "a"),
+    # **추정은 「누구를 더 좋게 보고 있나」다.** 같은 섹터를 놓고 우리가 건
+    # 가정이 종목마다 다르면 그 자체가 관점이다 (D34: 사람이 넣은 만큼만 낸다).
+    ("revenue", "매출액 (E)", "추정", "e"),
+    ("operating_income", "영업이익 (E)", "추정", "e"),
+    ("assume_revenue_growth", "가정 매출성장률", "추정", "e"),
+    ("assume_operating_margin", "가정 영업이익률", "추정", "e"),
 )
 
 
@@ -146,10 +167,12 @@ def build_peer_table(members: list[dict]) -> PeerTable:
         indexes.append(_index(m.get("registry") or []) if ready else {})
 
     rows: list[PeerRow] = []
-    for base, label, group in ROWS:
+    for base, label, group, shape in ROWS:
         row = PeerRow(label=label, group=group)
         for col, idx in zip(columns, indexes, strict=True):
-            entry = idx.get(f"{base}_{col.year}a") if col.year else None
+            # 추정은 **다음 해**다 — `revenue_2026a`의 짝이 `revenue_2027e`.
+            key = f"{base}_{col.year + 1}e" if shape == "e" else f"{base}_{col.year}a"
+            entry = idx.get(key) if col.year else None
             if entry is None:
                 row.cells.append(PeerCell(card_id=col.card_id))
                 continue

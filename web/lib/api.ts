@@ -1038,3 +1038,72 @@ export async function getBrief(): Promise<Brief> {
   if (!r.ok) await fail(r);
   return r.json();
 }
+
+/* ── 시장 센티 ──────────────────────────────────────────────────────
+ *
+ * **브리프와 따로다.** 브리프는 「놓친 것이 없다」는 확인이라 짧아야 하고,
+ * 센티는 뒤지는 화면이다. 한 화면에 두면 브리프가 아침에 안 읽힌다.
+ *
+ * 전부 **미검증 레인**이다 (D45). 숫자는 아무것도 안 읽는다 — 언급 횟수는
+ * 우리가 센 것이라 사실이지만, 메시지 안의 목표주가는 본문에 안 들어간다.
+ */
+
+export interface SentiSample {
+  channel: string;
+  /** broker · research · chatter · bot_feed · unknown */
+  kind: string;
+  at: string;
+  /** pre 장전 · intra 장중 · post 장후 */
+  session: string;
+  excerpt: string;
+  /** 텔레그램 **앱을 직접 여는** 링크 */
+  app_link: string | null;
+  /** 앱이 없을 때를 위한 웹 링크 */
+  web_link: string | null;
+}
+
+export interface SentiMention {
+  symbol: string;
+  name: string;
+  today: number;
+  baseline_per_day: number;
+  ratio: number;
+  channels: string[];
+  /** 장전/장중/장후 건수 — **언제 돌았는지가 절반이다** */
+  by_session: Record<string, number>;
+  samples: SentiSample[];
+  /** 내 커버·관심 종목인가 (cover | watch | "") */
+  mine: string;
+}
+
+export interface Sentiment {
+  day: string;
+  total: number;
+  by_session: Record<string, number>;
+  by_kind: Record<string, number>;
+  mentions: SentiMention[];
+  channels: { name: string; kind: string; count: number }[];
+  note: string;
+  days?: string[];
+}
+
+export async function getSentiment(on = ""): Promise<Sentiment> {
+  const r = await api(`/api/sentiment${on ? `?on=${on}` : ""}`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export const SESSION_LABEL: Record<string, string> = {
+  pre: "장전",
+  intra: "장중",
+  post: "장후",
+};
+
+export const KIND_LABEL: Record<string, string> = {
+  broker: "증권사",
+  research: "리서치",
+  chatter: "종토방",
+  bot_feed: "봇",
+  internal: "내부",
+  unknown: "미분류",
+};
