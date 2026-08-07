@@ -727,3 +727,124 @@ class TestMeasuredExtraction:
             if m.surface in index.risky
         )
         assert loose > 0  # 방어가 실제로 일을 하고 있다는 증거
+
+
+class TestRealAwakeFormats:
+    """**실물에서 잰 것.** 픽스처로 짠 파서가 진짜 메시지에서 두 번 틀렸다.
+
+    실측 400건: 파싱률 85% → 94%, 종목코드 0건 → 337건.
+    """
+
+    def _msg(self, text: str) -> Message:
+        msgs, _ = parse_messages(
+            [
+                {
+                    "id": 1,
+                    "type": "message",
+                    "date_unixtime": "1786000000",
+                    "text": text,
+                    "text_entities": [{"type": "plain", "text": text}],
+                }
+            ],
+            chat_id=1,
+            chat_name="AWAKE - 실시간 주식 공시 정리",
+            kind=ChannelKind.BOT_FEED,
+        )
+        return msgs[0]
+
+    def test_the_code_is_outside_the_parens(self):
+        """**「기업명: 코스리거글로벌(시가총액: 596억) A043710」**
+
+        괄호 안만 보던 파서는 「시가총액: 596억」을 집고 코드를 놓쳤다 —
+        `시가총액:`이 라벨로 잘려 코드가 아예 다른 필드로 넘어간다.
+        """
+        row = parse_bot_row(
+            self._msg(
+                "2026.08.05 15:20:42\n"
+                "기업명: 코스리거글로벌(시가총액: 596억) A043710\n"
+                "보고서명: 주식등의대량보유상황보고서(일반)"
+            )
+        )
+        assert row is not None
+        assert row.symbol == "043710"
+        assert row.company == "코스리거글로벌"
+        assert row.headline == "주식등의대량보유상황보고서(일반)"
+
+    def test_the_old_paren_form_still_works(self):
+        """픽스처로 짠 형식도 계속 읽어야 한다."""
+        row = parse_bot_row(
+            self._msg(
+                "2026.08.07 12:41:20\n기업명: 신성이엔지(011930)\n보고서명: 투자판단관련주요경영사항"
+            )
+        )
+        assert row is not None
+        assert row.symbol == "011930"
+        assert row.company == "신성이엔지"
+
+    def test_an_alert_is_a_format_of_its_own(self):
+        """실측 400건 중 38건(9.5%)이 이 형식이었고 통째로 못 읽었다.
+
+        거래소가 붙이는 딱지라 공시와 성격이 다르다 — 회사가 낸 것이 아니다.
+        """
+        row = parse_bot_row(
+            self._msg(
+                "단기과열/투자경고 종목 현황\n\n"
+                "종목명 : 로보티즈\n\n"
+                "2026-08-05 : [투자주의]투자경고종목 지정예고\n\n"
+                "공시링크 : https://kind.krx.co.kr/common/disclsviewer.do?method=search&acptno=1"
+            )
+        )
+        assert row is not None
+        assert row.format == "awake_alert"
+        assert row.company == "로보티즈"  # 줄바꿈이 딸려 오면 안 된다
+        assert "투자경고" in (row.headline or "")
+        assert row.url and row.url.startswith("https://kind.krx.co.kr")
+
+    def test_an_advert_is_not_a_row(self):
+        """「(공지) AWAKE프로 버전 안내」는 데이터가 아니다."""
+        assert parse_bot_row(self._msg("(공지) AWAKE프로 버전 안내\n\n매일 투자정보를…")) is None
+
+
+class TestPublicChannelDeepLink:
+    """**공개 채널도 링크가 된다 — username이 있으면.**
+
+    내보내기 JSON에는 username이 없어서 공개 채널 링크를 포기했었는데,
+    Telethon 수집기는 알고 있다. 실어 보내면 급증 목록의 샘플이 전부
+    눌러서 원문으로 갈 수 있게 된다.
+    """
+
+    def test_a_username_makes_a_public_link(self):
+        assert (
+            permalink_for(1001506140857, 42, "public_channel", "PlutoResearch")
+            == "https://t.me/PlutoResearch/42"
+        )
+
+    def test_the_at_sign_is_stripped(self):
+        assert permalink_for(1, 2, "public_channel", "@x") == "https://t.me/x/2"
+
+    def test_without_a_username_a_public_channel_has_none(self):
+        """**없는 것이 정상 상태**이지 파싱 실패가 아니다."""
+        assert permalink_for(1001506140857, 42, "public_channel") is None
+
+    def test_a_private_channel_still_uses_the_c_form(self):
+        assert permalink_for(2073492571, 14, "private_channel") == "https://t.me/c/2073492571/14"
+
+    def test_parse_export_threads_the_username(self):
+        got = parse_export(
+            {
+                "id": 1001506140857,
+                "name": "Pluto Research",
+                "type": "public_channel",
+                "username": "PlutoResearch",
+                "messages": [
+                    {
+                        "id": 7,
+                        "type": "message",
+                        "date_unixtime": "1786000000",
+                        "text": "본문",
+                        "text_entities": [{"type": "plain", "text": "본문"}],
+                    }
+                ],
+            }
+        )
+        assert got.messages[0].permalink == "https://t.me/PlutoResearch/7"
