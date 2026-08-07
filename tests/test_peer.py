@@ -23,7 +23,12 @@ def _entry(key, display, value, unit="원", label=""):
 
 def _member(symbol, year=2025, period="ANNUAL", *, status="ready", company="", **metrics):
     m = peer_member(
-        symbol, company=company or symbol, card_id=symbol * 2, year=year, period=period, status=status
+        symbol,
+        company=company or symbol,
+        card_id=symbol * 2,
+        year=year,
+        period=period,
+        status=status,
     )
     reg = []
     for base, spec in metrics.items():

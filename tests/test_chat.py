@@ -98,6 +98,7 @@ def _entry(key, label, unit, display, prov=PROV, value=1.0):
 REGISTRY = [
     _entry("revenue_2026a", "매출액 (2026A)", "원", "1조 4,575억원"),
     _entry("revenue_yoy_2026a", "매출액 YoY (2026A)", "%", "23.9%"),
+    _entry("revenue_2025a", "매출액 (2025A)", "원", "1조 1,761억원"),
     _entry("operating_margin_2026a", "영업이익률 (2026A)", "%", "6.1%"),
     _entry("opseg1_revenue_2026a", "방산 부문 매출 (2026A)", "원", "8,100억원", value=8100),
     _entry("opseg2_revenue_2026a", "철도 부문 매출 (2026A)", "원", "5,200억원", value=5200),
@@ -413,6 +414,75 @@ def test_line_structure_survives_the_guard():
     )
     a = answer_question("현대로템 실적", [_card()], client=client)
     assert a.text.count("\n") == 1
+
+
+# ── 멀티턴 ───────────────────────────────────────────────────────────
+def _turn(question, ctx=None):
+    return retrieve(question, [_card()], context=ctx)
+
+
+def test_a_follow_up_inherits_the_subject():
+    """실측: 「부문별로는?」이 종목을 못 찾아 빈 답이 나갔다."""
+    first = _turn("현대로템 영업이익률 알려줘")
+    second = _turn("부문별로는?", first.next_context())
+    assert second.tags() == ["c1"]
+    assert "부문별" in second.matched
+
+
+def test_a_follow_up_inherits_the_topic():
+    """「그럼 작년은?」에는 주제가 통째로 빠져 있다."""
+    first = _turn("현대로템 영업이익률 알려줘")
+    second = _turn("그럼 작년은?", first.next_context())
+    assert "영업이익률" in second.matched
+
+
+def test_a_relative_year_stays_in_the_same_card():
+    """전기 수치는 같은 카드 안에 비교표시로 있다 — 다른 카드를 찾을 일이 아니다."""
+    first = _turn("현대로템 매출 알려줘")
+    second = _turn("작년은?", first.next_context())
+    assert second.tags() == ["c1"]
+    assert "2025" in second.matched
+    assert "c1.revenue_2025a" in second.keys
+
+
+def test_a_demonstrative_is_resolved_by_the_context():
+    first = _turn("현대로템 영업이익률 알려줘")
+    second = _turn("거기 매출은 얼마야", first.next_context())
+    assert second.tags() == ["c1"]
+    assert "매출" in second.matched
+
+
+def test_naming_a_new_company_beats_the_carried_one():
+    """**새 주어가 이긴다.** 안 그러면 다른 회사 숫자로 답하게 된다."""
+    first = _turn("현대로템 영업이익률 알려줘")
+    second = _turn("삼성전자는?", first.next_context())
+    assert second.empty
+    assert "삼성전자" in second.unmatched
+
+
+def test_carrying_over_is_always_disclosed():
+    """조용히 이어받으면 사용자가 다른 회사를 생각했을 때 확신 있게 틀린다."""
+    first = _turn("현대로템 영업이익률 알려줘")
+    assert first.carried == []
+    second = _turn("부문별로는?", first.next_context())
+    assert any("현대로템" in c for c in second.carried)
+
+
+def test_the_subject_survives_a_turn_that_found_nothing():
+    """「수주잔고?」에 못 답했다고 다음 「그럼 매출은?」이 처음부터 시작하면 대화가 아니다."""
+    first = _turn("현대로템 수주잔고 알려줘")
+    assert first.empty
+    second = _turn("그럼 매출은?", first.next_context())
+    assert second.tags() == ["c1"]
+
+
+def test_answer_hands_the_context_forward():
+    client = _Fake("매출은 {{num:c1.revenue_2026a}}이다 [c1].", "영업이익률은 그다음이다 [c1].")
+    first = answer_question("현대로템 매출 얼마야", [_card()], client=client)
+    assert first.context.symbols == ("064350",)
+    second = answer_question("부문별로는?", [_card()], client=client, context=first.context)
+    assert second.cards
+    assert second.carried_over
 
 
 # ── 레인 셋 ──────────────────────────────────────────────────────────
