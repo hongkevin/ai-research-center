@@ -33,6 +33,9 @@ import logging
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
+
+from arc.finmodel import market_facts
 
 log = logging.getLogger("arc.finmodel.price_store")
 
@@ -91,38 +94,84 @@ def backfill(
 
     end = today or dt.datetime.now(dt.UTC).date()
     start = end - dt.timedelta(days=days)
-    have = _dates_on_disk(out)
+    # **두 저장소의 날짜를 따로 본다.** 시세는 다 받아 뒀는데 시장 데이터만
+    # 비어 있는 상태가 정상이다(D87 이전에 받은 것이 그렇다). 시세 기준으로만
+    # 건너뛰면 그 상태에서 시장 데이터가 영영 안 채워진다.
+    have = _dates_on_disk(out) & market_facts.dates_on_disk(base)
 
     series: dict[str, dict[str, float]] = {}
+    extra: dict[str, dict[str, market_facts.Row]] = {}
+    listing: dict[str, str] = {}
     fetched = 0
     empty = 0
     for day in _trading_days(start, end):
         stamp = day.strftime("%Y%m%d")
         if stamp in have:
             continue
-        rows = _fetch_day(provider, stamp)
+        rows = _fetch_day_full(provider, stamp)
         if not rows:
             # 공휴일이거나 아직 안 올라온 날. 정상이다.
             empty += 1
             continue
         fetched += 1
-        for symbol, close in rows:
-            series.setdefault(symbol, {})[stamp] = close
+        for symbol, row in rows:
+            series.setdefault(symbol, {})[stamp] = row.close
+            extra.setdefault(symbol, {})[stamp] = market_facts.Row(
+                high=row.high,
+                low=row.low,
+                turnover=row.turnover,
+                cap=row.cap,
+                shares=row.shares,
+            )
+            if row.board:
+                listing[symbol] = row.board
         if interval:
             time.sleep(interval)
 
     written = _merge(out, series)
+    market_facts.merge(base, extra, listing)
     return {
         "fetched_days": fetched,
         "empty_days": empty,
         "symbols": written,
         "total_symbols": available(base),
+        "market_symbols": market_facts.available(base),
         "path": str(out),
     }
 
 
+def _num(value) -> float:
+    """`"20,760,209,506"` → `20760209506.0`. 못 읽으면 0 — **추정하지 않는다.**"""
+    try:
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _fetch_day(provider, stamp: str) -> list[tuple[str, float]]:
-    """하루치 전 종목. **한 콜이다.**"""
+    """하루치 전 종목의 **종가만**. 옛 호출부를 위한 얇은 껍데기다."""
+    return [(code, row.close) for code, row in _fetch_day_full(provider, stamp)]
+
+
+class _Full(NamedTuple):
+    """응답 한 줄에서 우리가 쓰는 것 전부."""
+
+    close: float
+    high: float
+    low: float
+    turnover: float
+    cap: float
+    shares: float
+    board: str
+
+
+def _fetch_day_full(provider, stamp: str) -> list[tuple[str, _Full]]:
+    """하루치 전 종목. **한 콜이다.**
+
+    전에는 여기서 `clpr` 하나만 읽고 나머지를 버렸다. 같은 응답에 시가총액·
+    거래대금·상장주식수·시장 구분이 들어 있는데, 그것들이 없어서 스몰캡
+    화면도 스크리닝도 못 했다 (D87). **콜은 그대로다.**
+    """
     resp = provider._client.get(
         "/getStockPriceInfo",
         params={
@@ -139,18 +188,28 @@ def _fetch_day(provider, stamp: str) -> list[tuple[str, float]]:
     if isinstance(items, dict):
         items = [items]
 
-    out: list[tuple[str, float]] = []
+    out: list[tuple[str, _Full]] = []
     for it in items:
         code = str(it.get("srtnCd") or "").strip()
-        close = it.get("clpr")
-        if not code or close in (None, ""):
+        close = _num(it.get("clpr"))
+        # **종가가 0이면 그 줄은 버린다.** 지금까지의 규칙 그대로다 — 나머지
+        # 필드가 와도 종가 없는 날은 시세 계열에 넣을 수 없다.
+        if not code or close <= 0:
             continue
-        try:
-            value = float(str(close).replace(",", ""))
-        except ValueError:
-            continue
-        if value > 0:
-            out.append((code, value))
+        out.append(
+            (
+                code,
+                _Full(
+                    close=close,
+                    high=_num(it.get("hipr")),
+                    low=_num(it.get("lopr")),
+                    turnover=_num(it.get("trPrc")),
+                    cap=_num(it.get("mrktTotAmt")),
+                    shares=_num(it.get("lstgStCnt")),
+                    board=str(it.get("mrktCtg") or "").strip(),
+                ),
+            )
+        )
     return out
 
 
