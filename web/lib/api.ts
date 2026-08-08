@@ -674,6 +674,14 @@ export async function getCapabilities(): Promise<Capabilities> {
 
 /** 서버가 준 메시지를 그대로 올린다 — 원인을 화면에 보여주는 게 목적이다. */
 async function fail(r: Response): Promise<never> {
+  // **로그인 만료를 「HTTP 401」이라고 말하지 않는다** (D85).
+  //
+  // 토큰이 끊기면 모든 호출이 401이 되는데 화면에는 숫자만 떴다. 실제로
+  // *"리포트가 안 만들어짐 — DART가 또 막힌 건가"* 로 읽혔다. 서버도 DART도
+  // 멀쩡했고 세션만 끝나 있었다.
+  if (r.status === 401) {
+    throw new Error("로그인이 끝났습니다 — 새로고침하면 다시 로그인합니다.");
+  }
   let detail = `HTTP ${r.status}`;
   try {
     const body = await r.json();

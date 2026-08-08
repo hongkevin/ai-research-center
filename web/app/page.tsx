@@ -172,6 +172,14 @@ export default function Workbench() {
     });
     const { data: sub } = client.auth.onAuthStateChange((_e, session) => {
       setSignedIn(Boolean(session));
+      // **세션이 끊기면 로그인으로 보낸다** (D85). 전에는 상태만 바꾸고
+      // 화면에 그대로 머물렀다 — 그러면 모든 호출이 401이 되는데 사용자는
+      // 「리포트가 안 만들어진다」로 읽는다. 서버는 멀쩡한데.
+      if (!session) {
+        location.replace(
+          `/login/?next=${encodeURIComponent(location.pathname)}`,
+        );
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
