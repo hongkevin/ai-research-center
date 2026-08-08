@@ -34,7 +34,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 
-from arc.web.identity import reset_current_user, set_current_user
+from arc.web.identity import (
+    reset_current_email,
+    reset_current_user,
+    set_current_email,
+    set_current_user,
+)
 
 log = logging.getLogger("arc.web")
 
@@ -209,9 +214,13 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             # **여기서부터 저장소가 사람별로 갈린다.** `call_next` 앞에서
             # 세팅해야 하위 태스크가 이 값을 물려받는다.
             token = set_current_user(request.state.user_id)
+            # **이메일도 세운다.** `ARC_ADOPT_LOCAL`에 UUID를 적는 것은
+            # 로그인해 보기 전에는 불가능하다 — 이름으로 지정할 길이 필요하다.
+            mail = set_current_email(request.state.user_email)
             try:
                 return await call_next(request)
             finally:
+                reset_current_email(mail)
                 reset_current_user(token)
 
         if not self.password:
