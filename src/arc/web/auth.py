@@ -47,6 +47,22 @@ _REALM = "AI Research Center"
 _SUPABASE_AUD = "authenticated"
 
 
+def _jwks_url(project_url: str) -> str:
+    """프로젝트 URL → JWKS 주소. 비어 있거나 형식이 아니면 빈 문자열.
+
+    `https://abcd.supabase.co` → `https://abcd.supabase.co/auth/v1/.well-known/jwks.json`
+    """
+    url = (project_url or "").strip().rstrip("/")
+    if not url.startswith("https://"):
+        return ""
+    return f"{url}/auth/v1/.well-known/jwks.json"
+
+
+def _is_progress_stream(path: str) -> bool:
+    """`/api/jobs/{id}/events` 인가. **`/api/events`는 아니다.**"""
+    return path.startswith("/api/jobs/") and path.endswith("/events")
+
+
 def _is_public(path: str, *, jwt_mode: bool) -> bool:
     """이 경로를 인증 없이 열어줄 것인가.
 
@@ -81,10 +97,21 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, password: str | None = None, username: str = "arc") -> None:
         super().__init__(app)
         self.password = password if password is not None else os.environ.get("ARC_PASSWORD", "")
-        self.username = os.environ.get("ARC_USERNAME", username)
+        # **빈 값은 「설정 안 함」이다.** `os.environ.get(k, 기본값)`은 빈
+        # 문자열이 들어 있으면 그걸 그대로 준다 — `ARC_USERNAME=`만 적어 두면
+        # 사용자명이 빈 문자열이 되어 아무도 로그인 못 한다.
+        self.username = os.environ.get("ARC_USERNAME", "") or username
         self.jwt_secret = os.environ.get("SUPABASE_JWT_SECRET", "")
-        if self.jwt_secret:
-            log.info("Supabase 토큰 검증으로 실행됩니다.")
+        # **비대칭 서명이 지금의 기본이다.** 공유 시크릿(HS256)은 하위 호환용이고
+        # 2026년 말 폐기 예정이라, 프로젝트 URL만 있으면 JWKS로 검증한다.
+        self.jwks_url = _jwks_url(
+            os.environ.get("SUPABASE_URL", "") or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
+        )
+        self._jwks = None
+        if self.jwks_url:
+            log.info("Supabase 토큰 검증(JWKS)으로 실행됩니다: %s", self.jwks_url)
+        elif self.jwt_secret:
+            log.info("Supabase 토큰 검증(공유 시크릿)으로 실행됩니다 — 레거시 방식입니다.")
         elif not self.password:
             log.warning(
                 "SUPABASE_JWT_SECRET·ARC_PASSWORD가 모두 없어 인증 없이 실행됩니다. "
@@ -94,8 +121,13 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     def _claims(self, header: str | None) -> dict | None:
         """`Authorization: Bearer <jwt>` → 검증된 클레임. 아니면 None.
 
-        HS256 + 프로젝트 JWT 시크릿을 전제한다. Supabase 프로젝트가 비대칭
-        서명키(RS256/ES256)를 쓰면 JWKS 조회가 따로 필요하다.
+        **토큰이 자기 알고리즘을 말한다.** Supabase는 지금 비대칭 서명키
+        (ES256/RS256)가 기본이고 공유 시크릿(HS256)은 하위 호환이다. 마이그레이션
+        중에는 둘 다 발급될 수 있으므로 헤더의 `alg`를 보고 갈라 준다.
+
+        **실패하면 거부한다, 통과시키지 않는다.** JWKS를 못 받아도 마찬가지다 —
+        열려 있는 편이 낫다는 판단은 여기서 절대 하지 않는다. 이 서버는 LLM
+        키를 들고 있다.
         """
         if not header or not header.lower().startswith("bearer "):
             return None
@@ -103,14 +135,40 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         try:
             import jwt
 
-            return jwt.decode(
-                token,
-                self.jwt_secret,
-                algorithms=["HS256"],
-                audience=_SUPABASE_AUD,
-            )
+            alg = jwt.get_unverified_header(token).get("alg", "")
+            if alg == "HS256":
+                if not self.jwt_secret:
+                    log.debug("토큰이 HS256인데 공유 시크릿이 없습니다")
+                    return None
+                key, algorithms = self.jwt_secret, ["HS256"]
+            else:
+                signing = self._signing_key(token)
+                if signing is None:
+                    return None
+                key, algorithms = signing, ["ES256", "RS256"]
+
+            return jwt.decode(token, key, algorithms=algorithms, audience=_SUPABASE_AUD)
         except Exception as exc:  # noqa: BLE001 — 만료·서명불일치·형식오류 전부 거부다
             log.debug("토큰 거부: %s", exc)
+            return None
+
+    def _signing_key(self, token: str):
+        """JWKS에서 이 토큰의 공개키. **캐시는 PyJWT가 한다.**
+
+        요청마다 Supabase에 물으면 지연이 붙고 그쪽이 죽으면 우리도 죽는다.
+        `PyJWKClient`가 `kid`별로 캐시하고 만료되면 다시 받는다.
+        """
+        if not self.jwks_url:
+            log.debug("비대칭 토큰인데 프로젝트 URL이 없어 JWKS를 못 찾습니다")
+            return None
+        try:
+            from jwt import PyJWKClient
+
+            if self._jwks is None:
+                self._jwks = PyJWKClient(self.jwks_url, cache_keys=True)
+            return self._jwks.get_signing_key_from_jwt(token).key
+        except Exception as exc:  # noqa: BLE001 — 네트워크·형식 전부 거부다
+            log.warning("JWKS를 못 받아 토큰을 거부합니다: %s", exc)
             return None
 
     def _ok(self, header: str | None) -> bool:
@@ -125,7 +183,8 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         return hmac.compare_digest(user, self.username) and hmac.compare_digest(pw, self.password)
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        jwt_mode = bool(self.jwt_secret)
+        # JWKS든 공유 시크릿이든 **토큰 검증 모드**다
+        jwt_mode = bool(self.jwks_url or self.jwt_secret)
         if _is_public(request.url.path, jwt_mode=jwt_mode):
             return await call_next(request)
 
@@ -135,7 +194,9 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             # 토큰을 받는다. 쿼리 토큰은 서버 로그에 남을 수 있어 일반적으로
             # 피해야 하지만 다른 방법이 없고, 이 경로가 흘리는 것은 단계
             # 이름뿐이다.
-            if not header and request.url.path.endswith("/events"):
+            # **진행 스트림에만 준다.** `/api/events`(사건 로그)가 여기 걸리면
+            # 로그 조회가 쿼리 토큰을 받게 되고, 토큰이 서버 로그에 남는다.
+            if not header and _is_progress_stream(request.url.path):
                 q = request.query_params.get("access_token", "")
                 header = f"Bearer {q}" if q else None
             claims = self._claims(header)
