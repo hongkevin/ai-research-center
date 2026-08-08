@@ -102,3 +102,49 @@ class TestAdopt:
         _local(tmp_path)
         assert adopt_local(tmp_path, "../../etc") == []
         assert not (tmp_path / "etc").exists()
+
+
+class TestWhoMayAdopt:
+    """**「먼저 로그인한 사람」에 맡기지 않는다.**
+
+    배포본이 인증 없이 돌던 동안 `users/local/`에 쌓였을 수 있다 —
+    `current_user()`가 `local`이었기 때문이다. 그것을 남이 가져가면 안 된다.
+    """
+
+    def test_off_by_default_words(self):
+        from arc.web.identity import may_adopt
+
+        for off in ("", "  ", "0", "false", "no", "off", "FALSE"):
+            assert may_adopt(off, "alice-1111", "a@b.com") is False, off
+
+    def test_a_uid_lets_only_that_person(self):
+        from arc.web.identity import may_adopt
+
+        assert may_adopt("alice-1111", "alice-1111") is True
+        assert may_adopt("alice-1111", "bob-2222") is False
+
+    def test_an_email_lets_only_that_person(self):
+        """**UUID는 로그인해 보기 전에 모른다.** 이메일로도 지정돼야 한다."""
+        from arc.web.identity import may_adopt
+
+        assert may_adopt("me@example.com", "any-uid", "me@example.com") is True
+        assert may_adopt("me@example.com", "any-uid", "other@example.com") is False
+
+    def test_email_ignores_case(self):
+        from arc.web.identity import may_adopt
+
+        assert may_adopt("Me@Example.COM", "u", "me@example.com") is True
+
+    def test_one_still_means_anyone(self):
+        """하위 호환. 로컬 개발에서는 로그인하는 사람이 한 명이라 이게 편하다."""
+        from arc.web.identity import may_adopt
+
+        assert may_adopt("1", "whoever") is True
+        assert may_adopt("true", "whoever") is True
+
+    def test_a_wrong_name_does_not_fall_open(self):
+        """오타를 「누구든」으로 읽으면 안 된다 — 그게 이 스위치의 존재 이유다."""
+        from arc.web.identity import may_adopt
+
+        assert may_adopt("alice-1111", "", "") is False
+        assert may_adopt("yess", "alice-1111", "a@b.com") is False

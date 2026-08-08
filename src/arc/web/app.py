@@ -131,7 +131,15 @@ from arc.store.profile import (
 )
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
-from arc.web.identity import SOLO, adopt_local, current_user, migrate_legacy, user_dir
+from arc.web.identity import (
+    SOLO,
+    adopt_local,
+    current_email,
+    current_user,
+    may_adopt,
+    migrate_legacy,
+    user_dir,
+)
 from arc.web.jobs import JobStore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -987,7 +995,9 @@ def _my_dir() -> Path:
     """
     migrate_legacy(STORE_DIR)
     uid = current_user()
-    if uid != SOLO and os.environ.get("ARC_ADOPT_LOCAL", "1") not in ("0", "false", "no"):
+    # **누가 가져갈지 이름으로 정한다.** 「먼저 로그인한 사람」에 맡기면
+    # 배포본이 인증 없이 돌던 동안 쌓인 것을 남이 가져갈 수 있다.
+    if uid != SOLO and may_adopt(os.environ.get("ARC_ADOPT_LOCAL", "1"), uid, current_email()):
         adopt_local(STORE_DIR, uid)
     return user_dir(STORE_DIR)
 

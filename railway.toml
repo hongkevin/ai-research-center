@@ -24,8 +24,10 @@
 #   ANTHROPIC_API_KEY (또는 OPENAI_API_KEY)
 #   TELEGRAM_API_ID · TELEGRAM_API_HASH   (수집기를 쓸 때만)
 #   ARC_STORE_DIR=/data/arc-store
-#   ARC_ADOPT_LOCAL=0     공유 배포에서는 끈다 — 처음 로그인한 사람이
-#                         인증 켜기 전 데이터를 가져가는 일을 막는다 (D76)
+#   ARC_ADOPT_LOCAL       **이메일을 적는다** (본인 것). 인증 없이 돌던 동안
+#                         `users/local/`에 쌓인 것을 그 사람만 가져간다.
+#                         `1`로 두면 먼저 로그인한 사람이 가져가고, 그게
+#                         누가 될지는 운이다 (D76 갱신)
 #
 # 배포 뒤 **한 번**: `arc db init` (스키마 + RLS). 안 돌리면 개인 데이터가
 # 조용히 볼륨으로만 간다.

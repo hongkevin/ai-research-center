@@ -59,6 +59,11 @@ _SAFE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 _CURRENT: contextvars.ContextVar[str] = contextvars.ContextVar("arc_user", default=SOLO)
 
+# 이메일은 **uid의 대체가 아니라 사람이 읽을 이름**이다. `ARC_ADOPT_LOCAL`에
+# uid(UUID)를 적는 것은 사실상 불가능해서 — 로그인해 보기 전에는 모른다 —
+# 이메일로도 지정할 수 있어야 한다.
+_EMAIL: contextvars.ContextVar[str] = contextvars.ContextVar("arc_email", default="")
+
 
 def set_current_user(uid: str) -> contextvars.Token:
     return _CURRENT.set(safe_uid(uid))
@@ -71,6 +76,18 @@ def reset_current_user(token: contextvars.Token) -> None:
 
 def current_user() -> str:
     return _CURRENT.get()
+
+
+def set_current_email(email: str) -> contextvars.Token:
+    return _EMAIL.set((email or "").strip().lower())
+
+
+def reset_current_email(token: contextvars.Token) -> None:
+    _EMAIL.reset(token)
+
+
+def current_email() -> str:
+    return _EMAIL.get()
 
 
 def safe_uid(uid: str) -> str:
@@ -97,6 +114,35 @@ CREDENTIALS = ("telegram.session",)
 _CLAIM = ".claimed-by"
 
 
+# `ARC_ADOPT_LOCAL`이 「끔」으로 읽는 값들
+_OFF = frozenset({"", "0", "false", "no", "off"})
+
+# 「누구든 먼저 로그인한 사람」. **권하지 않는다** — 아래 주석 참조
+_ANYONE = frozenset({"1", "true", "yes", "on"})
+
+
+def may_adopt(setting: str, uid: str, email: str = "") -> bool:
+    """이 사람이 `local`을 가져갈 자격이 있는가.
+
+    `ARC_ADOPT_LOCAL`이 받는 값 세 종류:
+
+    * 비었거나 `0` — **안 넘긴다.** 공유 배포의 기본값이어야 한다
+    * **uid 또는 이메일** — 그 사람만. 이게 권하는 방식이다
+    * `1` — 먼저 로그인한 사람. 편하지만 **누가 될지는 운**이다. 배포본이
+      인증 없이 돌던 동안 쌓인 것을 남이 가져갈 수 있다
+
+    `1`을 남겨 둔 것은 하위 호환이고, 로컬 개발에서는 그게 편하다 — 거기서는
+    로그인하는 사람이 한 명이다.
+    """
+    want = (setting or "").strip()
+    if want.lower() in _OFF:
+        return False
+    if want.lower() in _ANYONE:
+        return True
+    # 이름으로 지정한 경우. 이메일은 대소문자를 안 가린다
+    return want == uid or want.lower() == (email or "").strip().lower()
+
+
 def adopt_local(base: str | Path, uid: str) -> list[str]:
     """로그인을 켜는 날, `local`에 쌓인 것을 **처음 로그인한 사람**에게 넘긴다.
 
@@ -105,8 +151,12 @@ def adopt_local(base: str | Path, uid: str) -> list[str]:
     같다.**
 
     **한 번만 넘긴다.** `.claimed-by`를 남겨 두 번째 사람은 빈 저장소로
-    시작한다. 공유 배포에서 이건 「처음 로그인한 사람이 개발 데이터를
-    가져간다」는 뜻이므로, 그게 곤란하면 `ARC_ADOPT_LOCAL=0`으로 끈다.
+    시작한다.
+
+    **누가 가져갈지는 `ARC_ADOPT_LOCAL`이 정한다** (`may_adopt()`). 이름을
+    적으면 그 사람만 가져간다 — 「먼저 로그인한 사람」이라는 운에 맡기지
+    않는다. 배포본이 인증 없이 돌던 동안 `users/local/`에 쌓였을 수 있고,
+    그것을 남이 가져가면 안 된다.
 
     **자격증명은 안 넘긴다** (`CREDENTIALS`). 텔레그램 세션은 계정 접근
     권한이라 데이터 이관을 따라가면 안 된다.
