@@ -49,3 +49,8 @@ _AMBIENT = (
 for _name in _AMBIENT:
     # 빈 문자열도 「있는 값」이라 `load_dotenv`가 안 덮는다
     os.environ[_name] = ""
+
+# **테스트는 네트워크를 타면 안 된다** (D87). 앱이 뜰 때 시세 갱신 루프가
+# 도는데, 그건 금융위 API를 260번 두드리는 일이다. 위와 달리 **켜는 값**이라
+# 빈 문자열이 아니라 `1`로 둔다.
+os.environ["ARC_NO_PRICE_REFRESH"] = "1"

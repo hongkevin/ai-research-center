@@ -32,6 +32,7 @@ import logging
 import os
 import re
 import threading
+import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -132,6 +133,7 @@ from arc.store.profile import (
     unpin_peer,
 )
 from arc.store.snapshot import SnapshotStore
+from arc.web import refresh
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
 from arc.web.identity import (
     SOLO,
@@ -201,6 +203,17 @@ async def _lifespan(_app: FastAPI):
             log.warning("corpCode 캐시 준비 실패: %s", exc)
 
     threading.Thread(target=warm, daemon=True, name="arc-warm").start()
+
+    # **시세를 받아 올 경로가 아예 없었다** (D87). 엔드포인트도 스케줄러도
+    # 시작 작업도 없었고, 폴백 코퍼스는 gitignore라 이미지에도 없다 — 배포된
+    # 앱은 시세가 0개인 채로 돌았다. 그리고 이건 최초 1회가 아니라 **매
+    # 거래일**이다: 손으로 돌리는 절차로 두면 어느 아침엔가 잊고, 그날
+    # 브리프는 조용히 어제치가 된다.
+    #
+    # 끄는 스위치를 둔다 — 시험·CI에서 네트워크를 타면 안 된다.
+    if os.environ.get("ARC_NO_PRICE_REFRESH", "") not in ("1", "true", "yes"):
+        refresh.start(STORE_DIR)
+
     _reap_running_cards()
     yield
 
@@ -3278,6 +3291,50 @@ def api_suggest_peers(payload: dict):
         "universe": len(prices),
         "source": source,
     }
+
+
+@app.get("/api/prices/status")
+def api_price_status():
+    """받아 둔 시세가 얼마나 되고, 마지막 갱신이 어땠나 (D87).
+
+    **화면이 이걸 그대로 보여준다.** 시세가 없으면 브리프의 등락도 섹터 줄도
+    피어 후보도 발굴도 전부 비는데, 각 화면이 「없다」고만 말하면 원인이
+    한 군데라는 것을 알 수 없다.
+    """
+    from arc.finmodel import market_facts
+    from arc.finmodel.price_store import available
+
+    prices, source = _price_source()
+    return {
+        **refresh.STATUS.snapshot(),
+        "symbols_on_disk": available(STORE_DIR),
+        "market_on_disk": market_facts.available(STORE_DIR),
+        "loaded": len(prices),
+        "source": source,
+        "latest_date": _latest_price_date(),
+    }
+
+
+@app.post("/api/prices/refresh")
+def api_price_refresh():
+    """지금 받는다. **자동으로도 돌지만 기다리기 싫을 때가 있다** (D87).
+
+    받는 데 몇 분이 걸릴 수 있어(처음이면 약 260콜) **던지고 상태를 돌려준다** —
+    화면이 `/api/prices/status`로 따라간다. 두 번 눌러도 겹쳐 돌지 않는다
+    (`run_once`가 잠근다).
+    """
+    if refresh.STATUS.running:
+        return {"started": False, **refresh.STATUS.snapshot()}
+    threading.Thread(
+        target=refresh.run_once,
+        args=(STORE_DIR,),
+        kwargs={"reason": "manual"},
+        daemon=True,
+        name="arc-prices-manual",
+    ).start()
+    # 스레드가 상태를 세우기 전에 읽으면 「안 도는 중」으로 보인다
+    time.sleep(0.1)
+    return {"started": True, **refresh.STATUS.snapshot()}
 
 
 @app.post("/api/discover")
