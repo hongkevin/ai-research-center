@@ -176,6 +176,12 @@ class Answer:
     text: str
     facts: str = ""
     analysis: str = ""
+    # **치환 전의 `text`.** `{{num:key}}`만 들어 있고 값이 구조적으로 없다.
+    #
+    # 답을 저장하려면 이게 있어야 한다(`arc.store.chats`). 렌더된 본문을 그대로
+    # 남겼다가 나중에 맥락으로 조립하면 LLM이 값을 보게 되고, 그러면 불변식 1이
+    # 조용히 깨진다. 값은 `sources`가 항목마다 들고 있으므로 화면은 잃는 게 없다.
+    template: str = ""
     # **미검증 레인.** 절대 `text`에 합치지 않는다 — 합치면 배지를 붙일 자리가
     # 없어지고 기사에서 온 말이 공시에서 온 말처럼 읽힌다 (D31·D45).
     hints: list[Hint] = field(default_factory=list)
@@ -482,11 +488,14 @@ def answer_question(
     hint = _hints_lane(question, retrieval, client, news)
 
     sources = _sources_for(retrieval, keys, markers)
+    analysis_template = analysis_verdict.text if analysis_verdict is not None else ""
     return Answer(
         # **검증 레인만** 담는다. 힌트는 `hints`로 따로 나간다.
         text="\n\n".join(p for p in (facts, analysis) if p),
         facts=facts,
         analysis=analysis,
+        # 같은 본문의 치환 **전** 모양. 저장은 이쪽을 쓴다.
+        template="\n\n".join(p for p in (verdict.text, analysis_template) if p),
         hints=hint.hints,
         sources=sources,
         unanswered=list(dict.fromkeys(unanswered)),
@@ -506,6 +515,23 @@ def answer_question(
 
 def _add(a: float | None, b: float | None) -> float | None:
     return None if a is None and b is None else (a or 0.0) + (b or 0.0)
+
+
+def number_values(answer: Answer) -> dict[str, str]:
+    """`template`의 플레이스홀더 키 → 화면에 보일 문자열.
+
+    **새로 계산하지 않는다.** 출처 줄이 이미 항목마다 값을 들고 있고(D36),
+    거기서 모으면 「본문에 인용된 것」과 「값이 있는 것」이 자동으로 일치한다.
+
+    키를 다시 조립하는 이유: `Source`는 사람이 읽으라고 꼬리표(`[c1]`)와
+    키(`operating_margin_2026a`)를 갈라 두었는데, 본문의 플레이스홀더는 붙은
+    형태(`c1.operating_margin_2026a`)다.
+    """
+    return {
+        f"{s.marker.strip('[]')}.{s.key}": s.value
+        for s in answer.sources
+        if s.kind == "number" and s.key and s.value
+    }
 
 
 def _hints_lane(

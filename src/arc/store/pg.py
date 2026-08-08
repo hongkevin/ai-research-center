@@ -121,6 +121,57 @@ create index if not exists arc_cards_uid_created on arc_cards (uid, created_at d
 alter table arc_cards enable row level security;
 alter table arc_cards force row level security;
 
+-- 리서치 채팅의 대화 — **브라우저에만 있던 것을 여기로 옮긴다.**
+--
+-- 프로필과 달리 문서 하나로 안 둔다. 대화는 **뒤에 붙기만 하는 목록**이라
+-- 턴 하나가 행 하나로 떨어지고, 목록 화면은 본문 없이 제목과 턴 수만 쓴다.
+-- 문서로 두면 턴을 붙일 때마다 대화 전체를 읽고 다시 쓴다.
+--
+-- 키가 `(uid, id)`인 이유: id는 앱이 만든 16자리 hex라 사람 사이에서 유일할
+-- 이유가 없다. uid를 키에 넣으면 남의 id와 부딪힐 수가 없고, 턴의 외래키가
+-- **uid까지 같이 물어서** 남의 대화에 턴을 붙이는 경로가 사라진다.
+create table if not exists arc_chat_sessions (
+    uid         text        not null,
+    id          text        not null,
+    title       text        not null default '',
+    -- 다음 질문의 앵커 (chat.retrieval.Context). 종목·어휘·연도뿐이다
+    symbols     jsonb       not null default '[]'::jsonb,
+    tokens      jsonb       not null default '[]'::jsonb,
+    year        int,
+    created_at  timestamptz not null default now(),
+    updated_at  timestamptz not null default now(),
+    primary key (uid, id)
+);
+
+-- 「내 것을, 최근 갱신 순」이 목록 화면의 전부다
+create index if not exists arc_chat_sessions_uid_at on arc_chat_sessions (uid, updated_at desc);
+
+create table if not exists arc_chat_turns (
+    id          bigserial primary key,
+    uid         text        not null,
+    session_id  text        not null,
+    at          timestamptz not null default now(),
+    -- **가린 것만 들어온다.** 사람이 친 질문이라 무엇이 들었는지 모른다.
+    question    text        not null default '',
+    -- **플레이스홀더거나 가린 것만 들어온다.** 여기 렌더된 숫자가 들어가면
+    -- 맥락 조립을 타고 프롬프트에 닿아 불변식 1이 깨진다 — arc_events와
+    -- 같은 규칙이고, `chats.build_turn()`이 그것을 세운다.
+    answer      text        not null default '',
+    safe        text        not null default 'none',
+    -- `{{num:key}}` → 화면에 보일 문자열. **본문이 아니라 표다** — 프롬프트로
+    -- 조립되는 것은 본문뿐이라 여기 값이 있어도 LLM에 닿지 않는다.
+    numbers     jsonb       not null default '{}'::jsonb,
+    foreign key (uid, session_id) references arc_chat_sessions (uid, id) on delete cascade
+);
+
+-- 대화 하나를 열면 그 턴을 시간순으로 전부 읽는다
+create index if not exists arc_chat_turns_session on arc_chat_turns (uid, session_id, at);
+
+alter table arc_chat_sessions enable row level security;
+alter table arc_chat_sessions force row level security;
+alter table arc_chat_turns enable row level security;
+alter table arc_chat_turns force row level security;
+
 -- 우리가 트랜잭션마다 내려앉을 역할. Supabase가 PostgREST용으로 이미
 -- 만들어 둔 것이고 **BYPASSRLS가 없다** — 그래서 정책이 실제로 적용된다.
 grant usage on schema public to authenticated;
@@ -128,6 +179,9 @@ grant select, insert, update, delete on arc_events to authenticated;
 grant usage, select on sequence arc_events_id_seq to authenticated;
 grant select, insert, update, delete on arc_profiles to authenticated;
 grant select, insert, update, delete on arc_cards to authenticated;
+grant select, insert, update, delete on arc_chat_sessions to authenticated;
+grant select, insert, update, delete on arc_chat_turns to authenticated;
+grant usage, select on sequence arc_chat_turns_id_seq to authenticated;
 """
 
 # RLS. **앱이 실수해도 DB가 막는다.** 정책을 지웠다 다시 만드는 이유:
@@ -145,6 +199,19 @@ create policy arc_profiles_own on arc_profiles
 
 drop policy if exists arc_cards_own on arc_cards;
 create policy arc_cards_own on arc_cards
+    using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
+    with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
+
+-- 대화도 같은 규칙이다. **턴에도 따로 건다** — 세션에만 걸고 턴을 열어 두면
+-- 세션 id만 알면 남의 질문과 답을 읽는다. 외래키가 있으니 괜찮다는 말은
+-- 성립하지 않는다: 외래키는 무결성이지 접근 제어가 아니다.
+drop policy if exists arc_chat_sessions_own on arc_chat_sessions;
+create policy arc_chat_sessions_own on arc_chat_sessions
+    using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
+    with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
+
+drop policy if exists arc_chat_turns_own on arc_chat_turns;
+create policy arc_chat_turns_own on arc_chat_turns
     using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
     with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
 """
@@ -261,7 +328,18 @@ def rls_enforced(uid: str = "rls-probe") -> bool:
 
 
 # 내보내기가 다루는 표. **순서가 있다** — 들여올 때 이 순서로 넣는다.
-TABLES = ("arc_profiles", "arc_cards", "arc_events")
+# 대화의 턴은 세션을 외래키로 물으므로 **세션 뒤**여야 한다.
+TABLES = (
+    "arc_profiles",
+    "arc_cards",
+    "arc_events",
+    "arc_chat_sessions",
+    "arc_chat_turns",
+)
+
+# `bigserial`로 id를 받는 표. 들여올 때 **id를 버린다** — 옮긴 DB의 시퀀스와
+# 충돌하면 두 번째 행부터 전부 거절된다.
+_SERIAL_ID = frozenset({"arc_events", "arc_chat_turns"})
 
 # 시험하다 남은 uid. 내보낼 때 뺀다 — 옮긴 DB에 쓰레기를 들고 가지 않는다.
 _JUNK_PREFIXES = ("test-", "probe-", "rls-probe", "alice-", "bob-")
@@ -316,9 +394,8 @@ def import_all(dump: dict) -> dict[str, int]:
                     k: v
                     for k, v in row.items()
                     if not (table == "arc_cards" and k in generated)
-                    # 사건의 `id`는 시퀀스가 새로 준다 — 옮긴 DB의 시퀀스와
-                    # 충돌하지 않게 버린다
-                    and not (table == "arc_events" and k == "id")
+                    # 시퀀스가 주는 `id`는 새로 받는다 (`_SERIAL_ID`)
+                    and not (table in _SERIAL_ID and k == "id")
                 }
                 cols = ", ".join(item)
                 marks = ", ".join(["%s"] * len(item))
@@ -339,12 +416,16 @@ def import_all(dump: dict) -> dict[str, int]:
 
 
 def purge_junk() -> dict[str, int]:
-    """시험하다 남은 행을 지운다. **소유자 연결로 한다.**"""
+    """시험하다 남은 행을 지운다. **소유자 연결로 한다.**
+
+    **거꾸로 돈다.** 세션을 먼저 지우면 턴이 `cascade`로 따라 사라져 그 뒤의
+    턴 삭제가 0을 세는데, 그러면 「몇 줄 지웠나」가 사실과 달라진다.
+    """
     import psycopg
 
     out: dict[str, int] = {}
     with psycopg.connect(database_url()) as conn:
-        for table in TABLES:
+        for table in reversed(TABLES):
             cur = conn.execute(
                 f"delete from {table} where " + " or ".join(["uid like %s"] * len(_JUNK_PREFIXES)),
                 [f"{x}%" for x in _JUNK_PREFIXES],

@@ -3,9 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { AnswerBlock, type Turn } from "@/components/ask/answer-block";
+import {
+  AnswerBlock,
+  SavedAnswer,
+  type Turn,
+} from "@/components/ask/answer-block";
 import { Textarea } from "@/components/ui/textarea";
-import { ask, type AskContext } from "@/lib/api";
+import {
+  ask,
+  createChat,
+  deleteChat,
+  getChat,
+  listChats,
+  type AskContext,
+  type ChatSession,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,117 +29,184 @@ import { cn } from "@/lib/utils";
  *
  * **세션 하나 = 리퀘스트 하나.** 인터뷰에서 나온 하루 10~15건이 서로 다른
  * 클라이언트의 서로 다른 질문이라, 한 줄로 이어 붙이면 맥락이 섞인다.
- * 대화 상태(`context`)도 세션마다 따로 들고 있다 — 서버는 대화를 안 들고
- * 있으므로 여기서 갈라 두면 그것으로 끝난다.
  *
- * 세션은 **브라우저에 남긴다.** 서버에 두면 사용자 축·정리 정책·용량이
- * 따라오는데, 리퀘스트 이력을 장기기억으로 쌓는 것은 별도 결정이라
- * 그때 서버로 올린다.
+ * 세션은 **서버에 있다** (D83). 전에는 `localStorage`였고 그때는 그게 맞는
+ * 판단이었지만 — *"리퀘스트 이력을 장기기억으로 쌓는 것은 별도 결정"* — 그
+ * 결정이 났다. 브라우저에 두면 지우는 순간 사라지고, 기기 간 동기화가 없고,
+ * 무엇보다 **나중에 맥락으로 못 쓴다.**
+ *
+ * 옮기면서 지킨 것 둘:
+ *
+ * * **저장이 죽어도 채팅은 돈다.** 세션을 못 만들면 세션 없이 묻는다 —
+ *   답은 나오고 기록만 안 남는다. 그 반대(기록은 되는데 답이 안 나온다)가
+ *   훨씬 나쁘다
+ * * **되살린 답에는 출처가 없다.** 저장하는 것이 본문뿐이라서다
+ *   (`Turn.saved` 주석). 숨기지 않고 화면에 밝힌다
  */
 
-const STORAGE_KEY = "arc.ask.sessions.v1";
-const MAX_SESSIONS = 12;
-
-interface Session {
-  id: string;
-  title: string;
-  turns: Turn[];
-  context: AskContext | null;
-}
-
-function newSession(): Session {
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    title: "새 질문",
-    turns: [],
-    context: null,
-  };
-}
-
-function load(): Session[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return Array.isArray(parsed) && parsed.length ? parsed : [];
-  } catch {
-    return [];
-  }
+function reason(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 export function AskWidget({ cardCount }: { cardCount: number }) {
   const [open, setOpen] = useState(false);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeId, setActiveId] = useState("");
+  // 본문을 가져와 둔 대화. **`activeId`와 다르면 아직 안 읽었다는 뜻이다.**
+  const [loadedId, setLoadedId] = useState("");
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [context, setContext] = useState<AskContext | null>(null);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  // 저장소를 못 쓰는 상태. **채팅을 막지 않고 알리기만 한다.**
+  const [storeError, setStoreError] = useState("");
   const [listOpen, setListOpen] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
+  // 목록만 먼저 받는다. **본문은 안 받는다** — 위젯은 대개 닫힌 채로 있고,
+  // 닫힌 버튼이 쓰는 것은 「대화가 몇 개인가」뿐이다.
   useEffect(() => {
     // **effect 본문에서 바로 setState하면 연쇄 렌더가 난다.** 이 저장소에서
-    // 이미 두 번 밟은 규칙이라(page.tsx) 마이크로태스크 뒤로 넘긴다.
+    // 이미 두 번 밟은 규칙이라(page.tsx) 비동기 뒤로 넘긴다.
     let alive = true;
-    void Promise.resolve().then(() => {
-      if (!alive) return;
-      const saved = load();
-      const list = saved.length ? saved : [newSession()];
-      setSessions(list);
-      setActiveId(list[0].id);
-    });
+    void (async () => {
+      try {
+        const list = await listChats();
+        if (!alive) return;
+        setSessions(list);
+        setActiveId(list[0]?.id ?? "");
+      } catch (e) {
+        // 세션 없이도 물을 수 있다 — 기록만 안 남는다
+        if (alive) setStoreError(reason(e));
+      }
+    })();
     return () => {
       alive = false;
     };
   }, []);
 
+  // 열었을 때 그 대화의 본문을 가져온다. **여기서 대화를 만들지는 않는다** —
+  // 화면을 한 번 봤다는 이유로 빈 대화가 쌓이면 목록이 쓰레기가 된다.
   useEffect(() => {
-    if (!sessions.length) return;
+    if (!open || !activeId || loadedId === activeId) return;
+    let alive = true;
+    void (async () => {
+      setLoading(true);
+      try {
+        const chat = await getChat(activeId);
+        if (!alive) return;
+        setTurns(
+          chat.turns.map((t) => ({
+            question: t.question,
+            answer: null,
+            saved: t.answer,
+            error: "",
+          })),
+        );
+        setContext(chat.context);
+        setStoreError("");
+      } catch (e) {
+        if (!alive) return;
+        setTurns([]);
+        setContext(null);
+        setStoreError(reason(e));
+      } finally {
+        if (alive) {
+          // **실패해도 읽은 것으로 친다.** 아니면 같은 요청을 계속 다시 던진다.
+          setLoadedId(activeId);
+          setLoading(false);
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, activeId, loadedId]);
+
+  const active = sessions.find((s) => s.id === activeId);
+
+  function selectSession(id: string) {
+    setActiveId(id);
+    setTurns([]);
+    setContext(null);
+    setListOpen(false);
+  }
+
+  async function startSession() {
+    setListOpen(false);
+    setTurns([]);
+    setContext(null);
     try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify(sessions.slice(0, MAX_SESSIONS)),
-      );
-    } catch {
-      /* 용량이 차면 저장만 못 한다 — 대화는 계속된다 */
+      const created = await createChat();
+      setSessions((v) => [created, ...v]);
+      setActiveId(created.id);
+      setLoadedId(created.id); // 방금 만들었으니 읽을 것이 없다
+      setStoreError("");
+    } catch (e) {
+      setStoreError(reason(e));
     }
-  }, [sessions]);
+  }
 
-  const active = sessions.find((s) => s.id === activeId) ?? sessions[0];
-
-  function update(id: string, fn: (s: Session) => Session) {
-    setSessions((v) => v.map((s) => (s.id === id ? fn(s) : s)));
+  async function removeSession(id: string) {
+    const rest = sessions.filter((s) => s.id !== id);
+    setSessions(rest);
+    try {
+      await deleteChat(id);
+    } catch (e) {
+      setStoreError(reason(e));
+    }
+    if (id !== activeId) return;
+    if (rest.length) selectSession(rest[0].id);
+    else await startSession();
   }
 
   async function send(question: string) {
     const q = question.trim();
-    if (!q || busy || !active) return;
-    const id = active.id;
+    if (!q || busy) return;
     setDraft("");
     setBusy(true);
-    update(id, (s) => ({
-      ...s,
-      // **첫 질문이 세션의 이름이 된다.** 목록에서 리퀘스트를 알아보는
-      // 유일한 단서라 따로 짓게 하지 않는다.
-      title: s.turns.length === 0 ? q.slice(0, 28) : s.title,
-      turns: [...s.turns, { question: q, answer: null, error: "" }],
-    }));
+    setTurns((v) => [...v, { question: q, answer: null, saved: "", error: "" }]);
+
+    // **첫 질문에서야 대화를 만든다.** 실패하면 세션 없이 그냥 묻는다 —
+    // 답이 나오는 것이 기록보다 중요하다.
+    let id = activeId;
+    if (!id) {
+      try {
+        const created = await createChat();
+        id = created.id;
+        setSessions((v) => [created, ...v]);
+        setActiveId(id);
+        setLoadedId(id);
+      } catch (e) {
+        setStoreError(reason(e));
+      }
+    }
+
     try {
-      const answer = await ask(q, active.context);
-      update(id, (s) => ({
-        ...s,
-        context: answer.context,
-        turns: s.turns.map((t, i) =>
-          i === s.turns.length - 1 ? { ...t, answer } : t,
+      const answer = await ask(q, context, id);
+      setContext(answer.context);
+      setTurns((v) =>
+        v.map((t, i) => (i === v.length - 1 ? { ...t, answer } : t)),
+      );
+      // 목록을 다시 받아오지 않는다 — 서버의 제목 규칙(첫 질문)을 여기서
+      // 그대로 흉내 낼 수 있고, 그 편이 요청 하나를 아낀다.
+      setSessions((v) =>
+        v.map((s) =>
+          s.id === id
+            ? {
+                ...s,
+                title: s.turn_count === 0 ? q.slice(0, 40) : s.title,
+                turn_count: s.turn_count + 1,
+              }
+            : s,
         ),
-      }));
+      );
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      update(id, (s) => ({
-        ...s,
-        turns: s.turns.map((t, i) =>
-          i === s.turns.length - 1 ? { ...t, error: message } : t,
-        ),
-      }));
+      const message = reason(e);
+      setTurns((v) =>
+        v.map((t, i) => (i === v.length - 1 ? { ...t, error: message } : t)),
+      );
     } finally {
       setBusy(false);
       requestAnimationFrame(() =>
@@ -137,6 +216,7 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
   }
 
   if (!open) {
+    const busySessions = sessions.filter((s) => s.turn_count > 0).length;
     return (
       <button
         type="button"
@@ -145,9 +225,9 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
         aria-label="물어보기 열기"
       >
         물어보기
-        {sessions.some((s) => s.turns.length > 0) && (
+        {busySessions > 0 && (
           <span className="font-mono text-[11px] text-muted-foreground">
-            {sessions.filter((s) => s.turns.length > 0).length}
+            {busySessions}
           </span>
         )}
       </button>
@@ -162,7 +242,7 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
           onClick={() => setListOpen((v) => !v)}
           className="min-w-0 flex-1 truncate text-left text-[13px] font-medium hover:underline"
         >
-          {active?.title ?? "물어보기"}
+          {active?.title || "물어보기"}
           <span className="ml-1 text-[11px] text-muted-foreground">
             ▾ {sessions.length}
           </span>
@@ -170,12 +250,7 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => {
-            const s = newSession();
-            setSessions((v) => [s, ...v].slice(0, MAX_SESSIONS));
-            setActiveId(s.id);
-            setListOpen(false);
-          }}
+          onClick={() => void startSession()}
           className="h-7 text-[12px]"
         >
           새 질문
@@ -202,27 +277,17 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
             >
               <button
                 type="button"
-                onClick={() => {
-                  setActiveId(s.id);
-                  setListOpen(false);
-                }}
+                onClick={() => selectSession(s.id)}
                 className="min-w-0 flex-1 truncate text-left text-[12.5px]"
               >
-                {s.title}
+                {s.title || "새 질문"}
                 <span className="ml-1.5 text-[11px] text-muted-foreground">
-                  {s.turns.length}턴
+                  {s.turn_count}턴
                 </span>
               </button>
               <button
                 type="button"
-                onClick={() =>
-                  setSessions((v) => {
-                    const rest = v.filter((x) => x.id !== s.id);
-                    const list = rest.length ? rest : [newSession()];
-                    if (s.id === activeId) setActiveId(list[0].id);
-                    return list;
-                  })
-                }
+                onClick={() => void removeSession(s.id)}
                 className="text-[12px] text-muted-foreground hover:text-bad"
                 aria-label="이 질문 지우기"
               >
@@ -234,27 +299,42 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
       )}
 
       <div className="flex-1 space-y-5 overflow-y-auto px-3 py-3">
+        {/* **저장이 죽어도 채팅은 돈다.** 막지 않고 알리기만 한다. */}
+        {storeError && (
+          <p className="text-[12px] leading-[1.8] text-warn">
+            대화를 저장하지 못하고 있습니다 — {storeError}. 답은 그대로
+            나오지만 <strong>기록이 남지 않습니다.</strong>
+          </p>
+        )}
         {cardCount === 0 ? (
           <p className="text-[12.5px] leading-[1.8] text-muted-foreground">
             이 대화는 <strong>작성한 카드를 근거로만</strong> 답합니다. 아직
             카드가 없어 할 수 있는 말이 없습니다.
           </p>
-        ) : active?.turns.length === 0 ? (
+        ) : loading ? (
+          <p className="text-[12.5px] text-muted-foreground">
+            저장된 대화를 불러오는 중…
+          </p>
+        ) : turns.length === 0 ? (
           <p className="text-[12.5px] leading-[1.8] text-muted-foreground">
             카드 {cardCount}건을 근거로 답합니다. 공시에서 확인할 수 없는 것은{" "}
             <strong>없다고 말합니다.</strong> 투자 판단은 내지 않습니다.
           </p>
         ) : null}
-        {active?.turns.map((t, i) => (
+        {turns.map((t, i) => (
           <div key={i}>
             <p className="text-[13.5px] font-medium">{t.question}</p>
-            {!t.answer && !t.error && (
+            {!t.answer && !t.saved && !t.error && (
               <p className="mt-2 text-[12.5px] text-muted-foreground">
                 카드에서 근거를 찾는 중…
               </p>
             )}
             {t.error && <p className="mt-2 text-[12.5px] text-bad">{t.error}</p>}
-            {t.answer && <AnswerBlock answer={t.answer} compact />}
+            {t.answer ? (
+              <AnswerBlock answer={t.answer} compact />
+            ) : (
+              t.saved && <SavedAnswer text={t.saved} compact />
+            )}
           </div>
         ))}
         <div ref={bottom} />
@@ -277,7 +357,7 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
             }
           }}
           placeholder={
-            active?.context?.symbols.length
+            context?.symbols.length
               ? "이어서 — 종목을 다시 안 써도 됩니다"
               : "종목과 함께 물어보십시오"
           }
