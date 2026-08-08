@@ -22,7 +22,20 @@ export const authEnabled = Boolean(URL && ANON);
 let client: SupabaseClient | null = null;
 
 export function supabase(): SupabaseClient {
-  if (!client) client = createClient(URL, ANON, { auth: { flowType: "pkce" } });
+  if (!client) {
+    client = createClient(URL, ANON, {
+      auth: {
+        flowType: "pkce",
+        // **자동 교환을 끈다.** 기본값 `true`면 클라이언트를 만드는 순간
+        // URL의 `?code=`를 스스로 교환하기 시작하고, 콜백 화면이 곧이어
+        // 수동으로 또 교환한다. 둘이 경합해서 진 쪽이 「code verifier가
+        // 없다」로 실패하고 화면에는 `error=auth`만 남는다.
+        //
+        // 하나만 하게 만든다 — 교환하는 자리는 `/auth/callback`뿐이다.
+        detectSessionInUrl: false,
+      },
+    });
+  }
   return client;
 }
 
@@ -33,7 +46,31 @@ export async function accessToken(): Promise<string> {
   return data.session?.access_token ?? "";
 }
 
+/**
+ * 시작 전에 **지난 시도의 찌꺼기를 치운다.**
+ *
+ * PKCE는 시작할 때 검증자(code verifier)를 localStorage에 넣고 콜백에서 꺼내
+ * 쓴다. 중간에 실패하면 그 값이 남는데, 다음 시도가 그 위에서 시작하면
+ * `invalid flow state, no valid flow state found`가 난다 — 서버가 보기에
+ * 짝이 안 맞는 코드다.
+ *
+ * supabase-js가 이걸 알아서 치우지 않으므로 **누를 때마다 새로 시작한다.**
+ * 로그인 버튼은 원래 「처음부터 다시」라는 뜻이다.
+ */
+function clearStaleFlow(): void {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("sb-") && key.includes("code-verifier")) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // 사생활 보호 모드 등으로 localStorage가 막혀 있으면 그냥 넘어간다
+  }
+}
+
 export async function signInWithGoogle(next = "/"): Promise<string | null> {
+  clearStaleFlow();
   const { error } = await supabase().auth.signInWithOAuth({
     provider: "google",
     options: {

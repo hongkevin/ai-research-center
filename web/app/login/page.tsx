@@ -14,9 +14,14 @@ import { authEnabled, safeNextPath, signInWithGoogle } from "@/lib/supabase";
  * 입구를 "메일이 와야 열리는 문"으로 만들면 그 문이 자주 안 열린다.
  */
 function Form() {
-  const next = safeNextPath(useSearchParams().get("next"));
+  const params = useSearchParams();
+  const next = safeNextPath(params.get("next"));
   const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // **돌아오면서 실은 오류를 그대로 보여준다.** 전에는 `error=auth`로만
+  // 덮여 있어서 무엇이 틀렸는지 화면에서 알 수가 없었다.
+  const [error, setError] = useState<string | null>(
+    params.get("error") ? decodeURIComponent(params.get("error")!) : null,
+  );
 
   async function go() {
     setError(null);
