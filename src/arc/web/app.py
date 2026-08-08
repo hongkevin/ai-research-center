@@ -116,8 +116,8 @@ from arc.store.profile import (
     COVER,
     WATCH,
     Covered,
-    ProfileStore,
     add_stock,
+    open_profile,
     pin_peer,
     set_sectors,
     unpin_peer,
@@ -1670,7 +1670,7 @@ def api_profile():
     피어 그룹 목록은 카드가 이미 알고 있다.
     """
     cards = _open_cards()
-    profile = ProfileStore(_my_dir()).load(current_user())
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
     body = dataclasses.asdict(profile)
     # **피어 그룹은 섹터에 속한다.** D68에서 「섹터는 자유 텍스트라 코드가 못
     # 읽고, 실질적 정의는 피어 그룹」이라고 정했다 — 뒤집으면 피어 그룹이 곧
@@ -1762,7 +1762,7 @@ def api_brief(news: bool = True, session: str = ""):
     from arc.brief import PRICELESS, current_session
 
     session = session or current_session()
-    profile = ProfileStore(_my_dir()).load(current_user())
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
     symbols = profile.symbols()
     if not symbols:
         return dataclasses.asdict(build_brief(profile, {}, session=session))
@@ -2088,7 +2088,7 @@ def api_telegram_channels():
     내 종목·섹터가 몇 번 나왔는지 세고, 없으면 종류(증권사·리서치 먼저)와
     구독자 수로 떨어진다 — **셀 수 있을 때만 세고, 없으면 없다고 한다.**
     """
-    store = ProfileStore(_my_dir())
+    store = open_profile(_my_dir(), current_user())
     profile = store.load(current_user())
     # 수집 계정이 이미 들어가 있는 방을 사람마다 다시 받게 할 이유가 없다
     if _seed_from_catalog(profile):
@@ -2133,7 +2133,7 @@ def _mentions_mine(msg, index, mine: set[str], sectors: list[str]) -> bool:
 @app.post("/api/telegram/channels")
 def api_set_telegram_channels(payload: dict):
     """켜고 끄기. **이름·구독자·분류는 CLI가 갱신한다.**"""
-    store = ProfileStore(_my_dir())
+    store = open_profile(_my_dir(), current_user())
     profile = store.load(current_user())
     wanted = {
         int(c.get("chat_id", 0)): bool(c.get("enabled"))
@@ -2160,7 +2160,7 @@ def api_recommended_channels():
     """
     from arc.data.tg_channels import CHECKED_AT, recommended_for
 
-    profile = ProfileStore(_my_dir()).load(current_user())
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
     have = {(c.username or "").lower() for c in profile.channels if c.username}
     return {
         "checked_at": CHECKED_AT,
@@ -2226,7 +2226,7 @@ def api_adopt_channel(payload: dict):
     if chat_id > 0:
         chat_id = int(f"-100{chat_id}")
 
-    store = ProfileStore(_my_dir())
+    store = open_profile(_my_dir(), current_user())
     profile = store.load(current_user())
     if any(c.chat_id == chat_id for c in profile.channels):
         return JSONResponse({"error": "이미 목록에 있습니다."}, status_code=400)
@@ -2304,7 +2304,7 @@ def api_telegram_refresh():
             for c in found
         ],
     )
-    store = ProfileStore(_my_dir())
+    store = open_profile(_my_dir(), current_user())
     profile = merge_channels(store.load(current_user()), found)
     store.save(profile)
     return {"found": len(found), "channels": len(profile.channels)}
@@ -2327,7 +2327,7 @@ def api_telegram_sync(payload: dict | None = None):
     days = max(1, min(int(payload.get("days") or 7), 30))
     limit = max(1, min(int(payload.get("limit") or 300), 1000))
 
-    profile = ProfileStore(_my_dir()).load(current_user())
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
     targets = profile.enabled_channels()
     if not targets:
         return JSONResponse(
@@ -2439,7 +2439,7 @@ def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
         min_channels=1,
         limit=40,
     )
-    profile = ProfileStore(_my_dir()).load(current_user())
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
     mine = {s.symbol: s.kind for s in profile.stocks}
     # **「내 섹터」는 피어 그룹이다.** 섹터가 자유 텍스트라 코드가 못 읽고(D68),
     # 사람이 확정해 고정한 그룹이 그 섹터의 실질적 정의다.
@@ -2565,7 +2565,7 @@ def api_save_profile(payload: dict):
     **부분 수정 API를 만들지 않는다.** 화면이 목록을 통째로 들고 있고,
     쪼개면 순서·중복 규칙이 양쪽에 생긴다.
     """
-    store = ProfileStore(_my_dir())
+    store = open_profile(_my_dir(), current_user())
     profile = store.load(current_user())
     try:
         if "sectors" in payload:
@@ -2623,7 +2623,7 @@ def api_pin_peer(payload: dict):
     card_id = str(payload.get("card_id", "")).strip()
     if not card_id:
         return JSONResponse({"error": "카드를 지정하십시오."}, status_code=400)
-    store = ProfileStore(_my_dir())
+    store = open_profile(_my_dir(), current_user())
     profile = store.load(current_user())
     if payload.get("pinned") is False:
         unpin_peer(profile, card_id)

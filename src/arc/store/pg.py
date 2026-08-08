@@ -68,11 +68,26 @@ alter table arc_events enable row level security;
 -- 없으면 소유자 연결에서 정책이 아예 안 돈다.
 alter table arc_events force row level security;
 
+-- 프로필 — **사람당 한 행, 문서 하나.**
+--
+-- 종목·채널을 표로 펴지 않는다. 프로필은 통째로 읽고 통째로 쓰는 문서이고,
+-- 지금 「누가 005930을 커버하나」 같은 교차 질의가 없다. 펴면 스키마가 필드
+-- 추가마다 흔들리는데, 문서로 두면 `_read_stock`의 D65 방어가 그대로 산다.
+create table if not exists arc_profiles (
+    uid         text primary key,
+    doc         jsonb       not null default '{}'::jsonb,
+    updated_at  timestamptz not null default now()
+);
+
+alter table arc_profiles enable row level security;
+alter table arc_profiles force row level security;
+
 -- 우리가 트랜잭션마다 내려앉을 역할. Supabase가 PostgREST용으로 이미
 -- 만들어 둔 것이고 **BYPASSRLS가 없다** — 그래서 정책이 실제로 적용된다.
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on arc_events to authenticated;
 grant usage, select on sequence arc_events_id_seq to authenticated;
+grant select, insert, update, delete on arc_profiles to authenticated;
 """
 
 # RLS. **앱이 실수해도 DB가 막는다.** 정책을 지웠다 다시 만드는 이유:
@@ -80,6 +95,11 @@ grant usage, select on sequence arc_events_id_seq to authenticated;
 POLICIES = """
 drop policy if exists arc_events_own on arc_events;
 create policy arc_events_own on arc_events
+    using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
+    with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
+
+drop policy if exists arc_profiles_own on arc_profiles;
+create policy arc_profiles_own on arc_profiles
     using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
     with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
 """

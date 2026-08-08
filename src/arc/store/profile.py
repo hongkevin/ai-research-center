@@ -286,3 +286,101 @@ def pin_peer(profile: Profile, card_id: str) -> Profile:
 def unpin_peer(profile: Profile, card_id: str) -> Profile:
     profile.pinned_peers = [c for c in profile.pinned_peers if c != card_id]
     return profile
+
+
+class PgProfileStore:
+    """Postgres 판. **`ProfileStore`와 같은 인터페이스다** (D80).
+
+    uid를 **만들 때 한 번** 받는다 — `load(uid)`의 인자는 파일 판과의 호환을
+    위해 남지만 **무시한다.** 남의 프로필을 읽는 경로를 만들지 않는다.
+
+    한 행에 문서 하나로 둔다. 종목·채널을 표로 펴면 필드가 늘 때마다 스키마가
+    흔들리는데, 문서면 `_read_stock`의 [D65](../../docs/decisions.md#d65) 방어가
+    그대로 산다 — 모르는 필드를 버리고 아는 것만 취한다.
+    """
+
+    def __init__(self, uid: str) -> None:
+        self.uid = uid
+
+    def load(self, uid: str = "") -> Profile:
+        """없으면 **빈 프로필**이다 — 없는 것은 오류가 아니다.
+
+        `uid` 인자는 파일 판과 모양을 맞추려고 받지만 쓰지 않는다.
+        """
+        from arc.store import pg
+
+        try:
+            with pg.connect(self.uid) as conn, conn.cursor() as cur:
+                cur.execute("select doc from arc_profiles where uid = %s", (self.uid,))
+                row = cur.fetchone()
+        except Exception as exc:  # noqa: BLE001 — 못 읽으면 빈 프로필이다
+            log.warning("프로필을 못 읽었습니다: %s", exc)
+            return Profile(uid=self.uid)
+
+        if not row or not row[0]:
+            return Profile(uid=self.uid)
+        return _from_doc(dict(row[0]), self.uid)
+
+    def save(self, profile: Profile) -> Profile:
+        """**덮어쓴다.** 문서 하나라 부분 갱신이 없다 — 파일 판과 같다."""
+        from arc.store import pg
+
+        profile.uid = profile.uid or self.uid
+        profile.updated_at = _now()
+        try:
+            with pg.connect(self.uid) as conn:
+                conn.execute(
+                    "insert into arc_profiles (uid, doc, updated_at)"
+                    " values (%s, %s, now())"
+                    " on conflict (uid) do update set doc = excluded.doc,"
+                    " updated_at = excluded.updated_at",
+                    (self.uid, json.dumps(asdict(profile), ensure_ascii=False)),
+                )
+                conn.commit()
+        except Exception as exc:
+            # **여기는 삼키면 안 된다.** 커버리지를 고쳤는데 조용히 안 저장되면
+            # 사용자는 저장된 줄 안다. 사건 로그와 다른 점이다.
+            log.error("프로필을 못 저장했습니다: %s", exc)
+            raise
+        return profile
+
+
+def _from_doc(raw: dict, uid: str) -> Profile:
+    """문서 → `Profile`. **모르는 필드는 버린다** (D65).
+
+    파일 판의 `load()`와 같은 규칙이다 — 필드를 추가하기 전에 저장된 프로필이
+    화면을 죽이면 안 된다.
+    """
+    stocks = [_read_stock(s) for s in raw.pop("stocks", []) if isinstance(s, dict)]
+    channels = [_read_channel(c) for c in raw.pop("channels", []) if isinstance(c, dict)]
+    known = {k: v for k, v in raw.items() if k in Profile.__dataclass_fields__}
+    known.setdefault("uid", uid)
+    return Profile(**known, stocks=stocks, channels=channels)
+
+
+def open_profile(base_dir: str | Path, uid: str) -> ProfileStore | PgProfileStore:
+    """저장소를 고른다. **부르는 쪽은 어느 쪽인지 모른다.**"""
+    from arc.store import pg
+
+    return PgProfileStore(uid) if pg.available() else ProfileStore(base_dir)
+
+
+def migrate_profile(base_dir: str | Path, uid: str) -> bool:
+    """파일 프로필을 Postgres로. **이미 있으면 안 덮는다.**
+
+    덮으면 DB에서 고친 것을 옛 파일이 되돌린다 — 이관은 한 번뿐이어야 한다.
+    """
+    from arc.store import pg
+
+    if not pg.available():
+        return False
+    target = PgProfileStore(uid)
+    if target.load().stocks or target.load().sectors:
+        log.info("이미 프로필이 있어 옮기지 않았습니다 (%s)", uid)
+        return False
+    source = ProfileStore(base_dir).load(uid)
+    if not source.stocks and not source.sectors and not source.channels:
+        return False
+    target.save(source)
+    log.info("프로필을 Postgres로 옮겼습니다 (원본은 그대로 둡니다)")
+    return True
