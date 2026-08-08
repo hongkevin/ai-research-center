@@ -29,6 +29,7 @@ from arc.chat.answer import (
     Source,
     answer_question,
     build_prompt,
+    number_values,
 )
 from arc.chat.evidence import CardRef, Passage, Query, card_passages, parse_query
 from arc.chat.guard import (
@@ -63,6 +64,7 @@ __all__ = [
     "build_prompt",
     "card_passages",
     "check_answer",
+    "number_values",
     "parse_query",
     "rank_observations",
     "retrieve",

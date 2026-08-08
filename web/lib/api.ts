@@ -799,6 +799,13 @@ export interface Answer {
   text: string;
   facts: string;
   analysis: string;
+  /**
+   * 치환 **전**의 `text`. `{{num:key}}`만 들어 있고 값이 구조적으로 없다.
+   *
+   * 화면은 이걸 안 쓴다 — 서버가 대화를 저장할 때 쓰는 것이고, 여기 있는
+   * 이유는 이 파일이 서버 응답의 계약을 그대로 옮기기 때문이다.
+   */
+  template: string;
   hints: AskHint[];
   sources: AskSource[];
   unanswered: string[];
@@ -821,14 +828,78 @@ export interface Answer {
 export async function ask(
   question: string,
   context: AskContext | null,
+  sessionId = "",
 ): Promise<Answer> {
   const r = await api(`/api/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, context }),
+    // `session_id`를 주면 질문과 답이 서버에 남는다. **없어도 답은 나온다** —
+    // 저장은 부산물이라 저장소가 죽어도 채팅은 돌아야 한다.
+    body: JSON.stringify({ question, context, session_id: sessionId }),
   });
   if (!r.ok) await fail(r);
   return r.json();
+}
+
+/* ── 대화 (리서치 채팅의 세션) ──────────────────────────────────────
+ *
+ * 세션은 `localStorage`에 있었다. 브라우저를 지우면 사라지고, 기기 간
+ * 동기화가 없고, 무엇보다 **나중에 맥락으로 못 쓴다.** 그래서 서버로 옮겼다.
+ */
+
+/** 목록 한 줄. **본문은 안 온다** — 제목과 턴 수뿐이다. */
+export interface ChatSession {
+  id: string;
+  title: string;
+  turn_count: number;
+  symbols: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * 저장된 턴 하나.
+ *
+ * `answer`는 **서버가 값을 끼워 준 것**이다. 저장된 본문에는 `{{num:key}}`만
+ * 있고(불변식 1) 치환은 경계에서 한 번 일어난다 — 화면은 그 결과만 받는다.
+ */
+export interface ChatTurn {
+  question: string;
+  answer: string;
+  at: string;
+}
+
+export interface Chat extends ChatSession {
+  turns: ChatTurn[];
+  /** 다음 질문의 앵커. 이걸 `ask()`에 그대로 돌려준다 */
+  context: AskContext;
+}
+
+export async function listChats(): Promise<ChatSession[]> {
+  const r = await api(`/api/chats`);
+  if (!r.ok) await fail(r);
+  return (await r.json()).sessions;
+}
+
+export async function createChat(): Promise<ChatSession> {
+  const r = await api(`/api/chats`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function getChat(id: string): Promise<Chat> {
+  const r = await api(`/api/chats/${id}`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+export async function deleteChat(id: string): Promise<void> {
+  const r = await api(`/api/chats/${id}`, { method: "DELETE" });
+  if (!r.ok) await fail(r);
 }
 
 /* ── 피어 카드 ──────────────────────────────────────────────────────
