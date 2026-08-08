@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { Answer, AskHint, AskSource } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -32,9 +33,12 @@ export interface Turn {
 export function AnswerBlock({
   answer,
   compact = false,
+  onMakeReport,
 }: {
   answer: Answer;
   compact?: boolean;
+  /** 근거가 없을 때 그 종목의 리포트를 만들러 보낸다 */
+  onMakeReport?: (symbol: string) => void;
 }) {
   const [openSources, setOpenSources] = useState(false);
 
@@ -62,6 +66,28 @@ export function AnswerBlock({
         </p>
       )}
 
+      {/* **답을 못 한 이유는 `text`에만 있다** (D85).
+          전에는 `facts`·`analysis`만 그려서, 근거 없음·LLM 실패·문장이 전부
+          검증 탈락·LLM 꺼짐이 화면에서 **똑같은 침묵**으로 보였다.
+
+          이 제품의 슬로건이 「모르면 모른다고 한다」인데 **모른다고 말하는 그
+          문장이 버려지고 있었다.** 그리고 그 문장만이 다음 행동을 지시한다. */}
+      {!answer.facts && !answer.analysis && answer.text && (
+        <div className="rounded-lg border border-dashed px-3.5 py-3">
+          <p className={cn("leading-[1.8]", text)}>{answer.text}</p>
+          {onMakeReport && answer.context.symbols.length > 0 && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2.5"
+              onClick={() => onMakeReport(answer.context.symbols[0])}
+            >
+              이 종목 리포트 만들기
+            </Button>
+          )}
+        </div>
+      )}
+
       {answer.facts && (
         <p className={cn("leading-[1.9] whitespace-pre-wrap", text)}>
           {answer.facts}
@@ -86,6 +112,38 @@ export function AnswerBlock({
             ))}
           </ul>
         </div>
+      )}
+
+      {/* **출처 없는 문장을 표시한다** (D85). `guard.py`가 *"화면이 이 목록을
+          보여주면 검토자가 어디를 의심할지 안다"*고 적어 놓고 화면은 안 쓰고
+          있었다 — 출처 없는 문장이 출처 있는 문장과 같은 검은 글씨로 나갔다.
+          클라이언트에게 그대로 붙여넣는 용도라 이건 컴플라이언스 문제다. */}
+      {answer.unsourced.length > 0 && (
+        <div className="rounded-md border border-warn/60 px-3 py-2">
+          <p className="text-[11.5px] font-medium text-warn">
+            출처가 안 붙은 문장 — 그대로 인용하지 마십시오
+          </p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-[12px] leading-[1.7]">
+            {answer.unsourced.map((u, i) => (
+              <li key={i}>{u}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 검증에서 버려진 문장. **버렸다는 사실을 숨기지 않는다** — 답이 짧아진
+          이유가 여기 있다. */}
+      {answer.rejected.length > 0 && (
+        <details className="text-[11.5px] text-muted-foreground">
+          <summary className="cursor-pointer">
+            근거가 없어 버린 문장 {answer.rejected.length}개
+          </summary>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 leading-[1.7]">
+            {answer.rejected.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {answer.sources.length > 0 && (

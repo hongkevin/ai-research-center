@@ -357,7 +357,11 @@ export interface CardDetail extends Omit<
 
 export async function listCards(): Promise<CardSummary[]> {
   const r = await api(`/api/cards`);
-  if (!r.ok) return [];
+  // **장애를 「일이 없음」으로 만들지 않는다** (D85). 전에는 실패 시 `[]`를
+  // 돌려줘서 3초 폴링이 화면을 「아직 작성한 리포트가 없습니다」로 바꿨다 —
+  // 종일 쓴 카드가 사라진 것처럼 보였다. 서버는 이유를 보내는데(`note`)
+  // 클라이언트가 버리고 있었다.
+  if (!r.ok) await fail(r);
   return (await r.json()).cards ?? [];
 }
 

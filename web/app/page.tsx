@@ -98,6 +98,8 @@ export default function Workbench() {
   const [preliminary, setPreliminary] = useState<Preliminary | null>(null);
   const [headings, setHeadings] = useState<Heading[]>([]);
   const [cards, setCards] = useState<CardSummary[]>([]);
+  // 목록을 못 읽었다. **카드가 없는 것과 다른 얘기다**
+  const [boardError, setBoardError] = useState("");
   const [open, setOpen] = useState<CardDetail | null>(null);
   // 보드와 채팅. **카드를 여는 것은 탭이 아니라 보드 안의 행동이다.**
   // **브리프가 첫 화면이다.** RA의 하루는 「어젯밤 사이 뭐가 있었나」로
@@ -180,8 +182,18 @@ export default function Workbench() {
   useEffect(() => {
     let alive = true;
     const tick = async () => {
-      const next = await listCards();
-      if (alive) setCards(next);
+      try {
+        const next = await listCards();
+        if (!alive) return;
+        setCards(next);
+        setBoardError("");
+      } catch (e) {
+        // **목록을 비우지 않는다** (D85). 전에는 실패가 빈 배열이 되어
+        // 화면이 「아직 작성한 리포트가 없습니다」로 바뀌었다 — 종일 쓴
+        // 카드가 사라진 것처럼 보였다. 마지막으로 읽은 것을 그대로 두고
+        // 못 읽었다는 사실만 덧붙인다.
+        if (alive) setBoardError(e instanceof Error ? e.message : String(e));
+      }
     };
     void tick();
     const t = setInterval(tick, 3000);
@@ -248,9 +260,13 @@ export default function Workbench() {
   const singleCards = cards.filter((c) => c.kind !== "peer");
   const peerCards = cards.filter((c) => c.kind === "peer");
 
-  function openCompose() {
-    setStep("choose");
+  function openCompose(symbol = "") {
+    setStep(symbol ? "form" : "choose");
     setUploaded(null);
+    // **종목을 알고 왔으면 다시 치게 하지 않는다** (D85). 채팅이 「근거가
+    // 없다」고 말할 때 그 종목이 이미 화면에 있는데, 폼을 빈 채로 열면
+    // 사용자가 방금 읽은 이름을 다시 검색한다.
+    if (symbol) setForm((f) => ({ ...f, symbol }));
     setComposing(true);
   }
 
@@ -806,6 +822,12 @@ export default function Workbench() {
                     }
                     onComposePeer={() => setComposingPeer(true)}
                   />
+                  {boardError && (
+                    <p className="mt-3 text-[12px] text-bad">
+                      목록을 못 읽었습니다 — {boardError}. 위 목록은 마지막으로
+                      읽은 것입니다.
+                    </p>
+                  )}
                   <BoardHint />
                 </>
               ) : (
@@ -895,7 +917,13 @@ export default function Workbench() {
         </DialogContent>
       </Dialog>
 
-      <AskWidget cardCount={cards.length} />
+      <AskWidget
+        cardCount={cards.length}
+        onMakeReport={(symbol) => {
+          void goTab("board");
+          openCompose(symbol);
+        }}
+      />
 
       {open && editingSection && (
         <SectionEditor

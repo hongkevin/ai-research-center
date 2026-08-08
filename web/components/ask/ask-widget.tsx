@@ -48,7 +48,14 @@ function reason(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function AskWidget({ cardCount }: { cardCount: number }) {
+export function AskWidget({
+  cardCount,
+  onMakeReport,
+}: {
+  cardCount: number;
+  /** 근거가 없을 때 그 종목의 리포트를 만들러 보낸다 (D85) */
+  onMakeReport?: (symbol: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeId, setActiveId] = useState("");
@@ -331,7 +338,11 @@ export function AskWidget({ cardCount }: { cardCount: number }) {
             )}
             {t.error && <p className="mt-2 text-[12.5px] text-bad">{t.error}</p>}
             {t.answer ? (
-              <AnswerBlock answer={t.answer} compact />
+              <AnswerBlock
+                answer={t.answer}
+                compact
+                onMakeReport={onMakeReport}
+              />
             ) : (
               t.saved && <SavedAnswer text={t.saved} compact />
             )}

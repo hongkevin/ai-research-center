@@ -2371,6 +2371,7 @@ def _seed_from_catalog(profile) -> bool:
                 username=str(row.get("username") or ""),
                 kind=str(row.get("kind") or "unknown"),
                 subscribers=int(row.get("subscribers") or 0),
+                last_post=str(row.get("last_post") or ""),
                 enabled=False,
             )
         )
@@ -2572,11 +2573,16 @@ def api_telegram_refresh():
         out: list[TgChannel] = []
         for r in await fetch_dialogs(client, limit=200):
             subs = 0
+            last = ""
             try:
-                full = await client(GetFullChannelRequest(await client.get_entity(r["chat_id"])))
+                entity = await client.get_entity(r["chat_id"])
+                full = await client(GetFullChannelRequest(entity))
                 subs = int(getattr(full.full_chat, "participants_count", 0) or 0)
+                # **마지막 글이 없으면 💀가 안 뜬다** (D85)
+                async for msg in client.iter_messages(entity, limit=1):
+                    last = msg.date.date().isoformat()
             except Exception as exc:  # noqa: BLE001 — 있으면 좋은 것이지 필수가 아니다
-                log.debug("구독자 수를 못 읽었습니다 (%s): %s", r["name"], exc)
+                log.debug("채널 정보를 못 읽었습니다 (%s): %s", r["name"], exc)
             out.append(
                 TgChannel(
                     chat_id=r["chat_id"],
@@ -2587,6 +2593,7 @@ def api_telegram_refresh():
                     kind=known_kind(r.get("username") or "")
                     or classify_channel(r["name"], chat_type=r["chat_type"]).value,
                     subscribers=subs,
+                    last_post=last,
                 )
             )
         return out
@@ -2609,6 +2616,7 @@ def api_telegram_refresh():
                 "username": c.username,
                 "kind": c.kind,
                 "subscribers": c.subscribers,
+                "last_post": c.last_post,
             }
             for c in found
         ],
@@ -2730,7 +2738,7 @@ def api_sentiment(on: str = "", baseline_days: int = 5, min_today: int = 2):
         from arc.sentiment import Sentiment
 
         return dataclasses.asdict(
-            Sentiment(note="받아 둔 텔레그램 메시지가 없습니다 — `arc telegram sync`로 가져옵니다.")
+            Sentiment(note="받아 둔 텔레그램 메시지가 없습니다 — 위에서 채널을 켜고 가져오십시오.")
         )
 
     days = sorted({m.day for m in messages})

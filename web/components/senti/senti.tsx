@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ChannelPicker } from "@/components/senti/channel-picker";
 import { Recommended } from "@/components/senti/recommended";
@@ -37,12 +37,21 @@ export function Senti() {
   const [day, setDay] = useState("");
   const [error, setError] = useState("");
 
+  // 다시 읽기. **횟수를 올려 effect를 깨운다** — 날짜가 같아도 다시 읽어야
+  // 하는 경우가 있다(수집 직후가 그렇다).
+  const [tick, setTick] = useState(0);
+  const reload = useCallback(() => setTick((n) => n + 1), []);
+
   useEffect(() => {
     let alive = true;
     void (async () => {
       try {
         const s = await getSentiment(day);
-        if (alive) setData(s);
+        if (!alive) return;
+        setData(s);
+        // **성공하면 옛 오류를 지운다.** 안 지우면 한 번 실패한 뒤로는
+        // 데이터가 와도 붉은 배너만 보인다.
+        setError("");
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
       }
@@ -50,9 +59,12 @@ export function Senti() {
     return () => {
       alive = false;
     };
-  }, [day]);
+  }, [day, tick]);
 
-  if (error) {
+  // **오류가 복구 수단까지 지우면 안 된다.** 전에는 `error`면 배너 하나만
+  // 남기고 채널 고르기·추천·가져오기를 전부 안 그렸다 — 유일한 회복 경로가
+  // 오류와 함께 사라졌다(D85).
+  if (error && !data) {
     return (
       <Alert variant="destructive" className="max-w-[720px]">
         <AlertDescription>{error}</AlertDescription>
@@ -93,8 +105,12 @@ export function Senti() {
       {/* **채널은 센티의 재료다.** 소비하는 자리에서 관리한다.
           추천이 먼저인 이유: 빈 목록을 채우는 것이 첫 일이다. */}
       <div className="space-y-2">
-        <Recommended onAdopted={() => setDay((d) => d)} />
-        <ChannelPicker onChanged={() => setDay((d) => d)} />
+        {/* **같은 값을 넣으면 React가 건너뛴다.** `setDay((d) => d)`는
+            아무것도 안 했고, 그래서 채널을 켜고 수집에 성공해도 화면이
+            「아직 볼 것이 없습니다」에 머물렀다 — 성공한 직후에 실패했다고
+            말했다. 한 줄인데 온보딩 전체를 끊었다(D85). */}
+        <Recommended onAdopted={reload} />
+        <ChannelPicker onChanged={reload} />
       </div>
 
       {data.total > 0 && <Rhythm data={data} />}
@@ -128,8 +144,8 @@ export function Senti() {
         <div className="rounded-lg border border-dashed px-4 py-6">
           <p className="text-[14px] font-medium">아직 볼 것이 없습니다.</p>
           <p className="mt-1 text-[12.5px] leading-[1.8] text-muted-foreground">
-            터미널에서 <code className="font-mono">arc telegram sync</code> 로
-            메시지를 가져오면 여기 뜹니다.
+            위 <strong>「볼 채널」</strong>에서 몇 개를 켜고{" "}
+            <strong>「가져오기」</strong>를 누르십시오. 터미널은 필요 없습니다.
           </p>
         </div>
       )}
