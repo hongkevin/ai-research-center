@@ -434,17 +434,16 @@ def db_init() -> None:
         raise typer.Exit(1) from exc
 
     typer.secho("\n  스키마 확인 완료.", fg=typer.colors.GREEN)
-    # **RLS를 켜 놓고 안 지켜지는 상태**가 가장 나쁘다. 소유자로 붙으면
-    # 정책이 적용되지 않으니 그 사실을 말해 준다.
-    try:
-        if pg.owner_bypass():
-            typer.secho(
-                "  ⚠ 지금 연결이 RLS를 우회합니다 (테이블 소유자·superuser).\n"
-                "    앱 전용 역할을 만들기 전까지는 uid를 저장소에 묶는 것이 실질적 방어입니다.",
-                fg=typer.colors.YELLOW,
-            )
-    except Exception as exc:  # noqa: BLE001 — 확인 실패가 init을 막지 않는다
-        log.debug("RLS 우회 여부를 못 봤습니다: %s", exc)
+    # **RLS를 켜 놓고 안 지켜지는 상태**가 가장 나쁘다. 설정을 읽어 판단하지
+    # 않고 실제로 도는지 물어본다.
+    if pg.rls_enforced():
+        typer.secho("  ✓ RLS가 실제로 적용됩니다 (authenticated 역할).", fg=typer.colors.GREEN)
+    else:
+        typer.secho(
+            "  ⚠ RLS가 적용되지 않습니다 — 지금 연결이 정책을 우회합니다.\n"
+            "    uid를 저장소에 묶는 것이 유일한 방어입니다.",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo("")
 
 

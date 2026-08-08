@@ -89,12 +89,24 @@ class TestSameInterface:
         assert PgEventStore("a").record(Event(kind="opnened")) is False
 
 
-needs_db = pytest.mark.skipif(not os.environ.get("DATABASE_URL"), reason="DATABASE_URL이 없습니다")
+# **DB 테스트는 따로 켠다.** `DATABASE_URL`을 그대로 쓰면 개발자 기계에 DB가
+# 꽂혀 있다는 이유만으로 전체 실행이 느려지고(8초 → 40초), 무엇을 검사하는지가
+# 기계마다 달라진다. 실제로 파일에 써 놓고 DB에서 읽는 상태가 되어 2건이
+# 깨졌다. 이 변수는 conftest가 안 지운다 — 켜는 것이 명시적인 선택이다.
+#
+#     ARC_TEST_DATABASE_URL="$DATABASE_URL" pytest tests/test_pg.py
+_TEST_DB = os.environ.get("ARC_TEST_DATABASE_URL", "")
+needs_db = pytest.mark.skipif(not _TEST_DB, reason="ARC_TEST_DATABASE_URL이 없습니다")
 
 
 @needs_db
 class TestAgainstRealDatabase:
     """실제 DB가 있을 때만. **없으면 통째로 건너뛴다.**"""
+
+    @pytest.fixture(autouse=True)
+    def _url(self, monkeypatch):
+        """conftest가 비워 둔 `DATABASE_URL`을 이 클래스에서만 되살린다."""
+        monkeypatch.setenv("DATABASE_URL", _TEST_DB)
 
     def test_roundtrip(self):
         pg.init_schema()
@@ -110,3 +122,23 @@ class TestAgainstRealDatabase:
         PgEventStore("test-uid-alice").note(OPENED, "111111")
         seen = [e.subject for e in PgEventStore("test-uid-bob").read(limit=50)]
         assert "111111" not in seen
+
+    def test_forging_another_uid_is_refused(self):
+        """**남의 uid로 못 쓴다.** 앱이 실수해도 DB가 막는다."""
+        import psycopg
+
+        pg.init_schema()
+        with pytest.raises(psycopg.Error), pg.connect("test-uid-alice") as conn:
+            conn.execute(
+                "insert into arc_events (uid, kind, subject) values (%s,%s,%s)",
+                ("test-uid-bob", "opened", "999999"),
+            )
+
+    def test_rls_is_actually_enforced(self):
+        """「켜져 있는가」가 아니라 **「지켜지는가」**를 묻는다.
+
+        `postgres`는 BYPASSRLS를 갖고 있어 enable·force를 다 켜도 정책이 한
+        줄도 안 돈다. 그래서 설정이 아니라 동작을 검사한다.
+        """
+        pg.init_schema()
+        assert pg.rls_enforced() is True
