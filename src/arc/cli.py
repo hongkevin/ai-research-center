@@ -527,10 +527,16 @@ def db_migrate(
     카드를 이미 두 번 잃었다. 두 번 돌리면 두 번 들어가니 한 번만 돌린다.
     """
     from arc.store.events import migrate_events
+    from arc.store.profile import migrate_profile
     from arc.web.identity import user_dir
 
-    moved = migrate_events(user_dir(_store_root(), uid), uid)
-    typer.secho(f"\n  사건 {moved}건을 옮겼습니다 (원본은 그대로).\n", fg=typer.colors.GREEN)
+    home = user_dir(_store_root(), uid)
+    moved = migrate_events(home, uid)
+    profile = migrate_profile(home, uid)
+    typer.secho(
+        f"\n  사건 {moved}건 · 프로필 {'옮김' if profile else '건너뜀'} (원본은 그대로).\n",
+        fg=typer.colors.GREEN,
+    )
 
 
 telegram_app = typer.Typer(help="텔레그램 — 로그인·채널 목록·수집")

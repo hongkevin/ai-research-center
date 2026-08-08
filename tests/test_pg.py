@@ -142,3 +142,90 @@ class TestAgainstRealDatabase:
         """
         pg.init_schema()
         assert pg.rls_enforced() is True
+
+
+class TestProfileInterface:
+    """**두 프로필 저장소가 같은 모양이어야 한다.**"""
+
+    def test_same_methods(self):
+        from arc.store.profile import PgProfileStore, ProfileStore
+
+        for name in ("load", "save"):
+            assert hasattr(ProfileStore, name) and hasattr(PgProfileStore, name)
+
+    def test_pg_ignores_the_uid_argument(self):
+        """`load(uid)`는 파일 판과 모양을 맞추려고 받지만 **무시한다.**
+
+        남의 프로필을 읽는 경로를 만들지 않는다.
+        """
+        from arc.store.profile import PgProfileStore
+
+        assert PgProfileStore("alice").uid == "alice"
+
+    def test_unknown_fields_do_not_kill_it(self):
+        """필드를 추가하기 **전에** 저장된 문서 (D65). 카드에서 두 번 밟았다."""
+        from arc.store.profile import _from_doc
+
+        got = _from_doc({"sectors": ["조선"], "나중에생긴필드": 1}, "alice")
+        assert got.sectors == ["조선"]
+        assert got.uid == "alice"
+
+    def test_unknown_stock_fields_are_dropped_too(self):
+        from arc.store.profile import _from_doc
+
+        got = _from_doc({"stocks": [{"symbol": "042660", "company": "한화오션", "옛필드": 1}]}, "a")
+        assert [s.symbol for s in got.stocks] == ["042660"]
+
+
+@needs_db
+class TestProfileAgainstRealDatabase:
+    @pytest.fixture(autouse=True)
+    def _url(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", _TEST_DB)
+
+    def test_roundtrip(self):
+        from arc.store.profile import COVER, Covered, PgProfileStore, Profile
+
+        pg.init_schema()
+        store = PgProfileStore("test-profile-rt")
+        store.save(
+            Profile(
+                uid="test-profile-rt",
+                sectors=["조선"],
+                stocks=[Covered(symbol="042660", company="한화오션", kind=COVER)],
+            )
+        )
+        got = store.load()
+        assert got.sectors == ["조선"]
+        assert [s.symbol for s in got.stocks] == ["042660"]
+
+    def test_absent_is_an_empty_profile_not_an_error(self):
+        from arc.store.profile import PgProfileStore
+
+        pg.init_schema()
+        assert PgProfileStore("test-profile-nobody").load().sectors == []
+
+    def test_another_uid_does_not_see_it(self):
+        from arc.store.profile import PgProfileStore, Profile
+
+        pg.init_schema()
+        PgProfileStore("test-profile-alice").save(
+            Profile(uid="test-profile-alice", sectors=["앨리스섹터"])
+        )
+        assert PgProfileStore("test-profile-bob").load().sectors == []
+
+    def test_saving_is_loud_when_it_fails(self, monkeypatch):
+        """**커버리지 저장 실패는 삼키면 안 된다.**
+
+        사건 로그와 다른 점이다 — 고쳤는데 조용히 안 저장되면 사용자는
+        저장된 줄 안다.
+        """
+        from arc.store import pg as pgmod
+        from arc.store.profile import PgProfileStore, Profile
+
+        def boom(_uid):
+            raise RuntimeError("연결 끊김")
+
+        monkeypatch.setattr(pgmod, "connect", boom)
+        with pytest.raises(RuntimeError):
+            PgProfileStore("x").save(Profile(uid="x"))
