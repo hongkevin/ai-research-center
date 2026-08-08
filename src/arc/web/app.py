@@ -2536,6 +2536,7 @@ def api_telegram_refresh():
     로그인만 터미널에서 한다 — 인증 코드를 받아 쳐야 해서 어쩔 수 없다.
     그 뒤로는 전부 화면에서 되어야 한다.
     """
+    from arc.data.tg_channels import known_kind
     from arc.ingest.telegram_collect import fetch_dialogs
     from arc.ingest.telegram_parse import classify_channel
     from arc.store.profile import TgChannel, merge_channels
@@ -2556,7 +2557,10 @@ def api_telegram_refresh():
                     chat_id=r["chat_id"],
                     name=r["name"],
                     username=r.get("username") or "",
-                    kind=classify_channel(r["name"], chat_type=r["chat_type"]).value,
+                    # **손으로 확인한 것이 추측보다 낫다** — 이름 규칙은
+                    # 「[메리츠 Tech …]」를 못 잡는다
+                    kind=known_kind(r.get("username") or "")
+                    or classify_channel(r["name"], chat_type=r["chat_type"]).value,
                     subscribers=subs,
                 )
             )
