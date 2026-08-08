@@ -126,8 +126,18 @@ def load_catalog(service: str | Path) -> list[dict]:
 
 
 def session_path(base: str | Path) -> Path:
-    """`{base}/telegram.session`. `base`는 **서비스 디렉터리**를 넘긴다."""
+    """Telethon에 넘길 세션 **이름**. `base`는 **서비스 디렉터리**다.
+
+    확장자가 없다 — Telethon이 `.session`을 붙인다. 실제 파일을 다뤄야 할
+    때는 `session_file()`을 쓰십시오. 둘을 섞으면 「세션이 없습니다」가
+    있는데도 뜬다(실제로 그랬다).
+    """
     return Path(base) / SESSION_NAME
+
+
+def session_file(base: str | Path) -> Path:
+    """디스크에 실제로 놓인 파일. **이것이 자격증명이다.**"""
+    return Path(base) / f"{SESSION_NAME}.session"
 
 
 def credentials() -> tuple[int, str]:

@@ -637,6 +637,110 @@ def _tg_client():
     return TelegramClient(str(session_path(_tg_store())), api_id, api_hash)
 
 
+@telegram_app.command("joinlist")
+def telegram_joinlist(
+    sector: str = typer.Option("", "--sector", help="이 섹터만"),
+    broker: bool = typer.Option(False, "--broker", help="증권사 소속만"),
+) -> None:
+    """가입할 채널 링크를 뽑는다 — **새 계정을 만든 직후에 쓴다.**
+
+    전용 수집 계정은 아무 방에도 안 들어가 있어서 카탈로그가 빈다([D79](#d79)).
+    추천 24개는 이미 실측으로 걸러 뒀으니(사칭 1·허구 3·시체 10 제외) 그 링크를
+    낸다. **누르면 열리는 형태로** 준다 — 이름을 검색해서 찾으면 사칭방에
+    걸린다(`@nhsemicon`이 그 예다).
+    """
+    from arc.data.tg_channels import CHECKED_AT, recommended_for
+
+    rows = [c for c in recommended_for(None) if not broker or c.kind == "broker"]
+    if sector:
+        rows = [c for c in rows if c.sector == sector]
+    if not rows:
+        typer.secho("\n  해당하는 채널이 없습니다.\n", fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+
+    typer.echo("")
+    for c in rows:
+        tag = {"broker": "증권사", "research": "리서치", "news": "뉴스", "ir": "기업IR"}.get(
+            c.kind, c.kind
+        )
+        typer.echo(f"  https://t.me/{c.username:<24} {tag:<5} {c.sector or '범용':<10} {c.title}")
+        if c.note:
+            typer.secho(f"  {'':<26} ⚠ {c.note}", fg=typer.colors.YELLOW)
+    typer.secho(
+        f"\n  {len(rows)}개 · {CHECKED_AT}에 전부 실측 확인 (사칭·허구·정지 제외).\n"
+        "  가입한 뒤 `arc telegram channels`로 카탈로그를 받으십시오.\n",
+        fg=typer.colors.CYAN,
+    )
+
+
+@telegram_app.command("whoami")
+def telegram_whoami() -> None:
+    """이 세션이 **어느 계정**인가. 수집 계정을 바꿨는지 확인하는 자리다."""
+    import asyncio
+
+    from arc.ingest.telegram_collect import session_file
+
+    path = session_file(_tg_store())
+    if not path.exists():
+        typer.secho(f"\n  세션이 없습니다 — {path}\n", fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+
+    async def run() -> None:
+        client = _tg_client()
+        await client.connect()
+        try:
+            if not await client.is_user_authorized():
+                typer.secho("\n  세션이 있지만 인증되지 않았습니다.\n", fg=typer.colors.YELLOW)
+                return
+            me = await client.get_me()
+            typer.echo("")
+            typer.secho(
+                f"  {me.first_name or ''} {me.last_name or ''}".rstrip()
+                + f"  @{me.username or '-'}  +{me.phone or '-'}",
+                fg=typer.colors.GREEN,
+            )
+            typer.echo(f"  세션: {path}")
+            typer.echo("")
+        finally:
+            await client.disconnect()
+
+    asyncio.run(run())
+
+
+@telegram_app.command("logout")
+def telegram_logout(
+    yes: bool = typer.Option(False, "--yes", help="묻지 않고 지운다"),
+) -> None:
+    """세션을 지운다 — **계정을 바꾸려면 이걸 먼저 해야 한다.**
+
+    `login`은 세션이 있으면 그것을 재사용하고 **아무것도 묻지 않는다.** 그래서
+    개인 계정으로 붙어 있는 상태에서 전용 수집 계정으로 바꾸려 하면, 바뀐 줄
+    알았는데 그대로인 상태가 된다.
+
+    **세션 파일은 이미 인증된 접근이다** — 지우는 것은 되돌릴 수 없고, 다시
+    로그인하려면 인증 코드를 또 받아야 한다. 그래서 묻는다.
+    """
+    from arc.ingest.telegram_collect import session_file
+
+    path = session_file(_tg_store())
+    if not path.exists():
+        typer.secho(f"\n  이미 없습니다 — {path}\n", fg=typer.colors.YELLOW)
+        return
+    if not yes and not typer.confirm(f"\n  {path} 를 지웁니다. 계속?"):
+        typer.echo("  그대로 뒀습니다.\n")
+        return
+    # **옆에 치워 둔다, 바로 지우지 않는다.** 잘못 지웠으면 되돌릴 수 있어야
+    # 한다 — 이 저장소에서 이미 두 번 잃었다.
+    kept = path.with_name(f"{path.name}.old-{dt.datetime.now(dt.UTC):%Y%m%d-%H%M%S}")
+    path.rename(kept)
+    typer.secho(f"\n  치웠습니다 → {kept.name}", fg=typer.colors.GREEN)
+    typer.echo("  이제 `arc telegram login`으로 다른 계정에 붙을 수 있습니다.")
+    typer.secho(
+        "  옛 세션 파일도 **계정 접근 권한**입니다 — 확인 뒤 지우십시오.\n",
+        fg=typer.colors.YELLOW,
+    )
+
+
 @telegram_app.command("login")
 def telegram_login(
     phone: str = typer.Option("", "--phone", help="+821012345678 형식. 비우면 물어본다"),
@@ -660,6 +764,18 @@ def telegram_login(
 
     async def run() -> None:
         client = _tg_client()
+        # **이미 붙어 있으면 아무것도 묻지 않는다.** 계정을 바꾸려는 사람에게
+        # 그건 「바뀐 줄 알았는데 그대로」가 된다 — 그 사실을 말해 준다.
+        await client.connect()
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            typer.secho(
+                f"\n  이미 로그인돼 있습니다: {me.first_name or ''} (@{me.username or '-'})",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo("  다른 계정으로 바꾸려면 `arc telegram logout`을 먼저 하십시오.\n")
+            await client.disconnect()
+            return
         # 전화번호를 미리 주면 프롬프트가 하나 줄어든다. 코드는 어차피 물어본다.
         await client.start(phone=phone or (lambda: typer.prompt("  전화번호 (+82…)")))
         me = await client.get_me()
