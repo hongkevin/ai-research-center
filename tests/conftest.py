@@ -39,6 +39,11 @@ _AMBIENT = (
     # 로그인 전 저장물 이관. 테스트는 tmp_path를 쓰므로 무해하지만,
     # **환경이 동작을 바꾸는 것 자체를** 테스트에서 끊는다.
     "ARC_ADOPT_LOCAL",
+    # **저장소가 바뀌면 테스트가 다른 것을 검사한다.** 이게 있으면
+    # `open_events`가 Postgres를 고르고, 파일에 써 놓고 DB에서 읽는 상태가
+    # 된다 — 실제로 2건이 그렇게 깨졌다. 그리고 전체 실행이 8초에서 40초가
+    # 된다. DB를 쓰는 테스트는 `ARC_TEST_DATABASE_URL`로 **따로 켠다.**
+    "DATABASE_URL",
 )
 
 for _name in _AMBIENT:

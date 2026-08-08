@@ -64,6 +64,15 @@ create index if not exists arc_events_uid_at on arc_events (uid, at desc);
 create index if not exists arc_events_uid_subject on arc_events (uid, subject, at desc);
 
 alter table arc_events enable row level security;
+-- **소유자에게도 적용한다.** 이것만으로는 부족하지만(BYPASSRLS가 이긴다)
+-- 없으면 소유자 연결에서 정책이 아예 안 돈다.
+alter table arc_events force row level security;
+
+-- 우리가 트랜잭션마다 내려앉을 역할. Supabase가 PostgREST용으로 이미
+-- 만들어 둔 것이고 **BYPASSRLS가 없다** — 그래서 정책이 실제로 적용된다.
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on arc_events to authenticated;
+grant usage, select on sequence arc_events_id_seq to authenticated;
 """
 
 # RLS. **앱이 실수해도 DB가 막는다.** 정책을 지웠다 다시 만드는 이유:
@@ -100,17 +109,23 @@ def connect(uid: str):
 
     `SET LOCAL`이라 트랜잭션이 끝나면 사라진다 — 연결을 재사용해도 앞 사람의
     uid가 남지 않는다. 풀링을 쓸 때 이게 중요하다.
+
+    **역할을 낮춰 앉는다.** 연결 계정(`postgres`)은 `BYPASSRLS`를 갖고 있어서
+    그대로 두면 정책이 **한 줄도 적용되지 않는다** — RLS를 켜 놓고 안 지켜지는,
+    가장 나쁜 상태다. `authenticated`는 Supabase가 PostgREST용으로 이미 만들어
+    둔 역할이고 BYPASSRLS가 없다. 새 계정을 만들 필요가 없다.
     """
     import psycopg
 
     with psycopg.connect(database_url()) as conn:
         with conn.cursor() as cur:
-            # RLS 정책이 읽을 자리에 uid를 세운다. Supabase의 `auth.uid()`가
-            # 보는 것과 **같은 키**라 정책을 나중에 그대로 옮길 수 있다.
+            # 순서가 있다: **claims를 먼저** 세우고 역할을 낮춘다.
+            # 낮춘 뒤에는 GUC를 못 건드릴 수 있다.
             cur.execute(
                 "select set_config('request.jwt.claims', %s, true)",
                 (json.dumps({"sub": uid}),),
             )
+            cur.execute("set local role authenticated")
         yield conn
 
 
@@ -126,17 +141,20 @@ def init_schema() -> None:
     log.info("스키마를 확인했습니다")
 
 
-def owner_bypass() -> bool:
-    """지금 연결이 RLS를 우회하는가 (테이블 소유자·superuser).
+def rls_enforced(uid: str = "rls-probe") -> bool:
+    """**정책이 실제로 도는가.** 「켜져 있는가」가 아니라 「지켜지는가」다.
 
-    **경고를 위해 있다.** Supabase의 `postgres` 역할은 테이블 소유자라 RLS가
-    적용되지 않는다 — 그 상태로 「RLS가 지켜 준다」고 믿으면 안 된다.
-    앱 전용 역할을 따로 만들어 쓰는 것이 맞고, 그때까지는 uid를 생성 시점에
-    묶는 ①이 실질적인 방어다.
+    `postgres`는 `BYPASSRLS`를 갖고 있어 `enable`·`force`를 다 켜도 정책이 한
+    줄도 적용되지 않는다. 그래서 설정을 읽어 판단하지 않고 **직접 물어본다** —
+    이 트랜잭션에서 정책이 도는가.
     """
     import psycopg
 
-    with psycopg.connect(database_url()) as conn, conn.cursor() as cur:
-        cur.execute("select rolsuper or rolbypassrls from pg_roles where rolname = current_user")
-        row = cur.fetchone()
-        return bool(row and row[0])
+    try:
+        with connect(uid) as conn, conn.cursor() as cur:
+            cur.execute("select row_security_active('arc_events')")
+            row = cur.fetchone()
+            return bool(row and row[0])
+    except psycopg.Error as exc:
+        log.warning("RLS 적용 여부를 못 봤습니다: %s", exc)
+        return False
