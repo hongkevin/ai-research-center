@@ -357,6 +357,10 @@ def parse_export(chat: Mapping[str, object]) -> Channel:
     `redistribution`이 UNKNOWN으로 고정돼 저작권 경계가 무의미해진다.
     두 번 만드는 값이지만 **판정이 레코드와 함께 다니는 편이** 안전하다.
     """
+    if not isinstance(chat, dict):
+        # **모양이 아니면 이름을 대고 거절한다.** `AttributeError`로 죽으면
+        # 어느 파일이 문제인지 알 수 없다 — 실제로 카탈로그 파일에 물렸다.
+        raise TypeError(f"대화 내보내기 모양이 아닙니다: {type(chat).__name__}")
     chat_id = int(str(chat.get("id") or 0))
     name = str(chat.get("name") or "")
     username = str(chat.get("username") or "") or None

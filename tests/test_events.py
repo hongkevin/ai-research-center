@@ -164,3 +164,63 @@ class TestApiShape:
         client = self._client(tmp_path, monkeypatch)
         assert client.get("/api/events?days=99999").json()["days"] == 365
         assert client.get("/api/events?days=0").json()["days"] == 1
+
+
+class TestTelegramFolderIsMixed:
+    """메시지 디렉터리에는 **메시지만 있는 게 아니다** (D79).
+
+    카탈로그(`channels.json`)가 같은 자리에 산다. 그걸 대화 내보내기로 읽으려다
+    시장 센티가 통째로 500이 됐다 — 파일 하나가 화면 하나를 죽였다.
+    """
+
+    def test_the_catalog_is_not_read_as_messages(self, tmp_path, monkeypatch):
+        import json as _json
+
+        from arc.web import app as web
+
+        folder = tmp_path / "telegram"
+        folder.mkdir(parents=True)
+        # 카탈로그 — 목록이라 `.get()`이 없다
+        (folder / "channels.json").write_text(
+            _json.dumps([{"chat_id": -100, "name": "테스트"}]), encoding="utf-8"
+        )
+        monkeypatch.setattr(web, "_tg_dir", lambda: folder)
+        assert web._telegram_messages() == []  # 죽지 않는다
+
+    def test_a_message_file_is_still_read(self, tmp_path, monkeypatch):
+        """거르는 규칙이 **메시지까지 걸러 버리면** 안 된다."""
+        import json as _json
+
+        from arc.web import app as web
+
+        folder = tmp_path / "telegram"
+        folder.mkdir(parents=True)
+        (folder / "-1001784919258.json").write_text(
+            _json.dumps(
+                {
+                    "id": -1001784919258,
+                    "name": "테스트 채널",
+                    "type": "public_channel",
+                    "messages": [
+                        {
+                            "id": 1,
+                            "type": "message",
+                            "date": "2026-08-08T09:00:00",
+                            "text": "삼성전자 실적 발표",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(web, "_tg_dir", lambda: folder)
+        assert len(web._telegram_messages()) == 1
+
+    def test_the_parser_names_what_it_refused(self):
+        """`AttributeError`로 죽으면 **어느 파일이 문제인지 알 수 없다.**"""
+        import pytest
+
+        from arc.ingest.telegram_parse import parse_export
+
+        with pytest.raises(TypeError, match="모양이 아닙니다"):
+            parse_export([{"a": 1}])
