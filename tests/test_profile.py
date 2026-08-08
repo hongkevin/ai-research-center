@@ -292,3 +292,57 @@ class TestChannels:
 
         assert TgChannel(chat_id=1).stale(dt.date(2026, 8, 7)) is False
         assert TgChannel(chat_id=1, last_post="깨진값").stale(dt.date(2026, 8, 7)) is False
+
+
+# ── 웹 경계: 종목 하나 담기 ──────────────────────────────────────────
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    from starlette.testclient import TestClient
+
+    from arc.web import app as web
+
+    monkeypatch.setattr(web, "STORE_DIR", tmp_path / "store")
+    monkeypatch.setattr(web, "DRAFTS_DIR", tmp_path / "drafts")
+    return TestClient(web.app)
+
+
+class TestAddOneStock:
+    """`POST /api/profile/stocks` — **더하기만 한다** (D86).
+
+    센티·브리프처럼 목록을 안 들고 있는 화면에서 부르는 자리다. 전체 저장
+    (`POST /api/profile`)을 쓰면 그 순간 커버리지 탭에서 편집 중이던 것이
+    조용히 덮인다.
+    """
+
+    def _seed(self, client):
+        r = client.post(
+            "/api/profile",
+            json={
+                "sectors": ["조선"],
+                "stocks": [{"symbol": "042660", "sector": "조선", "kind": COVER}],
+            },
+        )
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def test_it_adds_without_dropping_what_is_there(self, client):
+        self._seed(client)
+        r = client.post("/api/profile/stocks", json={"symbol": "010140"})
+        assert r.status_code == 200, r.text
+        kinds = {s["symbol"]: s["kind"] for s in r.json()["stocks"]}
+        assert kinds == {"042660": COVER, "010140": WATCH}
+
+    def test_it_does_not_demote_what_i_already_cover(self, client):
+        """**커버가 관심으로 내려가면 안 된다.**
+
+        센티에서 담기를 눌렀다고 「내가 리포트를 내는 종목」이라는 선언이
+        취소될 이유가 없다. 이미 있으면 아무것도 안 바꾸고 409다.
+        """
+        self._seed(client)
+        r = client.post("/api/profile/stocks", json={"symbol": "042660"})
+        assert r.status_code == 409
+        stocks = client.get("/api/profile").json()["stocks"]
+        assert [(s["symbol"], s["kind"]) for s in stocks] == [("042660", COVER)]
+
+    def test_it_refuses_an_empty_code(self, client):
+        assert client.post("/api/profile/stocks", json={"symbol": ""}).status_code == 400

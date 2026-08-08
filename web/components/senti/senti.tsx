@@ -1,17 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ChannelPicker } from "@/components/senti/channel-picker";
 import { Recommended } from "@/components/senti/recommended";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
-  getSentiment,
   KIND_LABEL,
   SESSION_LABEL,
-  type Sentiment,
+  addStock,
+  getSentiment,
   type SentiMention,
   type SentiSample,
+  type Sentiment,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +33,15 @@ import { cn } from "@/lib/utils";
 
 const SESSIONS = ["pre", "intra", "post"] as const;
 
-export function Senti() {
+export function Senti({
+  onAsk,
+  onReport,
+}: {
+  /** 급증 종목에서 그 자리로 묻는다 (D86) */
+  onAsk?: (company: string) => void;
+  /** 그 자리에서 리포트를 시작한다 */
+  onReport?: (symbol: string) => void;
+} = {}) {
   const [data, setData] = useState<Sentiment | null>(null);
   const [day, setDay] = useState("");
   const [error, setError] = useState("");
@@ -41,6 +50,13 @@ export function Senti() {
   // 하는 경우가 있다(수집 직후가 그렇다).
   const [tick, setTick] = useState(0);
   const reload = useCallback(() => setTick((n) => n + 1), []);
+
+  // **담고 나면 다시 읽는다** — 그 종목이 「그 밖」에서 「내 커버·관심」으로
+  // 올라가는 것이 담았다는 유일한 증거다.
+  const acts = useMemo<Acts>(
+    () => ({ onAsk, onReport, onAdded: reload }),
+    [onAsk, onReport, reload],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -127,17 +143,20 @@ export function Senti() {
             mentions={data.mentions.filter(
               (m) => m.mine === "cover" || m.mine === "watch",
             )}
+            acts={acts}
           />
           <MentionGroup
             title="내 피어 그룹"
             hint="확정해 고정한 그룹 안의 종목 — 「내 섹터」의 실질적 정의입니다"
             mentions={data.mentions.filter((m) => m.mine === "peer")}
+            acts={acts}
           />
           <MentionGroup
             title="그 밖"
             hint="시장에서 돌지만 내 목록에는 없는 종목"
             mentions={data.mentions.filter((m) => !m.mine)}
             muted
+            acts={acts}
           />
         </>
       ) : (
@@ -190,16 +209,26 @@ function Rhythm({ data }: { data: Sentiment }) {
   );
 }
 
+/** 급증 종목에서 나갈 문들 (D86) */
+interface Acts {
+  onAsk?: (company: string) => void;
+  onReport?: (symbol: string) => void;
+  /** 담고 나면 화면이 「내 커버·관심」 구획으로 옮겨져야 한다 */
+  onAdded?: () => void;
+}
+
 function MentionGroup({
   title,
   hint,
   mentions,
   muted = false,
+  acts,
 }: {
   title: string;
   hint: string;
   mentions: SentiMention[];
   muted?: boolean;
+  acts?: Acts;
 }) {
   // **빈 구획을 세우지 않는다.** 「내 종목 0건」이 매일 떠 있으면 눈이
   // 그 자리를 지나치게 된다.
@@ -217,16 +246,36 @@ function MentionGroup({
       </h3>
       <div className="divide-y">
         {mentions.map((m) => (
-          <MentionRow key={m.symbol} mention={m} />
+          <MentionRow key={m.symbol} mention={m} acts={acts} />
         ))}
       </div>
     </section>
   );
 }
 
-function MentionRow({ mention: m }: { mention: SentiMention }) {
+function MentionRow({
+  mention: m,
+  acts,
+}: {
+  mention: SentiMention;
+  acts?: Acts;
+}) {
   const [open, setOpen] = useState(false);
+  // 담기의 결과를 그 줄에 남긴다 — 눌렀는데 아무 일도 안 일어난 것처럼
+  // 보이면 두 번 누르고, 두 번째는 409다.
+  const [added, setAdded] = useState("");
   const total = SESSIONS.reduce((a, s) => a + (m.by_session[s] ?? 0), 0);
+
+  async function add() {
+    setAdded("담는 중…");
+    try {
+      await addStock(m.symbol, "watch");
+      setAdded("관심에 담았습니다");
+      acts?.onAdded?.();
+    } catch (e) {
+      setAdded(e instanceof Error ? e.message : "담지 못했습니다");
+    }
+  }
   return (
     <div className="py-2.5">
       <button
@@ -275,6 +324,41 @@ function MentionRow({ mention: m }: { mention: SentiMention }) {
           </span>
         </span>
       </button>
+
+      {/* **여기서 나갈 수 있어야 한다** (D86). 전에는 이 탭이 막다른 길이라,
+          급증 종목을 보고 나서 종목명을 눈으로 읽고 다른 탭에 다시 쳐야 했다.
+          센티는 「무엇을 볼지」를 정해 주는 화면인데 **정한 다음이 없었다.** */}
+      {acts && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+          {!m.mine && (
+            <button
+              type="button"
+              onClick={() => void add()}
+              disabled={!!added}
+              className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:no-underline"
+            >
+              {added || "관심에 담기"}
+            </button>
+          )}
+          {m.mine && added && (
+            <span className="text-muted-foreground">{added}</span>
+          )}
+          <button
+            type="button"
+            onClick={() => acts.onAsk?.(m.name)}
+            className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            물어보기
+          </button>
+          <button
+            type="button"
+            onClick={() => acts.onReport?.(m.symbol)}
+            className="text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            리포트 만들기
+          </button>
+        </div>
+      )}
 
       {open && (
         <ul className="mt-2 space-y-2 border-l-2 pl-3">

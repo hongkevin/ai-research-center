@@ -262,6 +262,19 @@ export function Coverage({
         </div>
       )}
 
+      {/* **시드만 채택한 중간 상태를 말해 준다** (D86).
+          시드로 들어온 종목은 전부 「관심」이다(위 `onAdopt` 참조 — 커버는
+          사람이 선언하는 것이라 자동으로 안 준다). 그런데 그 상태에서 화면은
+          아무 말도 안 했고, 브리프의 섹터 줄·피어 자동 채움이 전부 커버
+          기준이라 **다 넣었는데 아무것도 안 나오는** 상태로 보였다. */}
+      {stocks.length > 0 && stocks.every((s) => s.kind !== "cover") && (
+        <p className="rounded-md border border-dashed px-3.5 py-2.5 text-[12.5px] leading-[1.8] text-muted-foreground">
+          지금은 전부 <strong>관심</strong>입니다. 리포트를 낼 종목은{" "}
+          <strong>커버</strong>로 옮기십시오 — 브리프의 섹터 줄과 피어 자동
+          채움이 커버를 기준으로 합니다.
+        </p>
+      )}
+
       <div className="space-y-5">
         {sectors.map((sector) => (
           <SectorCard
@@ -391,14 +404,19 @@ function SectorCard({
         </span>
         <span className="ml-auto flex items-center gap-1.5">
           {/* **씨앗을 들고 간다.** 지금까지 피어 그룹을 만들려면 커버 종목을
-              처음부터 다시 쳐야 했다 — 가장 큰 마찰이었다. */}
-          {onComposePeer && cover.length > 0 && (
+              처음부터 다시 쳐야 했다 — 가장 큰 마찰이었다.
+
+              **관심 종목도 씨앗이 된다** (D86). 전에는 `cover.length > 0`이라
+              시드만 채택한 상태(전부 「관심」)에서 이 버튼이 통째로 사라졌다.
+              그 상태가 바로 **처음 온 사람의 상태**이고, 씨앗은 「같이 움직이는
+              것을 찾을 출발점」이지 「리포트를 내는 종목」일 필요가 없다. */}
+          {onComposePeer && cover.length + watch.length > 0 && (
             <Button
               size="sm"
               variant="outline"
               onClick={() =>
                 onComposePeer(
-                  cover.slice(0, 2).map((s) => s.symbol),
+                  [...cover, ...watch].slice(0, 2).map((s) => s.symbol),
                   `${sector} 피어`,
                 )
               }

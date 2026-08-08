@@ -492,6 +492,9 @@ def _heads(brief: Brief) -> dict[str, str]:
             stock.append(
                 f"{NOTABLE:.0f}% 이상 {len(moved)}건 (최대 {big.company} {big.day_change:+.2f}%)"
             )
+        elif not brief.cover and brief.watch:
+            # 커버가 비면 잴 대상 자체가 없다 — 「없음」은 잰 뒤에 할 말이다
+            stock.append("커버 종목이 없어 등락을 보지 않았습니다")
         elif brief.cover and any(x.day_change is not None for x in brief.cover):
             stock.append(f"{NOTABLE:.0f}% 이상 움직인 커버 종목 없음")
         elif brief.cover:
@@ -549,6 +552,14 @@ def _note_body(brief: Brief) -> str:
     if moved := brief.notable_count:
         parts.append(f"{NOTABLE:.0f}% 이상 움직인 종목 {moved}건")
     if not parts:
+        # **커버가 없으면 「커버에 아무 일 없다」고 말하지 않는다** (D86).
+        # 시드를 채택한 직후가 정확히 이 상태다 — 종목이 열둘인데 전부
+        # 「관심」이라, 화면은 아무 일도 없었다고 단언하면서 **아무것도 안
+        # 보고 있었다.** 위·공시·등락이 전부 커버만 센다(`filing_count`).
+        if not brief.cover:
+            if brief.watch:
+                return "커버로 표시한 종목이 없어 공시·등락을 보지 않았습니다 — 관심 종목을 커버로 옮기십시오."
+            return "커버 종목을 먼저 넣으십시오 — 「내 커버리지」에서 정합니다."
         return "커버 종목에 큰 움직임도 새 공시도 없습니다."
     return " · ".join(parts)
 

@@ -1163,6 +1163,26 @@ export async function getProfile(): Promise<ProfileData> {
   return r.json();
 }
 
+/**
+ * 종목 **하나**를 담는다 (D86).
+ *
+ * `saveProfile`과 달리 **목록을 안 덮는다.** 센티·브리프처럼 목록을 들고
+ * 있지 않은 화면에서 부르는 것이라, 전체 저장을 쓰면 커버리지 탭에서
+ * 편집하던 것이 조용히 사라진다. 이미 있으면 409다 — 그것도 결과다.
+ */
+export async function addStock(
+  symbol: string,
+  kind: CoverKind = "watch",
+): Promise<ProfileData> {
+  const r = await api(`/api/profile/stocks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol, kind }),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
 export async function saveProfile(patch: {
   display_name?: string;
   sectors?: string[];
