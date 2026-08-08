@@ -65,3 +65,6 @@ docs/KakaoTalk_Photo_*
 *.session
 *.session-journal
 .arc-backup-*
+
+# 에이전트 워크트리 — 저장소 안의 저장소다. 커밋에 딸려 들어가면 안 된다
+.claude/worktrees/

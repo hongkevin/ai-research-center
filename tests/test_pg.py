@@ -229,3 +229,113 @@ class TestProfileAgainstRealDatabase:
         monkeypatch.setattr(pgmod, "connect", boom)
         with pytest.raises(RuntimeError):
             PgProfileStore("x").save(Profile(uid="x"))
+
+
+class TestCardInterface:
+    """**두 카드 저장소가 같은 모양이어야 한다.**"""
+
+    def test_same_methods(self):
+        from arc.store.cards import CardStore, PgCardStore
+
+        for name in ("new_id", "save", "get", "list", "delete"):
+            assert hasattr(CardStore, name) and hasattr(PgCardStore, name)
+
+    def test_bad_ids_are_refused_in_both(self):
+        """**경로가 없어도 검증한다.**
+
+        파일 판에서는 경로 조작을 막으려는 것이었지만, 두 저장소가 다른 것을
+        받으면 갈아끼울 때 동작이 갈린다.
+        """
+        from arc.store.cards import PgCardStore
+
+        store = PgCardStore("alice")
+        for bad in ("../etc", "", "not-hex", "abc"):
+            with pytest.raises(ValueError, match="잘못된 카드 id"):
+                store.get(bad)
+
+    def test_unknown_fields_do_not_lose_the_card(self):
+        """필드를 추가하기 **전에** 저장된 카드 (D65).
+
+        파일 판은 `Card(**raw)`가 죽게 두고 목록에서 그 한 장만 빠지는데,
+        그건 「왜 내 카드가 사라졌지」가 된다.
+        """
+        from arc.store.cards import _from_doc
+
+        got = _from_doc({"id": "a" * 16, "symbol": "042660", "year": 2025, "옛날필드": 1})
+        assert got.symbol == "042660"
+
+
+@needs_db
+class TestCardsAgainstRealDatabase:
+    @pytest.fixture(autouse=True)
+    def _url(self, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", _TEST_DB)
+
+    def _card(self, store, **over):
+        from arc.store.cards import SINGLE, Card
+
+        base = {
+            "id": store.new_id(),
+            "symbol": "042660",
+            "year": 2025,
+            "kind": SINGLE,
+            "company": "한화오션",
+            "created_at": "2026-08-08T10:00:00+00:00",
+        }
+        return Card(**{**base, **over})
+
+    def test_roundtrip_keeps_the_registry(self):
+        """`registry`가 왕복해야 피어 표가 산다."""
+        from arc.store.cards import PgCardStore
+
+        pg.init_schema()
+        store = PgCardStore("test-cards-rt")
+        card = self._card(store, registry=[{"key": "revenue_2025a", "value": 1}])
+        store.save(card)
+        assert store.get(card.id).registry == [{"key": "revenue_2025a", "value": 1}]
+
+    def test_another_uid_cannot_read_it(self):
+        """**id를 알아도 못 연다** — identity.py가 파일에서 지키던 성질이다."""
+        from arc.store.cards import PgCardStore
+
+        pg.init_schema()
+        alice = PgCardStore("test-cards-alice")
+        card = self._card(alice)
+        alice.save(card)
+        assert PgCardStore("test-cards-bob").get(card.id) is None
+
+    def test_list_is_newest_first(self):
+        from arc.store.cards import PgCardStore
+
+        pg.init_schema()
+        store = PgCardStore("test-cards-order")
+        for c in store.list():
+            store.delete(c.id)
+        store.save(self._card(store, created_at="2026-01-01T00:00:00+00:00", company="옛것"))
+        store.save(self._card(store, created_at="2026-08-01T00:00:00+00:00", company="새것"))
+        assert [c.company for c in store.list()] == ["새것", "옛것"]
+
+    def test_delete_reports_whether_it_removed_anything(self):
+        from arc.store.cards import PgCardStore
+
+        pg.init_schema()
+        store = PgCardStore("test-cards-del")
+        card = self._card(store)
+        store.save(card)
+        assert store.delete(card.id) is True
+        assert store.delete(card.id) is False  # 두 번째는 지울 게 없다
+
+    def test_saving_is_loud_when_it_fails(self, monkeypatch):
+        """**리포트를 만들었는데 조용히 안 저장되면 안 된다.**"""
+        from arc.store import pg as pgmod
+        from arc.store.cards import PgCardStore
+
+        store = PgCardStore("x")
+        card = self._card(store)
+
+        def boom(_uid):
+            raise RuntimeError("연결 끊김")
+
+        monkeypatch.setattr(pgmod, "connect", boom)
+        with pytest.raises(RuntimeError):
+            store.save(card)

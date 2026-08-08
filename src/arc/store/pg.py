@@ -82,12 +82,40 @@ create table if not exists arc_profiles (
 alter table arc_profiles enable row level security;
 alter table arc_profiles force row level security;
 
+-- 카드(리포트) — **문서가 정본이고 열은 파생이다.**
+--
+-- 목록 조회가 잦아서(보드 화면) 정렬·필터에 쓰는 것만 열로 꺼내 두는데,
+-- 값을 따로 넣지 않고 `generated`로 문서에서 뽑는다. 따로 넣으면 저장할 때
+-- 한쪽만 갱신하는 실수가 언젠가 나고, 그러면 목록과 내용이 다른 말을 한다.
+--
+-- 본문(`vm`·`assembled`·`registry`)을 별도 표로 가르지 않은 이유: 지금
+-- `list()`를 쓰는 곳이 대부분 본문을 필요로 한다 — 피어 구성원 해석은
+-- `registry`를, 채팅 검색은 본문 전체를 본다. 나눠 두면 「목록만 읽는」
+-- 경로가 생기기 전까지는 조인만 늘어난다.
+create table if not exists arc_cards (
+    uid         text        not null,
+    id          text        not null,
+    doc         jsonb       not null,
+    updated_at  timestamptz not null default now(),
+    primary key (uid, id),
+    kind        text generated always as (doc->>'kind') stored,
+    symbol      text generated always as (doc->>'symbol') stored,
+    created_at  text generated always as (doc->>'created_at') stored
+);
+
+-- 「내 것을 최신순으로」가 보드가 매번 하는 질의다
+create index if not exists arc_cards_uid_created on arc_cards (uid, created_at desc);
+
+alter table arc_cards enable row level security;
+alter table arc_cards force row level security;
+
 -- 우리가 트랜잭션마다 내려앉을 역할. Supabase가 PostgREST용으로 이미
 -- 만들어 둔 것이고 **BYPASSRLS가 없다** — 그래서 정책이 실제로 적용된다.
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on arc_events to authenticated;
 grant usage, select on sequence arc_events_id_seq to authenticated;
 grant select, insert, update, delete on arc_profiles to authenticated;
+grant select, insert, update, delete on arc_cards to authenticated;
 """
 
 # RLS. **앱이 실수해도 DB가 막는다.** 정책을 지웠다 다시 만드는 이유:
@@ -100,6 +128,11 @@ create policy arc_events_own on arc_events
 
 drop policy if exists arc_profiles_own on arc_profiles;
 create policy arc_profiles_own on arc_profiles
+    using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
+    with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
+
+drop policy if exists arc_cards_own on arc_cards;
+create policy arc_cards_own on arc_cards
     using (uid = current_setting('request.jwt.claims', true)::json->>'sub')
     with check (uid = current_setting('request.jwt.claims', true)::json->>'sub');
 """

@@ -526,6 +526,7 @@ def db_migrate(
     **지우지 않는다.** 원본을 두면 잘못돼도 되돌릴 수 있다 — 이 저장소의
     카드를 이미 두 번 잃었다. 두 번 돌리면 두 번 들어가니 한 번만 돌린다.
     """
+    from arc.store.cards import migrate_cards
     from arc.store.events import migrate_events
     from arc.store.profile import migrate_profile
     from arc.web.identity import user_dir
@@ -533,8 +534,10 @@ def db_migrate(
     home = user_dir(_store_root(), uid)
     moved = migrate_events(home, uid)
     profile = migrate_profile(home, uid)
+    cards = migrate_cards(home, uid)
     typer.secho(
-        f"\n  사건 {moved}건 · 프로필 {'옮김' if profile else '건너뜀'} (원본은 그대로).\n",
+        f"\n  사건 {moved}건 · 카드 {cards}장 · "
+        f"프로필 {'옮김' if profile else '건너뜀'} (원본은 그대로).\n",
         fg=typer.colors.GREEN,
     )
 
