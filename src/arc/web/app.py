@@ -1671,21 +1671,63 @@ def api_ask(payload: dict):
     return dataclasses.asdict(answer)
 
 
+# 적재해 둔 시세. **프로세스 메모리다** — 레디스도 CDN도 아니다 (D82).
+#
+# 왜 메모리인가:
+#   · 재는 것이 네트워크가 아니라 **파일 2,987개 읽기**다. 레디스를 두면
+#     디스크 읽기가 네트워크 왕복으로 바뀌고, 직렬화까지 더해진다
+#   · 워커가 하나라(Dockerfile) 프로세스 dict가 곧 전역 캐시다. 이미
+#     `_NEWS_CACHE`·`_BRIEF_FILINGS`·corpCode가 같은 자리를 쓴다
+#   · CDN은 **쓸 수 없다.** 이 응답은 사람마다 다르고 인증 뒤에 있다 —
+#     엣지에 캐시하면 남의 커버리지가 새는 종류의 사고가 된다
+#
+# 키는 **저장소가 마지막으로 바뀐 시각**이다. 백필이 돌면 저절로 무효가 된다 —
+# 날짜로 잡으면 장중에 받은 것이 다음 날까지 안 보인다.
+_PRICES: tuple[float, dict, str] | None = None
+
+
+def _price_stamp(folder: Path) -> float:
+    """이 디렉터리가 마지막으로 바뀐 시각. 못 보면 0.
+
+    파일 하나하나를 훑지 않는다 — 백필이 파일을 쓰면 디렉터리 mtime이 움직인다.
+    2,987개를 stat하는 것이 캐시하려는 일보다 비싸면 안 된다.
+    """
+    try:
+        return folder.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _price_source() -> tuple[dict, str]:
     """피어 후보가 딛고 설 시세. **받아 둔 것을 먼저 본다.**
 
     개발 기기에는 `corpus/consensus/prices/`가 있지만 배포에는 없고(gitignore)
     네이버에서 받은 것이라 재배포도 안 된다(D67). 그래서 금융위 API로 받아
     `.arc-store/prices`에 쌓은 것을 정본으로 쓰고, 없을 때만 코퍼스로 떨어진다.
+
+    **한 번 적재하고 들고 있는다.** 매 요청마다 다시 읽으면 260ms인데, 그걸로
+    하는 계산은 0.2ms다 — 서울 리전으로 옮긴 뒤에는 DB 질의(38ms)보다 **일곱
+    배 비싼** 자리가 됐다.
     """
+    global _PRICES
     from arc.finmodel.price_store import available, store_dir
 
-    if available(STORE_DIR):
-        return load_prices(store_dir(STORE_DIR)), "store"
-    corpus = REPO_ROOT / "corpus" / "consensus" / "prices"
-    if corpus.is_dir():
-        return load_prices(corpus), "corpus"
-    return {}, "none"
+    folder, source = (
+        (store_dir(STORE_DIR), "store")
+        if available(STORE_DIR)
+        else (REPO_ROOT / "corpus" / "consensus" / "prices", "corpus")
+    )
+    if not folder.is_dir():
+        return {}, "none"
+
+    stamp = _price_stamp(folder)
+    if _PRICES is not None and _PRICES[0] == stamp and _PRICES[2] == source:
+        return _PRICES[1], source
+
+    loaded = load_prices(folder)
+    _PRICES = (stamp, loaded, source)
+    log.info("시세 %d종목을 적재했습니다 (%s)", len(loaded), source)
+    return loaded, source
 
 
 def _names_for(symbols: list[str]) -> dict[str, str]:
@@ -1942,9 +1984,27 @@ def _sector_universe(profile) -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in out.items() if v}
 
 
+# 매크로. **바깥에 다섯 번 나가는 값이라 붙들고 있는다** (D82).
+#
+# ECOS 4콜 + 금투협 1콜 = 779ms. 그런데 환율·금리·신용잔고는 **하루 한 번**
+# 갱신된다 — 새로 고칠 때마다 다섯 번 나가는 것은 지연이기도 하고, 남의 API를
+# 필요 이상으로 두드리는 일이기도 하다(D69에서 IP가 끊긴 그 종류).
+#
+# 시세 캐시와 달리 **시각으로 만료한다.** 여기는 무효를 알려 줄 파일이 없고,
+# 늦게 채워지는 계열이 있어 하루에 몇 번은 다시 봐야 한다.
+_MACRO: tuple[float, list[dict]] | None = None
+MACRO_TTL = 900.0  # 15분
+
+
 def _macro_now() -> list[dict]:
     """환율·금리. **키가 없으면 빈 목록이다** — 브리프를 막지 않는다."""
+    import time as _time
+
     from arc.data.kr import ecos
+
+    global _MACRO
+    if _MACRO is not None and _time.monotonic() - _MACRO[0] < MACRO_TTL:
+        return _MACRO[1]
 
     if not ecos.available():
         return []
@@ -1971,6 +2031,10 @@ def _macro_now() -> list[dict]:
     ]
     if (credit := _credit_now()) is not None:
         out.append(credit)
+    # **실패한 것은 캐시하지 않는다.** 빈 목록을 15분 들고 있으면 일시적인
+    # 네트워크 문제가 화면에서 「매크로 없음」으로 굳는다.
+    if out:
+        _MACRO = (_time.monotonic(), out)
     return out
 
 
