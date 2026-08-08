@@ -673,6 +673,82 @@ def telegram_joinlist(
     )
 
 
+@telegram_app.command("join")
+def telegram_join(
+    names: list[str] = typer.Argument(None, help="@username (여러 개). 비우면 추천 전부"),
+    broker: bool = typer.Option(False, "--broker", help="증권사 소속만"),
+    dry: bool = typer.Option(False, "--dry", help="무엇을 가입할지만 보여준다"),
+) -> None:
+    """**이 세션의 계정으로** 채널에 가입한다.
+
+    `t.me` 링크를 누르면 **그 순간 활성화된 계정**으로 가입된다. 데스크톱에서
+    계정을 둘 쓰면 새 계정에 넣으려던 것이 개인 계정으로 들어간다 — 실제로
+    그렇게 됐고, 카탈로그가 0개로 나왔다. 여기서 하면 **어느 계정인지 확실하다.**
+
+    **막힌 것은 막혔다고 말한다.** 사칭·허구·정지로 걸러 둔 것은 애초에
+    시도하지 않는다([D75](#d75)).
+    """
+    import asyncio
+
+    from arc.data.tg_channels import blocked_reason, recommended_for
+
+    wanted = [x.strip().lstrip("@") for x in (names or []) if x.strip()]
+    if not wanted:
+        wanted = [c.username for c in recommended_for(None) if not broker or c.kind == "broker"]
+
+    blocked = [(n, r) for n in wanted if (r := blocked_reason(n))]
+    wanted = [n for n in wanted if not blocked_reason(n)]
+    for name, reason in blocked:
+        typer.secho(f"  건너뜀 @{name} — {reason}", fg=typer.colors.YELLOW)
+
+    if dry:
+        typer.echo("")
+        for n in wanted:
+            typer.echo(f"  @{n}")
+        typer.secho(f"\n  {len(wanted)}개를 가입합니다 (--dry 없이 실행).\n", fg=typer.colors.CYAN)
+        return
+
+    async def run() -> None:
+        from telethon.tl.functions.channels import JoinChannelRequest
+
+        client = _tg_client()
+        await client.connect()
+        if not await client.is_user_authorized():
+            typer.secho("\n  로그인되지 않았습니다 — `arc telegram login`\n", fg=typer.colors.RED)
+            return
+        me = await client.get_me()
+        typer.secho(
+            f"\n  {me.first_name or ''} (+{me.phone}) 계정으로 가입합니다\n", fg=typer.colors.CYAN
+        )
+        ok = already = failed = 0
+        for name in wanted:
+            try:
+                entity = await client.get_entity(name)
+                await client(JoinChannelRequest(entity))
+                title = getattr(entity, "title", name)
+                typer.echo(f"  ✓ @{name:<24} {title[:34]}")
+                ok += 1
+            except Exception as exc:  # noqa: BLE001 — 하나가 막혀도 나머지는 간다
+                text = str(exc)
+                if "already" in text.lower():
+                    typer.echo(f"  · @{name:<24} 이미 가입돼 있습니다")
+                    already += 1
+                else:
+                    typer.secho(f"  ✗ @{name:<24} {type(exc).__name__}", fg=typer.colors.YELLOW)
+                    failed += 1
+            # **천천히 한다.** 한꺼번에 스무 개를 가입하면 텔레그램이 계정을
+            # 제한한다 — 새 계정일수록 더 그렇다.
+            await asyncio.sleep(2.0)
+        await client.disconnect()
+        typer.secho(
+            f"\n  가입 {ok} · 이미 {already} · 실패 {failed}\n"
+            "  다음: `arc telegram channels` 로 카탈로그를 받으십시오.\n",
+            fg=typer.colors.GREEN,
+        )
+
+    asyncio.run(run())
+
+
 @telegram_app.command("whoami")
 def telegram_whoami() -> None:
     """이 세션이 **어느 계정**인가. 수집 계정을 바꿨는지 확인하는 자리다."""
