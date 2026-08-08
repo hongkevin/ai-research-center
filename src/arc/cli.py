@@ -607,6 +607,44 @@ def _store_root() -> Path:
     return Path(os.environ.get("ARC_STORE_DIR") or REPO_ROOT / ".arc-store")
 
 
+prices_app = typer.Typer(help="시세·시장 데이터 — 날짜축으로 받아 둔다")
+app.add_typer(prices_app, name="prices")
+
+
+@prices_app.command("backfill")
+def prices_backfill(
+    days: int = typer.Option(400, "--days", help="며칠치를 받을까"),
+    indices: bool = typer.Option(True, "--indices/--no-indices", help="지수도 같이"),
+) -> None:
+    """일별 시세 + 시가총액·거래대금·시장 구분을 받아 둔다.
+
+    **이 명령이 없었다.** `/api/peers/suggest`가 후보를 못 낼 때 화면이
+    *"`arc prices backfill`을 돌리십시오"*라고 안내하는데 그런 명령이 없어서,
+    안내를 따라간 사람은 `No such command`를 봤다 (D87에서 발견).
+
+    날짜축이라 하루 1콜에 전 종목이 온다 — 400일치가 약 260콜이다. 순차로
+    돌고 간격을 둔다(D69의 차단은 병렬 DART였지만 조심하는 값이 싸다).
+    """
+    from arc.finmodel import market_facts
+    from arc.finmodel.price_store import backfill, backfill_indices
+
+    base = _store_root()
+    typer.echo(f"받는 중… {base}/prices ({days}일치)")
+    got = backfill(base, days=days)
+    typer.echo(
+        f"  거래일 {got['fetched_days']}일 새로 받음 · 휴장 {got['empty_days']}일"
+        f" · 종목 {got['total_symbols']}개 · 시장 데이터 {got['market_symbols']}개"
+    )
+    if indices:
+        idx = backfill_indices(base, days=days)
+        typer.echo(f"  지수 {idx['indices']}개 · 거래일 {idx['fetched_days']}일")
+
+    # **받아 놓고 안 보여 주면 받은 줄 모른다.** 한 종목을 뽑아 확인시킨다.
+    listing = market_facts.load_listing(base)
+    kosdaq = sum(1 for v in listing.values() if v == market_facts.KOSDAQ)
+    typer.echo(f"  시장 구분: 코스닥 {kosdaq}개 · 전체 {len(listing)}개")
+
+
 def _tg_store() -> Path:
     """수집기가 쓰는 곳. **서비스 하나다** (D79).
 
