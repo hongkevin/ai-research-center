@@ -314,7 +314,6 @@ class PgEventStore:
                         json.dumps(event.detail, ensure_ascii=False),
                     ),
                 )
-                conn.commit()
         except Exception as exc:  # noqa: BLE001 — 연결·권한·형식 전부 「못 적었다」다
             log.warning("사건을 못 적었습니다 (%s): %s", event.kind, exc)
             return False

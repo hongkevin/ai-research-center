@@ -33,6 +33,7 @@ import os
 import re
 import threading
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -101,8 +102,6 @@ from arc.store.events import (
     OPENED,
     PEER_SKIPPED,
     PUBLISHED,
-    EventStore,
-    PgEventStore,
     open_events,
     summarize,
 )
@@ -895,7 +894,53 @@ def _tg_dir() -> Path:
     return service_dir(STORE_DIR)
 
 
-def _events() -> EventStore | PgEventStore:
+# 사건을 적는 스레드. **하나면 된다** — 순서가 유지되고, 화면은 어차피
+# 기다리지 않는다.
+_EVENT_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="arc-events")
+
+
+class _Background:
+    """사건 기록을 **화면 뒤로 보낸다** (D81).
+
+    기록은 본 일의 부산물이다. 그런데 DB가 뭄바이에 있어 쓰기 한 번에 왕복
+    서너 번(≈400ms)이 든다 — 카드를 열 때마다 그만큼 화면이 멈췄다.
+
+    **부산물이 본 일을 기다리게 하면 안 된다.** 던지고 잊는다. 실패는 저장소가
+    이미 삼키고 로그로 남긴다(예외를 안 던진다).
+
+    사용자 컨텍스트(`current_user()`)가 스레드로 안 따라가므로 **uid를 미리
+    묶은 저장소**를 넘긴다 — 그래서 `_events()`가 저장소를 만들어 주는 지금
+    구조가 그대로 맞는다.
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def _later(self, name: str, *args, **kwargs) -> bool:
+        try:
+            _EVENT_POOL.submit(getattr(self._inner, name), *args, **kwargs)
+        except RuntimeError as exc:  # 종료 중이면 그냥 넘어간다
+            log.debug("사건을 못 넘겼습니다: %s", exc)
+        return True
+
+    def record(self, event) -> bool:
+        return self._later("record", event)
+
+    def note(self, kind: str, subject: str = "", **detail) -> bool:
+        return self._later("note", kind, subject, **detail)
+
+    def note_text(self, kind: str, text: str, **kwargs) -> bool:
+        return self._later("note_text", kind, text, **kwargs)
+
+    def note_draft(self, kind: str, assembled: str, **kwargs) -> bool:
+        return self._later("note_draft", kind, assembled, **kwargs)
+
+    def read(self, **kwargs):
+        """읽기는 **기다린다.** 화면이 그 결과를 그리기 때문이다."""
+        return self._inner.read(**kwargs)
+
+
+def _events() -> _Background:
     """이 사람의 사건 로그. **기록 실패가 본 일을 막지 않는다** (D77).
 
     `EventStore`가 예외를 안 던지므로 부르는 쪽에서 감쌀 필요가 없다.
@@ -903,7 +948,7 @@ def _events() -> EventStore | PgEventStore:
     **`DATABASE_URL`이 있으면 Postgres로 간다** (D80). 부르는 쪽은 어느 쪽인지
     모른다 — 두 저장소가 같은 인터페이스를 갖는다.
     """
-    return open_events(_my_dir(), current_user())
+    return _Background(open_events(_my_dir(), current_user()))
 
 
 def _my_dir() -> Path:
@@ -1672,6 +1717,9 @@ def api_profile():
     피어 그룹 목록은 카드가 이미 알고 있다.
     """
     cards = _open_cards()
+    # **목록을 한 번만 읽는다.** 아래에서 두 번 부르고 있었는데, DB로 옮긴
+    # 뒤로는 그게 왕복 세 번(≈400ms)을 그냥 버리는 일이 됐다.
+    all_cards = cards.list() if cards else []
     profile = open_profile(_my_dir(), current_user()).load(current_user())
     body = dataclasses.asdict(profile)
     # **피어 그룹은 섹터에 속한다.** D68에서 「섹터는 자유 텍스트라 코드가 못
@@ -1681,24 +1729,20 @@ def api_profile():
     # 스키마를 안 늘린다: 구성원 중 **내 종목의 섹터**로 붙인다. 커버리지가
     # 바뀌면 저절로 따라오고, 카드에 필드를 하나 더 두면 그게 옛말을 한다(D51).
     sector_of = {s.symbol: s.sector for s in profile.stocks if s.sector}
-    body["peer_groups"] = (
-        [
-            {
-                "card_id": c.id,
-                "name": c.company,
-                "member_count": len(c.members),
-                "pinned": c.id in profile.pinned_peers,
-                "sector": _peer_sector(c, sector_of),
-            }
-            for c in cards.list()
-            if c.kind == PEER
-        ]
-        if cards
-        else []
-    )
+    body["peer_groups"] = [
+        {
+            "card_id": c.id,
+            "name": c.company,
+            "member_count": len(c.members),
+            "pinned": c.id in profile.pinned_peers,
+            "sector": _peer_sector(c, sector_of),
+        }
+        for c in all_cards
+        if c.kind == PEER
+    ]
     # 커버 종목 중 **리포트 카드가 이미 있는 것.** 「뭘 더 해야 하나」가
     # 화면에 바로 보여야 한다.
-    have = {c.symbol for c in cards.list() if c.kind == SINGLE and c.registry} if cards else set()
+    have = {c.symbol for c in all_cards if c.kind == SINGLE and c.registry}
     body["with_cards"] = sorted(have & set(profile.symbols()))
     body["moves"] = _moves_payload(profile.symbols())
     return body
@@ -2090,11 +2134,12 @@ def api_telegram_channels():
     내 종목·섹터가 몇 번 나왔는지 세고, 없으면 종류(증권사·리서치 먼저)와
     구독자 수로 떨어진다 — **셀 수 있을 때만 세고, 없으면 없다고 한다.**
     """
-    store = open_profile(_my_dir(), current_user())
-    profile = store.load(current_user())
-    # 수집 계정이 이미 들어가 있는 방을 사람마다 다시 받게 할 이유가 없다
-    if _seed_from_catalog(profile):
-        store.save(profile)
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
+    # 수집 계정이 이미 들어가 있는 방을 사람마다 다시 받게 할 이유가 없다.
+    # **저장하지 않는다** — 읽을 때마다 쓰면 조회 한 번이 쓰기 왕복을 물고,
+    # 아무도 안 바꿨는데 `updated_at`이 계속 움직인다. 사람이 켜면 그때
+    # `POST /api/telegram/channels`가 저장한다.
+    _seed_from_catalog(profile)
     mine = {s.symbol for s in profile.stocks}
     sectors = [x for x in profile.sectors if x]
 
@@ -2137,6 +2182,9 @@ def api_set_telegram_channels(payload: dict):
     """켜고 끄기. **이름·구독자·분류는 CLI가 갱신한다.**"""
     store = open_profile(_my_dir(), current_user())
     profile = store.load(current_user())
+    # 읽기 경로가 저장을 안 하므로(조회마다 쓰기 왕복을 물지 않으려고)
+    # **켜는 이 순간 목록이 프로필에 없을 수 있다.** 여기서 뿌린다.
+    _seed_from_catalog(profile)
     wanted = {
         int(c.get("chat_id", 0)): bool(c.get("enabled"))
         for c in (payload.get("channels") or [])

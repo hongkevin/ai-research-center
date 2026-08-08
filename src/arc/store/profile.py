@@ -336,7 +336,6 @@ class PgProfileStore:
                     " updated_at = excluded.updated_at",
                     (self.uid, json.dumps(asdict(profile), ensure_ascii=False)),
                 )
-                conn.commit()
         except Exception as exc:
             # **여기는 삼키면 안 된다.** 커버리지를 고쳤는데 조용히 안 저장되면
             # 사용자는 저장된 줄 안다. 사건 로그와 다른 점이다.
