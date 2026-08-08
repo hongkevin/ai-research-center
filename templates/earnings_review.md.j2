@@ -61,6 +61,23 @@
 {% endif %}
 ## 1. 요약
 
+{# **첫 화면 세 줄** (D87). 국내 리서치 미드스몰캡 노트의 표준 꼴이고, 읽는
+   사람이 세 줄만 보고 넘어가는 일이 많다. 요약의 요약이 아니라 글의 뼈대다.
+
+   본문의 일부이므로 게이트가 문장별로 검증한다 — 등록 안 된 숫자가 들어오면
+   여기서도 막힌다. #}
+{% if headline and (headline.signal or headline.key or headline.step) %}
+{% if headline.signal %}
+**Signal** · {{ headline.signal }}
+{% endif %}
+{% if headline.key %}
+**Key** · {{ headline.key }}
+{% endif %}
+{% if headline.step %}
+**Step** · {{ headline.step }}
+{% endif %}
+
+{% endif %}
 {{ summary }}
 
 ## 2. 사업 이해

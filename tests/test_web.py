@@ -169,7 +169,13 @@ class TestViewModel:
         class _R:
             symbol, fiscal_year = "214450", 2025
             company = type(
-                "C", (), {"name": "(주)파마리서치", "market": type("M", (), {"value": "KOSDAQ"})()}
+                "C",
+                (),
+                {
+                    "name": "(주)파마리서치",
+                    "symbol": "214450",
+                    "market": type("M", (), {"value": "KOSDAQ"})(),
+                },
             )()
             statement = type("S", (), {"consolidation": type("K", (), {"value": "CFS"})()})()
             metrics = type(
@@ -190,6 +196,9 @@ class TestViewModel:
             segment_profit = None
             info_error = None
             quarters = None
+            # 첫 화면 세 줄 (D87). **실제 ReportResult에 있는 것은 여기도 있어야
+            # 한다** — 아래 주석이 말하는 그 이유다.
+            headline: dict = {}
             # 파이프라인 단계 기록. 실제 ReportResult는 항상 채운다.
             stages = [
                 type(

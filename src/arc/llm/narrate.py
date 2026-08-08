@@ -20,6 +20,13 @@ from dataclasses import dataclass, field
 from arc.llm.client import Completion, LLMClient, Tier
 from arc.llm.number_registry import NumberRegistry
 
+# 첫 화면 세 줄. **순서가 뜻이다** — 왜 지금 → 무엇이 근거 → 언제 확인.
+# 국내 리서치 미드스몰캡 노트의 표준 꼴이고, 읽는 사람이 이 세 줄만 보고
+# 넘어가는 일이 많다 (D87에서 리포트 실물 3편으로 확인).
+HEADLINE_KEYS = ("signal", "key", "step")
+HEADLINE_LABEL = {"signal": "Signal", "key": "Key", "step": "Step"}
+
+
 SYSTEM_PROMPT = """\
 당신은 한국 증권사 리서치센터의 애널리스트입니다. **실적 리뷰 노트**를 씁니다.
 
@@ -92,6 +99,11 @@ SYSTEM_PROMPT = """\
 아래 JSON만 출력하십시오. 코드펜스나 설명을 덧붙이지 마십시오.
 
 {
+  "headline": {
+    "signal": "왜 지금인가 — 한 줄",
+    "key": "무엇이 그 근거인가 — 한 줄",
+    "step": "언제 무엇이 확인되는가 — 한 줄"
+  },
   "business_narrative": "이 회사가 무엇을 파는 회사인지 3~5문장",
   "summary": "요약 3~5문장",
   "investment_points": [
@@ -131,7 +143,34 @@ investment_points는 2~3개, risks는 2~4개, watchpoints는 2~3개.
 `watchpoints`는 "무엇이 확인되면 판단이 달라지는가"입니다. 투자의견이
 아니라 **다음 공시에서 볼 지점**입니다. 검증 가능해야 합니다.
   좋은 예: "원가율 개선이 4분기에도 이어지는지"
-  나쁜 예: "지속적인 모니터링이 필요하다" (검증 불가·실사 어투)"""
+  나쁜 예: "지속적인 모니터링이 필요하다" (검증 불가·실사 어투)
+
+## headline — 첫 화면 세 줄
+
+국내 리서치의 미드스몰캡 노트는 본문 앞에 **세 줄**을 세웁니다. 읽는 사람이
+그 세 줄만 보고 넘어가는 일이 많으므로, 요약의 요약이 아니라 **글의 뼈대**입니다.
+
+- `signal` — **왜 지금인가.** 국면·변곡을 한 줄로.
+- `key` — **무엇이 그 근거인가.** 사업의 어느 축이 그렇게 만드는가.
+- `step` — **언제 무엇이 확인되는가.** 시간 순서가 드러나야 합니다.
+
+각 줄은 **한 문장, 40자 안팎**입니다. 마침표로 끝내지 마십시오.
+
+  좋은 예
+    signal: 실적과 멀티플이 함께 개선되는 국면 진입
+    key:    주력 고객사향 반복 수주와 매출 인식 본격화
+    step:   올해는 수주, 내년부터 실적 반영
+
+  나쁜 예
+    signal: 투자의견 매수 (← 투자의견 금지. 위 규칙 참조)
+    key:    실적이 좋다 (← 무엇이 그렇게 만드는지가 없음)
+    step:   지속적인 모니터링 필요 (← 검증 불가·실사 어투)
+
+**세 줄은 본문에서 말한 것만 담습니다.** 본문에 없는 새 주장을 여기서 만들지
+마십시오 — 아래 글을 압축한 것이지 별개의 결론이 아닙니다.
+
+수치를 넣을 수 있으면 플레이스홀더로 넣으십시오. 다만 **억지로 넣지는
+마십시오** — 국면을 말하는 자리라 수치가 없는 것이 정상입니다."""
 
 
 @dataclass
@@ -223,6 +262,18 @@ def validate(payload: dict, registry: NumberRegistry) -> list[str]:
     if "watchpoints" in payload and not isinstance(payload["watchpoints"], list):
         problems.append("watchpoints가 리스트가 아님")
 
+    # headline도 선택이다. **모양이 틀린 것만 잡는다** — 세 줄은 국면을 말하는
+    # 자리라 모델이 못 쓸 때가 있고, 그때 재시도로 밀어붙이면 억지 문장이
+    # 나온다. 없으면 화면이 그 칸을 안 세운다.
+    head = payload.get("headline")
+    if head is not None:
+        if not isinstance(head, dict):
+            problems.append("headline이 객체가 아님")
+        else:
+            extra = sorted(set(head) - set(HEADLINE_KEYS))
+            if extra:
+                problems.append(f"headline에 모르는 칸: {', '.join(extra)}")
+
     # 카탈로그에 없는 키를 지어냈는지 — G0도 잡지만 여기서 재시도로 흡수한다
     blob = json.dumps(payload, ensure_ascii=False)
     unknown = sorted(set(registry.unknown_keys(blob)))
@@ -271,6 +322,14 @@ def narrate(
         if not problems:
             return NarrationResult(
                 sections={
+                    # **여기 이름이 없으면 그 칸은 조용히 사라진다.** 모델이
+                    # 써 보내도 이 목록에 없으면 버려진다 — 스키마에 넣고도
+                    # 화면이 비어서 한참 찾았다 (D87).
+                    "headline": {
+                        k: str(v).strip()
+                        for k, v in (payload.get("headline") or {}).items()
+                        if k in HEADLINE_KEYS and str(v).strip()
+                    },
                     "summary": payload["summary"],
                     "investment_points": payload["investment_points"],
                     "earnings_narrative": payload["earnings_narrative"],
