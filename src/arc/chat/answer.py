@@ -49,6 +49,7 @@ from arc.chat.guard import NO_EVIDENCE, POLICY_REFUSAL, asks_for_opinion, check_
 from arc.chat.hints import Hint, HintResult, build_hints
 from arc.chat.observations import rank_observations
 from arc.chat.retrieval import Context, Retrieval, retrieve
+from arc.chat.standing import Standing, standing_prompt
 from arc.data.base import NewsItem
 from arc.llm.client import LLMClient, Tier
 from arc.llm.narrate import parse_response
@@ -86,6 +87,14 @@ SYSTEM_PROMPT = """\
 허용: "매출은 {{num:c1.revenue_2026a}}이다 [c1]"
 
 연도(2026년), 분기(1분기)는 숫자로 써도 됩니다.
+
+## 절대 규칙 — 배경은 근거가 아닙니다
+
+「질문하는 사람의 배경」 절이 있으면 그것은 **질문을 이해하기 위한 것**입니다.
+「우리 섹터」가 어디이고 「내 커버 종목」이 무엇인지 알려 줄 뿐입니다.
+
+**거기서 사실을 끌어오지 마십시오.** 배경에 적힌 것을 답에 쓰거나 출처로 달면
+안 됩니다. 사실은 「근거 발췌」와 「수치 카탈로그」에서만 옵니다.
 
 ## 절대 규칙 — 투자 판단
 
@@ -206,9 +215,17 @@ class Answer:
     problems: list[str] = field(default_factory=list)  # 진단 (사용자용 아님)
 
 
-def build_prompt(retrieval: Retrieval) -> str:
-    """근거 카드 · 발췌 · 수치 카탈로그. **값은 넣지 않는다.**"""
+def build_prompt(retrieval: Retrieval, standing: Standing | None = None) -> str:
+    """근거 카드 · 발췌 · 수치 카탈로그. **값은 넣지 않는다.**
+
+    `standing`은 **배경이고 근거가 아니다** ([D84](../../docs/decisions.md#d84)).
+    질문 앞에 놓아 「우리 섹터」·「내 커버 종목」이 누구를 가리키는지 알게 하되,
+    시스템 규칙이 *"여기서 사실을 끌어오지 마라"*고 못 박는다.
+    """
     parts = [f"# 질문\n{retrieval.question}\n"]
+
+    if standing is not None and (block := standing_prompt(standing)):
+        parts.append(block)
 
     parts.append("# 근거 카드")
     for card in retrieval.cards:
@@ -335,6 +352,8 @@ def answer_question(
     client: LLMClient | None = None,
     news: NewsFetcher | None = None,
     context: Context | None = None,
+    # **배경이고 근거가 아니다** (D84). 「우리 섹터」가 누구인지 알게 한다
+    standing: Standing | None = None,
     max_cards: int = 2,
     max_passages: int = 8,
     max_attempts: int = 2,
@@ -381,7 +400,7 @@ def answer_question(
             problems=["LLM 클라이언트가 없습니다."],
         )
 
-    user = build_prompt(retrieval)
+    user = build_prompt(retrieval, standing)
     problems: list[str] = []
     last = None
     payload: dict = {}
