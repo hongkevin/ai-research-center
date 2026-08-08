@@ -35,7 +35,13 @@ web = [
     "python-multipart",
     # Supabase 액세스 토큰 검증 (web/auth.py). Next 서버가 없어 브라우저가
     # 토큰을 직접 들고 오므로 API가 스스로 서명을 확인해야 한다.
-    "pyjwt",
+    #
+    # **`crypto` 추가가 필수다.** Supabase는 이제 비대칭 서명키(ES256)가
+    # 기본이라 공개키 검증에 `cryptography`가 필요하다(D78). 없으면 PyJWT가
+    # `ES256 requires 'cryptography' to be installed`로 죽고, 우리 코드는
+    # 그걸 「JWKS를 못 받았다」로 읽어 **모든 토큰을 거부한다** — 로그인은
+    # 되는데 화면이 전부 401이 되는, 원인이 안 보이는 형태로.
+    "pyjwt[crypto]",
 ]
 telegram = [
     # 텔레그램 수집기 (D66). **선택 의존성이다** — 업로드 경로만 쓰면 필요 없고,
