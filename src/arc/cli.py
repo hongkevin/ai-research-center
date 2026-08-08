@@ -517,6 +517,61 @@ def db_check() -> None:
         raise typer.Exit(1) from exc
 
 
+@db_app.command("export")
+def db_export(
+    out: str = typer.Option(".arc-db-dump.json", "--out", help="쓸 파일"),
+    junk: bool = typer.Option(False, "--junk", help="시험 행도 포함"),
+) -> None:
+    """전부 파일로 내보낸다. **리전을 옮기기 전에 반드시 한다.**
+
+    Supabase는 리전 변경이 안 돼서 새 프로젝트를 만들어야 하고, 그때 **DB에만
+    있는 것**이 사라진다 — 로그인 뒤 화면에서 넣은 커버리지는 파일에 원본이
+    없다.
+    """
+    import json as _json
+
+    from arc.store import pg
+
+    dump = pg.export_all(skip_junk=not junk)
+    Path(out).write_text(_json.dumps(dump, ensure_ascii=False, default=str), encoding="utf-8")
+    typer.echo("")
+    for table, block in dump["tables"].items():
+        typer.echo(f"  {table:<14} {len(block['rows'])}행")
+    typer.secho(f"\n  → {out}\n", fg=typer.colors.GREEN)
+
+
+@db_app.command("import")
+def db_import(src: str = typer.Option(".arc-db-dump.json", "--in", help="읽을 파일")) -> None:
+    """내보낸 것을 넣는다. **두 번 돌려도 안전하다** (이미 있는 것은 안 덮는다)."""
+    import json as _json
+
+    from arc.store import pg
+
+    try:
+        dump = _json.loads(Path(src).read_text(encoding="utf-8"))
+    except OSError as exc:
+        typer.secho(f"\n  파일을 못 읽었습니다: {exc}\n", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    counts = pg.import_all(dump)
+    typer.echo("")
+    for table, n in counts.items():
+        typer.echo(f"  {table:<14} {n}행")
+    typer.secho("\n  들여왔습니다.\n", fg=typer.colors.GREEN)
+
+
+@db_app.command("purge-junk")
+def db_purge_junk() -> None:
+    """시험하다 남은 행을 지운다."""
+    from arc.store import pg
+
+    out = pg.purge_junk()
+    typer.echo("")
+    for table, n in out.items():
+        typer.echo(f"  {table:<14} {n}행 삭제")
+    typer.echo("")
+
+
 @db_app.command("migrate")
 def db_migrate(
     uid: str = typer.Option("local", "--uid", help="어느 사용자의 파일을 옮길 것인가"),
