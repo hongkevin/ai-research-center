@@ -51,12 +51,22 @@ function reason(e: unknown): string {
 export function AskWidget({
   cardCount,
   onMakeReport,
+  askFor,
 }: {
   cardCount: number;
   /** 근거가 없을 때 그 종목의 리포트를 만들러 보낸다 (D85) */
   onMakeReport?: (symbol: string) => void;
+  /**
+   * 밖에서 「이 종목을 묻자」고 보낸 것 (D86).
+   *
+   * 브리프·센티에서 종목을 눌렀을 때 **위젯을 열고 질문을 채워 둔다** —
+   * 종목명을 눈으로 읽고 다시 치게 하지 않는다. 보내지는 않는다: 무엇을
+   * 물을지는 사람이 정한다.
+   */
+  askFor?: { company: string; at: number } | null;
 }) {
   const [open, setOpen] = useState(false);
+
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeId, setActiveId] = useState("");
   // 본문을 가져와 둔 대화. **`activeId`와 다르면 아직 안 읽었다는 뜻이다.**
@@ -64,6 +74,18 @@ export function AskWidget({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [context, setContext] = useState<AskContext | null>(null);
   const [draft, setDraft] = useState("");
+
+  // **새 요청일 때만 반응한다.** `at`(누른 시각)이 바뀌어야 다시 연다 —
+  // 같은 종목을 두 번 눌러도 열리게.
+  const lastAsk = useRef(0);
+  useEffect(() => {
+    if (!askFor || askFor.at === lastAsk.current) return;
+    lastAsk.current = askFor.at;
+    setOpen(true);
+    setActiveId(""); // 새 리퀘스트는 새 세션이다
+    setDraft(`${askFor.company} `);
+  }, [askFor]);
+
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   // 저장소를 못 쓰는 상태. **채팅을 막지 않고 알리기만 한다.**

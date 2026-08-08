@@ -38,8 +38,11 @@ const NOTABLE = 3.0;
 
 export function MorningBrief({
   onOpenCoverage,
+  onAsk,
 }: {
   onOpenCoverage: () => void;
+  /** 종목을 눌러 그 자리에서 묻는다 (D86) */
+  onAsk?: (company: string) => void;
 }) {
   const [data, setData] = useState<Brief | null>(null);
   const [error, setError] = useState("");
@@ -168,6 +171,20 @@ export function MorningBrief({
                 <SectorRow key={s.sector} row={s} />
               ))}
             </div>
+          ) : data.watch.length > 0 ? (
+            /* **거짓말하지 않는다** (D86). 섹터는 커버 종목으로만 만든다.
+               시드에서 들어온 종목은 전부 「관심」이라, 섹터를 넣고 종목이
+               열둘인데도 「섹터를 넣으면 여기 뜹니다」라고 말했다. 진짜
+               필요한 행동은 「관심 → 커버로 옮기기」인데 그 말이 없었다. */
+            <button
+              type="button"
+              onClick={onOpenCoverage}
+              className="w-full rounded-md border border-dashed px-3 py-3 text-left text-[12px] leading-[1.8] text-muted-foreground transition-colors hover:bg-accent/30"
+            >
+              섹터 줄은 <strong>커버 종목</strong>으로 만듭니다. 지금은 전부
+              「관심」이라 낼 것이 없습니다 — 리포트를 낼 종목을 커버로
+              옮기십시오. →
+            </button>
           ) : (
             <Nothing>섹터를 넣으면 여기 뜹니다.</Nothing>
           )}
@@ -180,10 +197,10 @@ export function MorningBrief({
           hint={`괄호는 ${data.market_label} 대비(%p)`}
         >
           {data.cover.length > 0 && (
-            <Section title="커버" lines={data.cover} />
+            <Section title="커버" lines={data.cover} onAsk={onAsk} />
           )}
           {data.watch.length > 0 && (
-            <Section title="관심" lines={data.watch} muted />
+            <Section title="관심" lines={data.watch} muted onAsk={onAsk} />
           )}
           {!data.cover.length && !data.watch.length && (
             <Nothing>커버 종목을 넣으면 여기 뜹니다.</Nothing>
@@ -422,10 +439,12 @@ function Section({
   title,
   lines,
   muted = false,
+  onAsk,
 }: {
   title: string;
   lines: BriefLine[];
   muted?: boolean;
+  onAsk?: (company: string) => void;
 }) {
   return (
     <div className="mb-3 last:mb-0">
@@ -434,14 +453,22 @@ function Section({
       </p>
       <div className="divide-y">
         {lines.map((l) => (
-          <Line key={l.symbol} line={l} muted={muted} />
+          <Line key={l.symbol} line={l} muted={muted} onAsk={onAsk} />
         ))}
       </div>
     </div>
   );
 }
 
-function Line({ line: l, muted }: { line: BriefLine; muted: boolean }) {
+function Line({
+  line: l,
+  muted,
+  onAsk,
+}: {
+  line: BriefLine;
+  muted: boolean;
+  onAsk?: (company: string) => void;
+}) {
   const day = l.moves.find((m) => m.key === "1d")?.change_pct ?? null;
   const notable =
     l.filings.length > 0 || (day != null && Math.abs(day) >= NOTABLE);
@@ -449,10 +476,19 @@ function Line({ line: l, muted }: { line: BriefLine; muted: boolean }) {
     <div className={cn("py-2", muted && "opacity-80")}>
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
         {/* **눈에 띄어야 하는 것만 표시한다.** 전부 강조하면 아무것도 강조가 아니다 */}
-        <span className="text-[13px] font-medium">
+        {/* **여기서 나갈 수 있어야 한다** (D86). 아침에 「-6%」를 보고 나면
+            다음 동작은 「왜 빠졌나」다. 전에는 회사명이 그냥 글자라, 종목명을
+            눈으로 읽고 다른 탭에 다시 쳐야 했다. */}
+        <button
+          type="button"
+          onClick={() => onAsk?.(l.company)}
+          disabled={!onAsk}
+          className="text-[13px] font-medium underline-offset-2 hover:underline disabled:cursor-default disabled:no-underline"
+          title={onAsk ? `${l.company} 물어보기` : undefined}
+        >
           {notable && <span className="mr-1 text-warn">★</span>}
           {l.company}
-        </span>
+        </button>
         <span className="font-mono text-[10.5px] text-muted-foreground">
           {l.symbol}
         </span>

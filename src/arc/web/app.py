@@ -970,6 +970,22 @@ def _symbol_in(question: str, standing) -> str:
     return ""
 
 
+def _latest_price_date() -> str:
+    """받아 둔 시세의 마지막 날. 없으면 빈 문자열.
+
+    커버 종목이 없어도 지수를 내려면 기준일이 필요하다 — 지수 API가 날짜를
+    받기 때문이다.
+    """
+    prices, _ = _price_source()
+    # 계열은 `{날짜: 종가}`다. 한 종목만 봐도 되지만 **거래정지 종목은 옛
+    # 날짜에 멈춰 있으므로** 몇 개를 보고 가장 늦은 날을 고른다.
+    latest = ""
+    for series in list(prices.values())[:50]:
+        if series:
+            latest = max(latest, max(series))
+    return latest
+
+
 def _market_facts(symbol: str):
     """시세·공시를 근거로 (D86). **실패해도 답변을 막지 않는다.**"""
     from arc.chat.market import build_market_facts
@@ -2065,7 +2081,24 @@ def api_brief(news: bool = True, session: str = ""):
     profile = open_profile(_my_dir(), current_user()).load(current_user())
     symbols = profile.symbols()
     if not symbols:
-        return dataclasses.asdict(build_brief(profile, {}, session=session))
+        # **시장은 커버리지와 무관하다** (D86). 전에는 여기서 통째로 빠져나가
+        # 코스피·환율·기준금리까지 안 나왔고, 화면이 「지수·환율을 아직 못
+        # 받았습니다」라고 **틀린 이유**를 댔다. 첫인상이 「이 도구는 시세도
+        # 못 받네」가 된다.
+        #
+        # 반대로 코스피와 환율이 떠 있으면 「이건 도는구나, 내 것만 넣으면
+        # 되겠구나」가 된다.
+        empty_asof = _latest_price_date()
+        return dataclasses.asdict(
+            build_brief(
+                profile,
+                {},
+                indices=_index_today(empty_asof),
+                macro=_macro_now(),
+                asof=empty_asof,
+                session=session,
+            )
+        )
 
     # **장중에는 시세를 아예 안 부른다.** 오늘 값이 없어 화면에 못 세우는데
     # 부르는 것은 낭비다 — 그리고 부르면 「받아 놓고 안 보여준다」가 된다.
@@ -2968,6 +3001,47 @@ def api_save_profile(payload: dict):
                 channel.enabled = wanted[channel.chat_id]
     if "display_name" in payload:
         profile.display_name = str(payload.get("display_name", ""))[:60]
+    profile.uid = current_user()
+    return dataclasses.asdict(store.save(profile))
+
+
+@app.post("/api/profile/stocks")
+def api_add_stock(payload: dict):
+    """종목 **하나**를 담는다. 목록을 덮어쓰지 않는다 (D86).
+
+    위의 `POST /api/profile`은 *"부분 수정 API를 만들지 않는다"*고 적어 놨고
+    그 이유는 지금도 맞다 — 커버리지 화면은 목록을 통째로 들고 있다. 그런데
+    **센티에서 담는 것은 목록을 안 들고 있는 화면이다.** 거기서 전체 저장을
+    부르면 그 순간 커버리지 탭에서 편집 중이던 것이 조용히 덮인다.
+
+    그래서 여기만 예외로 둔다: **더하기만 하고 지우지 않는다.** 이미 있는
+    종목이면 아무것도 안 바꾼다 — 센티에서 누른 것 때문에 커버가 관심으로
+    강등되면 안 된다.
+    """
+    store = open_profile(_my_dir(), current_user())
+    profile = store.load(current_user())
+    raw = str(payload.get("symbol", "")).strip()
+    if not raw:
+        return JSONResponse({"error": "종목코드가 필요합니다."}, status_code=400)
+
+    kind = str(payload.get("kind", "")) or WATCH
+    try:
+        # **이름도 받는다** — 센티가 주는 것은 코드지만, 브리프·검색에서
+        # 회사명으로 부를 수 있다. 못 찾으면 `ValueError`고 그것이 400이다.
+        code = _resolve_symbol(raw)
+        if any(x.symbol == code for x in profile.stocks):
+            return JSONResponse({"error": "이미 목록에 있습니다.", "symbol": code}, status_code=409)
+        add_stock(
+            profile,
+            Covered(
+                symbol=code,
+                company=_names_for([code]).get(code, ""),
+                sector=str(payload.get("sector", "")),
+                kind=kind if kind in (COVER, WATCH) else WATCH,
+            ),
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     profile.uid = current_user()
     return dataclasses.asdict(store.save(profile))
 

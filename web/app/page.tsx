@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PenLineIcon } from "lucide-react";
+import { PenLineIcon, UsersIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -117,6 +117,10 @@ export default function Workbench() {
   >("brief");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
+  // 브리프·센티에서 「이 종목을 묻자」고 보낸 것 (D86)
+  const [askFor, setAskFor] = useState<{ company: string; at: number } | null>(
+    null,
+  );
 
   /**
    * 커버리지가 「떠나도 되나」에 답하는 함수. **없으면 그 탭이 아니다.**
@@ -603,9 +607,15 @@ export default function Workbench() {
               }}
             />
           ) : tab === "senti" ? (
-            <Senti />
+            <Senti
+              onAsk={(company) => setAskFor({ company, at: Date.now() })}
+              onReport={(symbol) => openCompose(symbol)}
+            />
           ) : tab === "brief" ? (
-            <MorningBrief onOpenCoverage={() => setTab("me")} />
+            <MorningBrief
+              onOpenCoverage={() => void goTab("me")}
+              onAsk={(company) => setAskFor({ company, at: Date.now() })}
+            />
           ) : open && open.kind === "peer" ? (
             /* **피어 카드는 본문이 없다.** 표가 본문이다 — 단계 레일도
                근거 패널도 붙지 않는다(그건 종목 카드의 것이다). */
@@ -840,18 +850,39 @@ export default function Workbench() {
                 </>
               ) : (
                 /* **비어 있을 때는 큰 버튼 하나만.** 처음 온 사람에게
-                   보여줄 것은 빈 칸반이 아니라 할 일이다. */
+                   보여줄 것은 빈 칸반이 아니라 할 일이다.
+
+                   **단 그 버튼이 이 탭의 문이어야 한다** (D86). 전에는 두 탭이
+                   이 화면을 같이 썼고, 피어그룹 탭에서도 「첫 리포트 작성」이
+                   떠서 **종목 리포트 폼**을 열었다. 가장 크고 유일한 버튼이
+                   틀린 문이면 그 탭은 처음 온 사람에게 열리지 않는다. */
                 <div className="py-20 text-center">
                   <p className="text-[15px] font-medium">
-                    종목 하나로 시작합니다.
+                    {tab === "peer"
+                      ? "커버 종목을 씨앗으로 시작합니다."
+                      : "종목 하나로 시작합니다."}
                   </p>
                   <p className="mx-auto mt-2 max-w-[420px] text-[13px] leading-[1.8] text-muted-foreground">
-                    공시에서 수치를 읽어 초안을 만듭니다. 쓰던 리포트가 있으면
-                    함께 올려 그 구성으로 쓰고 직전 추정과 비교합니다.
+                    {tab === "peer"
+                      ? "같이 움직이는 종목을 찾아 한 표로 세웁니다 — 업종 분류로는 못 찾는 것들입니다. 후보는 자동으로 고르고, 확정은 사람이 합니다."
+                      : "공시에서 수치를 읽어 초안을 만듭니다. 쓰던 리포트가 있으면 함께 올려 그 구성으로 쓰고 직전 추정과 비교합니다."}
                   </p>
-                  <Button className="mt-6" onClick={() => openCompose()}>
-                    <PenLineIcon className="size-4" />첫 리포트 작성
-                  </Button>
+                  {tab === "peer" ? (
+                    <Button
+                      className="mt-6"
+                      onClick={() => {
+                        setPeerSeeds([]);
+                        setPeerName("");
+                        setComposingPeer(true);
+                      }}
+                    >
+                      <UsersIcon className="size-4" />첫 피어 그룹 만들기
+                    </Button>
+                  ) : (
+                    <Button className="mt-6" onClick={() => openCompose()}>
+                      <PenLineIcon className="size-4" />첫 리포트 작성
+                    </Button>
+                  )}
                 </div>
               )}
             </>
@@ -927,6 +958,7 @@ export default function Workbench() {
 
       <AskWidget
         cardCount={cards.length}
+        askFor={askFor}
         onMakeReport={(symbol) => {
           void goTab("board");
           openCompose(symbol);
