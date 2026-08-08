@@ -168,6 +168,10 @@ class Line:
     moves: list[Move] = field(default_factory=list)
     # 어제 나온 공시. **커버 종목만 채운다.**
     filings: list[dict] = field(default_factory=list)
+    # 최근 수주. **공시 목록에 섞어 두면 안 보인다** (D87) — 미드스몰캡
+    # 애널리스트의 리포트는 수주로 시작하고, 금액보다 「최근 매출 대비 %」가
+    # 먼저다. 1,504억은 회사에 따라 사소하기도 하고 회사를 바꾸기도 한다
+    contracts: list[dict] = field(default_factory=list)
     # 기사 — **미검증 레인이다.** 숫자를 여기서 읽지 않는다.
     articles: list[dict] = field(default_factory=list)
     # 구간별 시장 대비 초과(%p). 시장 계열이 없으면 빈 dict.
@@ -181,9 +185,9 @@ class Line:
 
     @property
     def notable(self) -> bool:
-        """위로 올릴 만한가. 등락이 크거나, 공시가 났거나."""
+        """위로 올릴 만한가. 등락이 크거나, 공시가 났거나, **수주가 났거나.**"""
         d = self.day_change
-        return bool(self.filings) or (d is not None and abs(d) >= NOTABLE)
+        return bool(self.filings or self.contracts) or (d is not None and abs(d) >= NOTABLE)
 
 
 @dataclass
@@ -229,6 +233,15 @@ class Brief:
     def notable_count(self) -> int:
         return sum(1 for x in self.cover if x.notable)
 
+    @property
+    def contract_count(self) -> int:
+        return sum(len(x.contracts) for x in self.cover)
+
+    @property
+    def contract_lines(self) -> list[Line]:
+        """수주가 난 종목만. **맨 위 자기 칸을 가진다** (D87)."""
+        return [x for x in self.cover if x.contracts]
+
 
 def _pick(moves: Moves | None, keys: tuple[str, ...]) -> list[Move]:
     if moves is None:
@@ -262,6 +275,9 @@ def build_brief(
     moves: dict[str, Moves],
     *,
     filings: dict[str, list[dict]] | None = None,
+    # `{종목코드: [수주…]}`. 계약상대방·금액·최근 매출 대비 %는 **공시 서식의
+    # 칸에 적힌 값**이지 우리가 계산한 것이 아니다 (`data/kr/contracts.py`)
+    contracts: dict[str, list[dict]] | None = None,
     articles: dict[str, list[dict]] | None = None,
     market: Moves | None = None,
     indices: list[dict] | None = None,
@@ -284,6 +300,7 @@ def build_brief(
     보고, 이 함수는 테스트가 쉽다.
     """
     filings = filings or {}
+    contracts = contracts or {}
     articles = articles or {}
     mentions = mentions or {}
     session = session or current_session()
@@ -310,6 +327,7 @@ def build_brief(
             # 관심 종목에는 안 붙인다 — API 호출이 배로 늘고 화면이 길어져
             # 정작 볼 것을 못 본다.
             line.filings = list(filings.get(stock.symbol) or [])
+            line.contracts = list(contracts.get(stock.symbol) or [])
             line.articles = list(articles.get(stock.symbol) or [])
             brief.cover.append(line)
         else:
@@ -450,6 +468,16 @@ def _heads(brief: Brief) -> dict[str, str]:
     if macro:
         out["macro"] = " · ".join(macro)
 
+    # ── 수주 ──────────────────────────────────────────────────────
+    # **가장 큰 것 하나를 이름으로 말한다.** 「수주 3건」은 세 건이 다 사소한
+    # 경우와 하나가 회사를 바꾸는 경우를 구분 못 한다 — 그 차이를 말하는 것이
+    # 「최근 매출 대비 %」다 (D87).
+    deals = [(line, c) for line in brief.contract_lines for c in line.contracts]
+    if deals:
+        top_line, top = max(deals, key=lambda x: x[1].get("ratio_pct") or 0)
+        head = f"{top_line.company} {top.get('headline', '')}".strip()
+        out["contracts"] = head if len(deals) == 1 else f"{head} 외 {len(deals) - 1}건"
+
     # ── 섹터 ──────────────────────────────────────────────────────
     ranked = [x for x in brief.sectors if x.day_change is not None]
     if ranked:
@@ -474,6 +502,8 @@ def _heads(brief: Brief) -> dict[str, str]:
         stock.append(f"커버 {len(brief.cover)}종목")
     if brief.watch:
         stock.append(f"관심 {len(brief.watch)}종목")
+    if brief.contract_count:
+        stock.append(f"수주 {brief.contract_count}건")
     if brief.filing_count:
         stock.append(f"공시 {brief.filing_count}건")
     if brief.session in PRICELESS:
@@ -535,6 +565,9 @@ def _note(brief: Brief, profile: Profile) -> str:
 def _note_body(brief: Brief) -> str:
     """못 읽은 것을 빼고, 찾은 것만으로 만든 한 줄."""
     parts = []
+    # **수주가 맨 앞이다** (D87). 미드스몰캡에서 이건 다른 공시 열 건보다 크다
+    if brief.contract_count:
+        parts.append(f"수주 {brief.contract_count}건")
     if brief.filing_count:
         parts.append(f"공시 {brief.filing_count}건")
 

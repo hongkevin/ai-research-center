@@ -51,6 +51,7 @@ from fastapi.staticfiles import StaticFiles
 from arc.brief import build_brief
 from arc.chat import answer_question, number_values
 from arc.chat.retrieval import Context
+from arc.data.kr import contracts
 from arc.data.kr.dart import DartProvider
 from arc.finmodel.moves import MARKET_LABEL, Moves, market_series, moves_for, moves_for_symbols
 from arc.finmodel.peer import build_peer_table
@@ -2025,15 +2026,24 @@ def _moves_payload(symbols: list[str]) -> list[dict]:
     return [dataclasses.asdict(m) for m in moves_for_symbols(prices, symbols, names=names)]
 
 
-_BRIEF_FILINGS: dict[tuple[str, str], list[dict]] = {}
+_BRIEF_FILINGS: dict[tuple[str, str], list] = {}
+
+# 수주 공시는 원문을 건마다 받아야 해서 따로 캐시한다 (D87)
+_BRIEF_CONTRACTS: dict[tuple[str, str], list[dict]] = {}
 
 # **못 읽은 종목을 기억한다** (D85). 빈 목록만으로는 「공시가 없다」와
 # 「DART가 안 됐다」를 구분할 수 없고, 브리프는 그 둘을 같은 말로 냈다.
 _FILINGS_FAILED: set[tuple[str, str]] = set()
 
 
-def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
-    """어젯밤 사이 나온 공시. **하루 한 번만 묻는다.**
+# 수주를 보는 구간. 공시 목록은 이 구간으로 **한 번만** 받고, 「어젯밤 사이」는
+# 거기서 잘라 쓴다 — 3일치와 90일치를 따로 받으면 콜이 두 배가 되고 그게
+# D69의 차단을 부른 종류의 일이다.
+CONTRACT_DAYS = 90
+
+
+def _disclosures(symbol: str) -> list:
+    """그 종목의 최근 공시. **하루 한 번만 묻는다.**
 
     커버 30종목이면 새로 고칠 때마다 30콜인데, 그게 [D69](../../docs/decisions.md#d69)의
     요청률 차단을 부른 종류의 일이다. 날짜로 캐시한다.
@@ -2044,23 +2054,72 @@ def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
         return cached
     end = dt.datetime.now(dt.UTC).date()
     try:
-        ds = _shared_provider().get_disclosures(symbol, end - dt.timedelta(days=days), end)
+        ds = _shared_provider().get_disclosures(
+            symbol, end - dt.timedelta(days=CONTRACT_DAYS), end
+        )
     except Exception as exc:  # noqa: BLE001 — 한 종목이 실패해도 브리프는 나간다
         log.warning("공시를 못 읽었습니다 (%s): %s", symbol, exc)
         # **실패를 캐시하지 않는다.** 다음 요청이 다시 시도해야 한다 —
         # 빈 목록을 하루 종일 들고 있으면 일시적 장애가 사실로 굳는다.
         _FILINGS_FAILED.add(key)
         return []
-    out = [
+    out = sorted(ds, key=lambda d: d.filed_at, reverse=True)
+    _BRIEF_FILINGS[key] = out
+    _FILINGS_FAILED.discard(key)  # 이번엔 됐다
+    return out
+
+
+def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
+    """어젯밤 사이 나온 공시."""
+    cut = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=days)
+    return [
         {
             "title": d.title,
             "filed_at": d.filed_at.isoformat(),
             "url": d.provenance.verify_url or "",
         }
-        for d in sorted(ds, key=lambda d: d.filed_at, reverse=True)[:5]
+        for d in _disclosures(symbol)
+        if d.filed_at >= cut
+    ][:5]
+
+
+def _recent_contracts(symbol: str) -> list[dict]:
+    """최근 수주. **미드스몰캡의 최대 사건이다** (D87).
+
+    공시 목록은 `_disclosures`가 이미 받아 뒀고, 여기서 드는 콜은 **수주 공시
+    원문뿐**이다 — 90일에 0~2건이라 대개 0콜이고, 그마저 날짜로 캐시한다.
+
+    금액과 「최근 매출 대비 %」는 공시 서식의 칸에 적힌 값이지 우리가 계산한
+    것이 아니다 (`contracts.py`).
+    """
+    key = (symbol, dt.datetime.now(dt.UTC).date().isoformat())
+    cached = _BRIEF_CONTRACTS.get(key)
+    if cached is not None:
+        return cached
+    rows = _disclosures(symbol)
+    if not any(contracts.is_contract(d.title) for d in rows):
+        _BRIEF_CONTRACTS[key] = []
+        return []
+    try:
+        found = contracts.fetch(_shared_provider(), rows, symbol=symbol, limit=4)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("수주 공시를 못 읽었습니다 (%s): %s", symbol, exc)
+        return []
+    out = [
+        {
+            "counterparty": c.counterparty,
+            "business": c.counterparty_business,
+            "amount": c.amount,
+            "display_amount": c.display_amount,
+            "ratio_pct": c.ratio_pct,
+            "headline": c.headline,
+            "filed_at": c.filed_at,
+            "ends_at": c.ends_at,
+            "url": c.url,
+        }
+        for c in contracts.recent(found, days=CONTRACT_DAYS)
     ]
-    _BRIEF_FILINGS[key] = out
-    _FILINGS_FAILED.discard(key)  # 이번엔 됐다
+    _BRIEF_CONTRACTS[key] = out
     return out
 
 
@@ -2127,6 +2186,10 @@ def api_brief(news: bool = True, session: str = ""):
     # 「공시가 없다」와 「공시를 못 읽었다」가 같은 화면이었다.
     missing: list[str] = []
     filings = {s: _recent_filings(s) for s in cover}
+    # **수주는 공시 목록에 섞여 있으면 안 보인다** (D87). 「단일판매ㆍ공급계약
+    # 체결」 여섯 글자가 다른 공시 열 건과 같은 크기로 지나갔다. 미드스몰캡
+    # 애널리스트의 리포트는 수주로 시작한다 — 아침에 가장 먼저 볼 줄이다.
+    contract_rows = {s: _recent_contracts(s) for s in cover}
     today = dt.datetime.now(dt.UTC).date().isoformat()
     if any((s, today) in _FILINGS_FAILED for s in cover):
         missing.append("공시")
@@ -2168,6 +2231,7 @@ def api_brief(news: bool = True, session: str = ""):
         profile,
         moves,
         filings=filings,
+        contracts=contract_rows,
         articles=articles,
         market=_market_moves(prices),
         indices=indices,

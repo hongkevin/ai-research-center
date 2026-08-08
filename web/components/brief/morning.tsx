@@ -144,6 +144,13 @@ export function MorningBrief({
         </button>
       )}
 
+      {/* **수주는 칸 위가 아니라 화면 맨 위다** (D87).
+          미드스몰캡 애널리스트의 리포트는 수주로 시작한다 — 코세스는 블룸
+          에너지 1,504억, 씨이랩은 삼성SDS 3,151억이 그 리포트의 첫 문장이다.
+          전에는 「단일판매ㆍ공급계약체결」 여섯 글자가 다른 공시 열 건과 같은
+          크기로 목록에 섞여 지나갔다. */}
+      <Contracts brief={data} onAsk={onAsk} />
+
       {/* 1/5 · 2/5 · 2/5. 좁은 화면에서는 위아래로 떨어진다 */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         <Column
@@ -432,6 +439,83 @@ function Pct({
         </span>
       )}
     </span>
+  );
+}
+
+function Contracts({
+  brief,
+  onAsk,
+}: {
+  brief: Brief;
+  onAsk?: (company: string) => void;
+}) {
+  const rows = brief.cover.flatMap((line) =>
+    line.contracts.map((c) => ({ line, c })),
+  );
+  // **없으면 칸을 세우지 않는다.** 「수주 0건」이 매일 떠 있으면 눈이 그
+  // 자리를 지나치게 되고, 정작 난 날에도 안 보인다.
+  if (rows.length === 0) return null;
+
+  // 큰 것이 위로. **금액이 아니라 「최근 매출 대비」다** — 1,504억은 회사에
+  // 따라 사소하기도 하고 회사를 바꾸기도 한다.
+  rows.sort((a, b) => (b.c.ratio_pct ?? 0) - (a.c.ratio_pct ?? 0));
+
+  return (
+    <section className="rounded-lg border border-num/40 bg-num/5 px-4 py-3">
+      <h3 className="flex items-baseline gap-2 text-[12px] font-semibold">
+        수주
+        <span className="font-mono font-normal text-muted-foreground">
+          {rows.length}
+        </span>
+        <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+          최근 90일 · 금액과 비율은 <strong>공시에 적힌 값</strong>입니다
+        </span>
+      </h3>
+      <div className="mt-2 divide-y divide-border/60">
+        {rows.map(({ line, c }, i) => (
+          <div
+            key={`${line.symbol}-${i}`}
+            className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 py-1.5"
+          >
+            <button
+              type="button"
+              onClick={() => onAsk?.(line.company)}
+              disabled={!onAsk}
+              className="text-[13px] font-medium underline-offset-2 hover:underline disabled:cursor-default disabled:no-underline"
+            >
+              {line.company}
+            </button>
+            <span className="text-[12.5px]">{c.counterparty}</span>
+            <span className="font-mono text-[12.5px] tabular-nums">
+              {c.display_amount}
+            </span>
+            {c.ratio_pct != null && (
+              /* **비율이 이 줄의 요점이다.** 금액만으로는 뜻이 없다 */
+              <span className="font-mono text-[12.5px] font-medium text-num tabular-nums">
+                최근 매출 대비 {c.ratio_pct.toLocaleString()}%
+              </span>
+            )}
+            {c.business && (
+              <span className="text-[11px] text-muted-foreground">
+                · {c.business}
+              </span>
+            )}
+            <span className="ml-auto flex items-baseline gap-2 text-[11px] text-muted-foreground">
+              {c.filed_at}
+              {c.ends_at && <span>납기 {c.ends_at}</span>}
+              <a
+                href={c.url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline-offset-2 hover:text-foreground hover:underline"
+              >
+                원문
+              </a>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
