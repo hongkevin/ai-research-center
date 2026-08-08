@@ -260,6 +260,16 @@ export interface ViewModel {
   notice: string;
   error: string;
 
+  /**
+   * 첫 화면 세 줄 — **Signal / Key / Step** (D87).
+   *
+   * 국내 리서치 미드스몰캡 노트의 표준 꼴이다. 읽는 사람이 세 줄만 보고
+   * 넘어가는 일이 많아 요약의 요약이 아니라 **글의 뼈대**다. LLM이 못 쓰면
+   * 비고, 게이트가 막았으면 안 온다 — 그때는 칸을 세우지 않는다.
+   */
+  headline: Partial<Record<"signal" | "key" | "step", string>>;
+  /** STOCK DATA / COMPANY DATA. **전부 측정값이라 LLM을 안 거칩니다** */
+  stock_data: StockData;
   /** 관점 (D35). **본문에 쓰는 것과 같은 글**이고 숫자는 출처를 답니다 */
   lenses: LensView[];
   /** 관점이 갈리는 지점 — 관전 포인트 */
@@ -958,6 +968,28 @@ export interface PeerColumn {
   /** 「2026년 1분기 누적」 */
   basis: string;
   ready: boolean;
+}
+
+/**
+ * 리포트 사이드바. **없는 값은 `null`이고 이유가 `unavailable`에 남습니다.**
+ *
+ * 외국인 지분율은 여기 없습니다 — DART에도 금융위 API에도 없어서, 지어내는
+ * 대신 「출처가 없다」고 적습니다.
+ */
+export interface StockData {
+  asof: string;
+  board: string;
+  cap: number | null;
+  cap_display: string;
+  shares: number | null;
+  avg_turnover: number | null;
+  turnover_days: number;
+  high_52w: number | null;
+  /** 「종가 기준」인지 「장중 고가 기준」인지 — 둘은 다른 값입니다 */
+  high_basis: string;
+  owner: string;
+  owner_stake: number | null;
+  unavailable: string[];
 }
 
 /**

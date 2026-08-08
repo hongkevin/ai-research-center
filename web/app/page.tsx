@@ -24,6 +24,7 @@ import { StageRail } from "@/components/workbench/stage-rail";
 import { StartChoice } from "@/components/workbench/start-choice";
 import { UploadConfirm } from "@/components/workbench/upload-confirm";
 import { LensPanel } from "@/components/note/lens-panel";
+import { ReportHead } from "@/components/note/report-head";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { SectionEditor } from "@/components/note/section-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -1083,6 +1084,10 @@ function CenterColumn({
         </Alert>
       ) : vm.gate_passed ? (
         <>
+          {/* **첫 화면 세 줄과 STOCK DATA** (D87). 미드스몰캡 노트가 본문
+              앞에 세우는 블록이다 — 읽는 사람이 세 줄만 보고 넘어가는 일이
+              많아서, 이건 요약의 요약이 아니라 글의 뼈대다. */}
+          <ReportHead vm={vm} />
           {(vm.segment_chart || vm.trend_chart) && (
             <div className="note">
               {vm.segment_chart && (

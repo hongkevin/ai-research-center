@@ -65,6 +65,7 @@ from arc.ingest.prior import (
     outline_of,
     read_prior,
 )
+from arc.llm.narrate import HEADLINE_KEYS
 from arc.llm.number_registry import NumberRegistry
 from arc.pipeline.earnings_review import ReportResult, build_report, save_estimates
 from arc.render.charts import (
@@ -289,6 +290,11 @@ class ViewModel:
     # 글자도 안 나왔다. 숫자는 레지스트리로 치환해 출처를 달고 나간다
     lenses: list[dict] = field(default_factory=list)
     lens_tensions: list[str] = field(default_factory=list)
+    # 리포트 첫 화면 세 줄 — Signal / Key / Step (D87). LLM이 쓰고 게이트가
+    # 문장별로 검증한다. 못 쓰면 비고, 그러면 화면이 그 칸을 안 세운다
+    headline: dict = field(default_factory=dict)
+    # STOCK DATA / COMPANY DATA 사이드바. **전부 측정값이라 LLM을 안 거친다**
+    stock_data: dict = field(default_factory=dict)
     # 정기보고서 주요정보. **`unavailable`이 핵심이다** — 못 받은 것을
     # 조용히 넘기면 화면은 「없다」와 「못 받았다」를 구분할 수 없다
     report_info: dict = field(default_factory=dict)
@@ -365,6 +371,22 @@ def _shown(registry: NumberRegistry, key: str) -> str:
     return entry.rendered() if entry is not None else ""
 
 
+def _headline_row(r: ReportResult) -> dict:
+    """첫 화면 세 줄 — **Signal / Key / Step** (D87).
+
+    본문과 같은 글이다. 플레이스홀더를 레지스트리로 치환해 숫자마다 출처가
+    붙게 하고(`_lens_rows`와 같은 규칙), **게이트가 막았으면 안 낸다** —
+    차단된 초안의 세 줄을 보여주면 검토자가 그걸 결과로 착각한다.
+    """
+    if not r.headline or not r.gate.passed:
+        return {}
+    return {
+        k: substitute_with_spans(str(v), r.registry)
+        for k, v in r.headline.items()
+        if k in HEADLINE_KEYS and str(v).strip()
+    }
+
+
 def _lens_rows(r: ReportResult) -> tuple[list[dict], list[str]]:
     """관점 — [D35](../../docs/decisions.md#d35). **본문에 쓰는 것과 같은 글이다.**
 
@@ -403,6 +425,44 @@ def _lens_rows(r: ReportResult) -> tuple[list[dict], list[str]]:
         for x, src in zip(section["views"], r.lenses.views, strict=True)
     ]
     return views, list(section["tensions"])
+
+
+def _stock_data(symbol: str, info) -> dict:
+    """리포트 첫 화면 사이드바 — **STOCK DATA / COMPANY DATA** (D87).
+
+    미드스몰캡 노트가 본문 앞에 세우는 블록이다. 실물 3편에서 확인한 항목:
+
+        STOCK DATA    주가 · KOSDAQ pt · 52주 최고가 · 60일 평균 거래대금
+        COMPANY DATA  발행주식수 · 시가총액 · 최대주주 지분율 · 외국인 지분율
+
+    **외국인 지분율은 안 낸다.** DART에도 금융위 API에도 없다. 한 줄이 비지만
+    없는 것을 지어내는 것보다 낫고, 화면이 그 이유를 적는다.
+
+    **LLM을 안 거친다.** 전부 측정값이라 서술할 것이 없다 — 브리프와 같은
+    규칙이다(`brief.py`: *"서술이 아니라 배열"*).
+    """
+    from arc.finmodel import market_facts
+
+    prices, _ = _price_source()
+    snap = market_facts.snapshot(STORE_DIR, symbol, closes=prices.get(symbol) or {})
+
+    # 최대주주 지분율은 정기보고서에서 온다 — 이미 받고 있던 것이다
+    owner = getattr(info, "ownership", None)
+    return {
+        "asof": snap.asof,
+        "board": snap.board,
+        "cap": snap.cap,
+        "cap_display": market_facts.display_cap(snap.cap),
+        "shares": snap.shares,
+        "avg_turnover": snap.avg_turnover,
+        "turnover_days": market_facts.TURNOVER_DAYS,
+        "high_52w": snap.high_52w,
+        "high_basis": snap.high_basis,
+        "owner": getattr(owner, "principal", "") or "",
+        "owner_stake": getattr(owner, "total_stake", None),
+        # **왜 비었는지.** 빈칸만 있으면 「0」인지 「모른다」인지 알 수 없다
+        "unavailable": [*snap.unavailable, "외국인 지분율 (공개 API에 없습니다)"],
+    }
 
 
 def _report_info_row(info) -> dict:
@@ -540,6 +600,8 @@ def _to_view(r: ReportResult) -> ViewModel:
     # 차단됐을 때야말로 무엇을 검산했고 무엇을 못 구했는지 봐야 한다.
     v.info_error = r.info_error or ""
     v.lenses, v.lens_tensions = _lens_rows(r)
+    v.headline = _headline_row(r)
+    v.stock_data = _stock_data(r.company.symbol, r.report_info)
     v.report_info = _report_info_row(r.report_info)
     v.valuation = _valuation_row(r.valuation)
     v.segment_profit = _segment_profit_row(r.segment_profit)

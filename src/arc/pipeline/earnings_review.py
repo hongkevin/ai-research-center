@@ -293,6 +293,10 @@ class ReportResult:
     quarters: object | None = None  # QuarterSeries — 분기 시계열 (D57)
     info_error: str | None = None  # 주요정보 조회 실패 사유 (조용히 넘기지 않는다)
     stages: list[StageReport] = field(default_factory=list)  # 단계별 기록
+    # 첫 화면 세 줄 — Signal / Key / Step (D87). **조립본에도 들어 있지만**
+    # 화면이 그 세 줄만 따로 세우려면 구조가 필요하다. 마크다운을 되파싱하면
+    # 서식 한 번 바뀔 때 조용히 빈다.
+    headline: dict = field(default_factory=dict)
 
     @property
     def publishable(self) -> bool:
@@ -468,6 +472,10 @@ def compose_sections(
     has_operating_segments = segment_profit is not None and segment_profit.usable
 
     return {
+        # **첫 화면 세 줄은 결정론이 못 쓴다** (D87). Signal/Key/Step은 국면을
+        # 말하는 자리라 지표 나열로는 안 되고, 억지로 만들면 그 자리에 빈말이
+        # 앉는다. LLM이 쓰면 덮이고, 못 쓰면 화면이 이 칸을 안 세운다.
+        "headline": {},
         "summary": summary,
         "investment_points": points,
         "earnings": {
@@ -1807,7 +1815,7 @@ def build_report(
 
     narration = None
     if llm is not None:
-        from arc.llm.narrate import narrate, narrate_industry, narrate_news
+        from arc.llm.narrate import HEADLINE_KEYS, narrate, narrate_industry, narrate_news
 
         st_llm = step("llm", "문장 작성")
         basis = "연결" if stmt.consolidation is ConsolidationType.CONSOLIDATED else "별도"
@@ -1849,6 +1857,13 @@ def build_report(
             ]
             if n.get("business_narrative"):
                 sections["business_narrative"] = n["business_narrative"]
+            # **첫 화면 세 줄** (D87). 못 쓰면 안 세운다 — 억지로 채우면
+            # 글의 뼈대여야 할 자리에 빈말이 앉는다.
+            head = n.get("headline")
+            if isinstance(head, dict):
+                sections["headline"] = {
+                    k: str(head.get(k, "")).strip() for k in HEADLINE_KEYS if head.get(k)
+                }
 
         # 산업 배경 — **별도 호출, 별도 규칙.** 수치 카탈로그를 주지 않고
         # 숫자를 아예 금지한다. 숫자가 섞이면 이 문단만 버리고 리포트는 낸다.
@@ -1995,4 +2010,5 @@ def build_report(
         estimates=estimates,
         revisions=revisions,
         stages=stages,
+        headline=dict(sections.get("headline") or {}),
     )
