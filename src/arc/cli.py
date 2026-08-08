@@ -869,6 +869,7 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
     """구독 중인 채널 목록. **가져오기 전에 무엇이 있는지 본다.**"""
     import asyncio
 
+    from arc.data.tg_channels import known_kind
     from arc.ingest.telegram_collect import fetch_dialogs
     from arc.ingest.telegram_parse import classify_channel
     from arc.store.profile import TgChannel
@@ -893,7 +894,10 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
                     chat_id=r["chat_id"],
                     name=r["name"],
                     username=r.get("username") or "",
-                    kind=classify_channel(r["name"], chat_type=r["chat_type"]).value,
+                    # **손으로 확인한 것이 추측보다 낫다** — 이름 규칙은
+                    # 「[메리츠 Tech …]」를 못 잡는다
+                    kind=known_kind(r.get("username") or "")
+                    or classify_channel(r["name"], chat_type=r["chat_type"]).value,
                     subscribers=subs,
                 )
             )

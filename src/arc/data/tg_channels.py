@@ -161,3 +161,22 @@ def blocked_reason(username: str) -> str:
         if name.lower() == key.lower():
             return reason
     return ""
+
+
+def known_kind(username: str) -> str:
+    """손으로 확인해 둔 분류. 모르면 빈 문자열.
+
+    **추측기보다 이쪽이 맞다.** `classify_channel()`은 이름 규칙으로 재는데,
+    「[메리츠 Tech 김선우…]」·「[ IT는 SK ]」처럼 증권사 이름이 대괄호 안에
+    있거나 회사명이 문장에 녹아 있으면 못 잡고 `unknown`으로 떨어진다.
+    그런데 이 목록에 있는 것은 `arc telegram check`로 **직접 확인한** 것들이라
+    추측할 이유가 없다.
+
+    모르는 채널은 그대로 추측기에 맡긴다 — 손으로 확인한 24개가 세상의
+    전부는 아니다.
+    """
+    key = (username or "").lstrip("@").lower()
+    for c in RECOMMENDED:
+        if c.username.lower() == key:
+            return c.kind
+    return ""
