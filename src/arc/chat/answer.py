@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from arc.chat.evidence import CardRef
 from arc.chat.guard import NO_EVIDENCE, POLICY_REFUSAL, asks_for_opinion, check_answer
 from arc.chat.hints import Hint, HintResult, build_hints
+from arc.chat.market import MARKET_TAG, MarketFacts, market_prompt
 from arc.chat.observations import rank_observations
 from arc.chat.retrieval import Context, Retrieval, retrieve
 from arc.chat.standing import Standing, standing_prompt
@@ -215,7 +216,11 @@ class Answer:
     problems: list[str] = field(default_factory=list)  # 진단 (사용자용 아님)
 
 
-def build_prompt(retrieval: Retrieval, standing: Standing | None = None) -> str:
+def build_prompt(
+    retrieval: Retrieval,
+    standing: Standing | None = None,
+    market: MarketFacts | None = None,
+) -> str:
     """근거 카드 · 발췌 · 수치 카탈로그. **값은 넣지 않는다.**
 
     `standing`은 **배경이고 근거가 아니다** ([D84](../../docs/decisions.md#d84)).
@@ -225,6 +230,12 @@ def build_prompt(retrieval: Retrieval, standing: Standing | None = None) -> str:
     parts = [f"# 질문\n{retrieval.question}\n"]
 
     if standing is not None and (block := standing_prompt(standing)):
+        parts.append(block)
+
+    # **리포트가 없어도 답한다** (D86). 카드가 유일한 근거원이면 커버 종목의
+    # 리포트를 다 쓰기 전까지 이 위젯이 쓸모없다 — 클라이언트는 기다려 주지
+    # 않는다. 값은 여기서도 안 들어간다: 플레이스홀더뿐이다.
+    if market is not None and (block := market_prompt(market)):
         parts.append(block)
 
     parts.append("# 근거 카드")
@@ -266,7 +277,33 @@ def build_prompt(retrieval: Retrieval, standing: Standing | None = None) -> str:
     return "\n".join(parts)
 
 
-def _sources_for(retrieval: Retrieval, keys: list[str], markers: list[str]) -> list[Source]:
+def _market_source(entry, plain: str, market: MarketFacts) -> Source:
+    """시세·공시 한 줄. **카드 id가 없다** — 열 카드가 없기 때문이다."""
+    prov = entry.provenance
+    return Source(
+        kind="number",
+        marker=f"[{MARKET_TAG}]",
+        card_id="",
+        symbol=market.symbol,
+        company=market.company,
+        period_label="시세·공시",
+        key=plain,
+        label=entry.label or plain,
+        value=entry.rendered(),
+        formula="",
+        dataset=prov.describe if prov else "",
+        document="",
+        verify_url=(prov.verify_url or "") if prov else "",
+        source_url=(prov.source_url or "") if prov else "",
+    )
+
+
+def _sources_for(
+    retrieval: Retrieval,
+    keys: list[str],
+    markers: list[str],
+    market: MarketFacts | None = None,
+) -> list[Source]:
     """인용된 수치와 카드를 출처 줄로. **수치가 먼저** — 항목별 출처가 핵심이다."""
     out: list[Source] = []
     cited_tags: list[str] = []
@@ -278,6 +315,12 @@ def _sources_for(retrieval: Retrieval, keys: list[str], markers: list[str]) -> l
         tag, _, plain = key.partition(".")
         card = retrieval.card_of(tag)
         if card is None:
+            # **카드 밖 레인도 출처를 낸다** (D86). 시세·공시는 카드가 아니지만
+            # 출처가 더 또렷하다 — 금융위 API와 DART 원문이다. 여기서 건너뛰면
+            # 답에 숫자가 인용됐는데 「출처 0건」이 뜬다.
+            if tag == MARKET_TAG and market is not None:
+                out.append(_market_source(entry, plain, market))
+                cited_tags.append(tag)
             continue
         cited_tags.append(tag)
         prov = entry.provenance
@@ -354,6 +397,8 @@ def answer_question(
     context: Context | None = None,
     # **배경이고 근거가 아니다** (D84). 「우리 섹터」가 누구인지 알게 한다
     standing: Standing | None = None,
+    # 시세·공시. **카드가 없어도 답할 재료다** (D86)
+    market: MarketFacts | None = None,
     max_cards: int = 2,
     max_passages: int = 8,
     max_attempts: int = 2,
@@ -383,15 +428,27 @@ def answer_question(
     retrieval = retrieve(
         question, cards, context=context, max_cards=max_cards, max_passages=max_passages
     )
-    if retrieval.empty:
+    # **시세·공시가 있으면 카드가 없어도 계속 간다** (D86). 전에는 여기서
+    # 무조건 포기했고, 그래서 리포트를 안 쓴 종목에 대한 리퀘스트는 구조적으로
+    # 못 받았다 — 실제 리퀘스트의 상당수가 커버 밖 종목이라는 것이 이 저장소
+    # 자신의 전제인데도.
+    have_market = market is not None and not market.empty
+    if retrieval.empty and not have_market:
         if client is None:
             return _no_evidence(question, retrieval)
         return _no_evidence(question, retrieval, _hints_lane(question, retrieval, client, news))
 
+    if have_market:
+        # 레지스트리에 얹는다 — 그래야 `{{num:…}}`가 풀리고 출처가 붙는다.
+        retrieval.registry.register_all(market.entries)
+        retrieval.keys = [*retrieval.keys, *market.keys()]
+        # 검증기가 이 마커를 알아야 한다 — 모르면 그 문장이 「출처 없음」이 된다
+        retrieval.extra_tags = [MARKET_TAG]
+
     if client is None:
         return Answer(
             text="서술 레이어(LLM)가 꺼져 있어 문장을 만들지 않았습니다. 아래 근거를 확인하십시오.",
-            sources=_sources_for(retrieval, retrieval.keys, retrieval.tags()),
+            sources=_sources_for(retrieval, retrieval.keys, retrieval.tags(), market),
             unanswered=[question],
             grounded=False,
             cards=retrieval.cards,
@@ -400,7 +457,7 @@ def answer_question(
             problems=["LLM 클라이언트가 없습니다."],
         )
 
-    user = build_prompt(retrieval, standing)
+    user = build_prompt(retrieval, standing, market)
     problems: list[str] = []
     last = None
     payload: dict = {}
@@ -506,7 +563,7 @@ def answer_question(
     facts = retrieval.registry.render_text(verdict.text)
     hint = _hints_lane(question, retrieval, client, news)
 
-    sources = _sources_for(retrieval, keys, markers)
+    sources = _sources_for(retrieval, keys, markers, market)
     analysis_template = analysis_verdict.text if analysis_verdict is not None else ""
     return Answer(
         # **검증 레인만** 담는다. 힌트는 `hints`로 따로 나간다.
