@@ -1477,3 +1477,61 @@ export async function adoptChannel(username: string): Promise<{
   if (!r.ok) await fail(r);
   return r.json();
 }
+
+/* ── 내 기록 ──────────────────────────────────────────────────────────
+ *
+ * **개인화의 핵심은 목록이 아니라 사건입니다.** 커버 종목 목록은 설정이고,
+ * 직접 넣었고, 6개월 뒤에도 넣은 그대로입니다. 도구가 사람을 알게 되는 것은
+ * 「무엇을 고쳤나·무엇을 안 넣었나·무엇을 또 물었나」에서 옵니다.
+ *
+ * **숫자는 안 남습니다.** 질문은 가려서(`mask_numbers`), 편집은 조립본
+ * 그대로(`{{num:key}}`) 남습니다 — 불변식 1이 여기서 깨지면 안 됩니다.
+ */
+export interface EventRow {
+  at: string;
+  kind: string;
+  subject: string;
+  company: string;
+  detail: Record<string, unknown>;
+}
+
+export interface EventCount {
+  subject: string;
+  company: string;
+  count: number;
+}
+
+export interface EventSummary {
+  total: number;
+  /** 자주 연 것 — **지금 집중하는 것** */
+  focus: EventCount[];
+  /** 편집이 몰린 섹션 — **생성이 약한 자리** */
+  edited_sections: { section: string; count: number }[];
+  /** 두 번 이상 물은 것 — **답이 부족했다는 신호** */
+  repeated: EventCount[];
+  /** 제안했는데 안 넣은 피어 */
+  skipped_peers: EventCount[];
+  by_kind: Record<string, number>;
+}
+
+export const EVENT_LABEL: Record<string, string> = {
+  opened: "열어봄",
+  asked: "질문",
+  edited: "문장 고침",
+  accepted: "채택",
+  published: "넘김",
+  covered: "커버리지 변경",
+  peer_picked: "피어 넣음",
+  peer_skipped: "피어 뺌",
+  generated: "생성",
+};
+
+export async function getEvents(days = 30): Promise<{
+  days: number;
+  summary: EventSummary;
+  events: EventRow[];
+}> {
+  const r = await api(`/api/events?days=${days}`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}

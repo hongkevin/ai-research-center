@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { MyRecord } from "@/components/profile/my-record";
 import { SectorPicker } from "@/components/profile/sector-picker";
 import { CompanySearch, symbolOf } from "@/components/workbench/company-search";
 import {
@@ -254,6 +255,10 @@ export function Coverage({
       </div>
 
       {error && <p className="text-[12px] text-bad">{error}</p>}
+
+      {/* **쌓인 것이 보여야 쌓을 마음이 든다** (D77). 목록 아래에 두는 이유:
+          위가 「내가 정한 것」이고 여기가 「내가 실제로 한 것」이다. */}
+      <MyRecord />
 
       <div className="sticky bottom-0 flex items-center justify-between border-t bg-background py-3">
         <span className="text-[11.5px] text-muted-foreground">

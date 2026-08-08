@@ -128,3 +128,39 @@ class TestSummary:
 
     def test_nothing_is_empty_not_zeroes(self):
         assert summarize([]).empty is True
+
+
+class TestApiShape:
+    """`/api/events` — **쌓인 것이 보여야 쌓을 마음이 든다.**
+
+    화면이 「이건 아닌데」를 말할 수 있으려면 무엇이 남았는지 먼저 보여야 한다.
+    """
+
+    def _client(self, tmp_path, monkeypatch):
+        from starlette.testclient import TestClient
+
+        from arc.web import app as web
+
+        monkeypatch.setattr(web, "STORE_DIR", tmp_path / "store")
+        return TestClient(web.app)
+
+    def test_an_empty_log_is_empty_not_an_error(self, tmp_path, monkeypatch):
+        got = self._client(tmp_path, monkeypatch).get("/api/events")
+        assert got.status_code == 200
+        assert got.json()["summary"]["total"] == 0
+
+    def test_it_names_the_companies(self, tmp_path, monkeypatch):
+        """종목코드만 나오면 사람이 못 읽는다."""
+        client = self._client(tmp_path, monkeypatch)
+        from arc.web.app import _my_dir
+
+        EventStore(_my_dir()).note(OPENED, "005930")
+        body = client.get("/api/events").json()
+        assert body["summary"]["focus"][0]["subject"] == "005930"
+        assert "company" in body["summary"]["focus"][0]
+
+    def test_days_are_clamped(self, tmp_path, monkeypatch):
+        """**바깥에서 온 숫자를 그대로 안 쓴다.**"""
+        client = self._client(tmp_path, monkeypatch)
+        assert client.get("/api/events?days=99999").json()["days"] == 365
+        assert client.get("/api/events?days=0").json()["days"] == 1
