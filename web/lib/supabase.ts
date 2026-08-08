@@ -46,6 +46,19 @@ export async function signInWithGoogle(next = "/"): Promise<string | null> {
   return error ? "Google에 연결하지 못했습니다. 잠시 후 다시 시도해 주십시오." : null;
 }
 
+/**
+ * 지금 누구로 보고 있나. 로그인이 꺼져 있으면 빈 문자열.
+ *
+ * **화면에 이게 없으면 안 됩니다.** 개인화된 도구에서 「이 커버리지가 누구
+ * 것인가」를 화면이 말하지 않으면, 남의 계정으로 로그인한 것을 모르고
+ * 씁니다 — 그리고 커버 종목을 고칩니다.
+ */
+export async function currentEmail(): Promise<string> {
+  if (!authEnabled) return "";
+  const { data } = await supabase().auth.getSession();
+  return data.session?.user?.email ?? "";
+}
+
 export async function signOut(): Promise<void> {
   if (authEnabled) await supabase().auth.signOut();
 }

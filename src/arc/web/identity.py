@@ -26,6 +26,16 @@
 -------------------
 로컬 개발과 CLI에는 토큰이 없다. 그때는 `local` 한 사람으로 본다 — 「사용자
 없음」을 따로 만들면 그 갈래가 영원히 남는다.
+
+로그인을 켜는 날
+----------------
+그때 `local`에 쌓인 것이 **사라지면 안 된다.** 커버리지도 카드도 채널도 거기
+있는데, 새 uid 디렉터리는 비어 있다. 그래서 `adopt_local()`이 한 번만, 처음
+로그인한 사람에게 넘긴다.
+
+**자격증명은 안 넘긴다.** 텔레그램 세션 파일은 데이터가 아니라 **계정 접근
+권한**이다. 이걸 따라 옮기면 공유 배포에서 처음 로그인한 사람이 남의 텔레그램
+계정을 쥔다. 한 번 `arc telegram login`을 다시 하는 마찰이 그보다 싸다.
 """
 
 from __future__ import annotations
@@ -78,6 +88,75 @@ def user_dir(base: str | Path, uid: str | None = None) -> Path:
     path = Path(base) / "users" / safe_uid(uid if uid is not None else current_user())
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# **따라 옮기지 않는 것.** 데이터가 아니라 자격증명이다.
+CREDENTIALS = ("telegram.session",)
+
+# 누가 `local`을 가져갔는지 적어 두는 자리. 두 번 넘기지 않기 위한 것이다.
+_CLAIM = ".claimed-by"
+
+
+def adopt_local(base: str | Path, uid: str) -> list[str]:
+    """로그인을 켜는 날, `local`에 쌓인 것을 **처음 로그인한 사람**에게 넘긴다.
+
+    인증을 켜기 전에 만든 커버리지·카드·채널이 `users/local/`에 있다. 로그인
+    뒤 uid가 바뀌면 그 전부가 안 보이게 되는데, **사용자에게는 사라진 것과
+    같다.**
+
+    **한 번만 넘긴다.** `.claimed-by`를 남겨 두 번째 사람은 빈 저장소로
+    시작한다. 공유 배포에서 이건 「처음 로그인한 사람이 개발 데이터를
+    가져간다」는 뜻이므로, 그게 곤란하면 `ARC_ADOPT_LOCAL=0`으로 끈다.
+
+    **자격증명은 안 넘긴다** (`CREDENTIALS`). 텔레그램 세션은 계정 접근
+    권한이라 데이터 이관을 따라가면 안 된다.
+
+    **복사한다, 옮기지 않는다.** 원본을 두면 잘못돼도 되돌릴 수 있다 — 이
+    저장소의 카드를 이미 두 번 잃었다.
+    """
+    uid = safe_uid(uid)
+    if uid == SOLO:
+        return []
+
+    base = Path(base)
+    src = base / "users" / SOLO
+    claim = src / _CLAIM
+    if not src.is_dir() or claim.exists():
+        return []
+
+    dst = base / "users" / uid
+    took: list[str] = []
+    for item in sorted(src.iterdir()):
+        if item.name in CREDENTIALS or item.name == _CLAIM:
+            continue
+        target = dst / item.name
+        if target.exists():
+            continue  # **덮어쓰지 않는다** — 이미 자기 것이 있으면 그게 맞다
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if item.is_dir():
+            shutil.copytree(item, target)
+        else:
+            shutil.copy2(item, target)
+        took.append(item.name)
+
+    if took:
+        claim.write_text(uid, encoding="utf-8")
+        log.info(
+            "로그인 전 저장물을 %s에게 넘겼습니다: %s (원본은 그대로 둡니다). "
+            "텔레그램 세션은 자격증명이라 안 넘깁니다 — `arc telegram login`을 다시 하십시오.",
+            uid,
+            ", ".join(took),
+        )
+    return took
+
+
+def claimed_by(base: str | Path) -> str:
+    """`local`을 누가 가져갔나. 아무도 안 가져갔으면 빈 문자열."""
+    claim = Path(base) / "users" / SOLO / _CLAIM
+    try:
+        return claim.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
 
 
 def migrate_legacy(base: str | Path, uid: str = SOLO) -> list[str]:

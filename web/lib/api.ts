@@ -1184,6 +1184,13 @@ export interface MacroPoint {
   /** 계단형(기준금리)이 마지막으로 바뀐 때 */
   changed_at: string;
   stale_days: number | null;
+  /**
+   * 이 값이 무엇을 덮는가. 비어 있으면 그냥 시장 지표입니다.
+   *
+   * 신용융자처럼 **종목별이 아닌** 값에 한계를 달아 보냅니다 — 종목 옆에
+   * 놓이면 「28조」가 그 종목 얘기로 읽힙니다.
+   */
+  scope?: string;
 }
 
 export interface Brief {
