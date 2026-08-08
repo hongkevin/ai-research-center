@@ -487,7 +487,6 @@ class PgCardStore:
                     " updated_at = excluded.updated_at",
                     (self.uid, self._check(card.id), json.dumps(card.__dict__, ensure_ascii=False)),
                 )
-                conn.commit()
         except ValueError:
             raise
         except Exception as exc:
@@ -545,7 +544,6 @@ class PgCardStore:
                 cur = conn.execute(
                     "delete from arc_cards where uid = %s and id = %s", (self.uid, card_id)
                 )
-                conn.commit()
                 return cur.rowcount > 0
         except Exception as exc:  # noqa: BLE001
             log.warning("카드를 못 지웠습니다 (%s): %s", card_id, exc)

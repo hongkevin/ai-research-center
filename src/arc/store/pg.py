@@ -36,12 +36,24 @@ DB를 요구하면 안 된다 — 1,189건이 지금 DB 없이 돈다.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
+import threading
 from contextlib import contextmanager
 
 log = logging.getLogger("arc.store.pg")
+
+# **연결을 재사용한다.** 요청마다 새로 열면 TLS+인증에 800ms가 든다 —
+# 프로필 화면 한 번이 5.6초였고, 그 대부분이 연결을 세 번 여는 값이었다.
+# 질의 자체는 왕복 한 번(현재 리전 기준 130ms)이면 끝난다.
+_POOL = None
+_POOL_LOCK = threading.Lock()
+
+# 워커가 하나라(Dockerfile 참조) 크게 잡을 이유가 없다. Supabase 무료 등급의
+# 풀러 한도도 넉넉하지 않다.
+POOL_MIN, POOL_MAX = 1, 4
 
 # 스키마. **`IF NOT EXISTS`로 여러 번 돌려도 안전하다** — 배포 때마다 돈다.
 SCHEMA = """
@@ -156,6 +168,37 @@ def available() -> bool:
     return True
 
 
+def _pool():
+    """열려 있는 풀. **처음 쓸 때 만든다** — import 시점에 붙지 않는다."""
+    global _POOL
+    if _POOL is None:
+        with _POOL_LOCK:
+            if _POOL is None:
+                from psycopg_pool import ConnectionPool
+
+                _POOL = ConnectionPool(
+                    database_url(),
+                    min_size=POOL_MIN,
+                    max_size=POOL_MAX,
+                    # **체크를 안 한다.** 체크아웃마다 `SELECT 1`을 던지는데
+                    # 지금 리전에서 그것만 130ms다 — 요청마다 왕복을 하나 더
+                    # 물면서 얻는 것은 「드물게 끊긴 연결」뿐이다. 끊기면
+                    # 저장소가 예외를 잡아 경고하고 다음 요청이 새로 받는다.
+                    open=True,
+                )
+                atexit.register(close_pool)
+    return _POOL
+
+
+def close_pool() -> None:
+    """풀을 닫는다. 테스트와 종료용."""
+    global _POOL
+    with _POOL_LOCK:
+        if _POOL is not None:
+            _POOL.close()
+            _POOL = None
+
+
 @contextmanager
 def connect(uid: str):
     """uid가 묶인 연결. **RLS가 이 uid 밖을 안 보여준다.**
@@ -167,18 +210,21 @@ def connect(uid: str):
     그대로 두면 정책이 **한 줄도 적용되지 않는다** — RLS를 켜 놓고 안 지켜지는,
     가장 나쁜 상태다. `authenticated`는 Supabase가 PostgREST용으로 이미 만들어
     둔 역할이고 BYPASSRLS가 없다. 새 계정을 만들 필요가 없다.
-    """
-    import psycopg
 
-    with psycopg.connect(database_url()) as conn:
-        with conn.cursor() as cur:
-            # 순서가 있다: **claims를 먼저** 세우고 역할을 낮춘다.
-            # 낮춘 뒤에는 GUC를 못 건드릴 수 있다.
-            cur.execute(
-                "select set_config('request.jwt.claims', %s, true)",
-                (json.dumps({"sub": uid}),),
-            )
-            cur.execute("set local role authenticated")
+    **중간에 커밋하지 마십시오.** `SET LOCAL`은 트랜잭션 것이라, 커밋하면
+    claims와 역할이 사라지고 그 뒤 질의는 `postgres`로 돌아 **RLS를 우회한다.**
+    이 블록을 정상적으로 빠져나가면 풀이 커밋하므로 명시적 커밋이 필요 없다 —
+    그래서 저장소들에서 `conn.commit()`을 전부 걷어냈다.
+    """
+    with _pool().connection() as conn:
+        # **한 번의 왕복으로 둘 다 세운다.** 나눠 보내면 왕복이 두 번이고,
+        # 지금 리전에서 그것만 260ms다. `set_config('role', …)`은
+        # `SET LOCAL role`과 같다.
+        conn.execute(
+            "select set_config('request.jwt.claims', %s, true),"
+            "       set_config('role', 'authenticated', true)",
+            (json.dumps({"sub": uid}),),
+        )
         yield conn
 
 
@@ -186,6 +232,7 @@ def init_schema() -> None:
     """스키마와 정책을 만든다. **여러 번 돌려도 안전하다.**"""
     import psycopg
 
+    # 스키마는 **소유자로** 만든다 — `authenticated`는 DDL 권한이 없다.
     with psycopg.connect(database_url()) as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA)

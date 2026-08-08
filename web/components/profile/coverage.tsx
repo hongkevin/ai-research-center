@@ -52,7 +52,8 @@ export function Coverage({
   const [stocks, setStocks] = useState<Covered[]>([]);
   const [sectors, setSectors] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // 저장이 **뒤에서** 도는 중. 버튼을 잠그지 않고 표시만 한다
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [newSector, setNewSector] = useState("");
 
@@ -84,27 +85,42 @@ export function Coverage({
     setDirty(true);
   }
 
+  /**
+   * 저장 — **화면을 기다리게 하지 않는다.**
+   *
+   * DB가 뭄바이에 있어 왕복 한 번이 130ms다. 저장 하나에 서너 번이 오가는데,
+   * 그동안 화면을 잠그면 **고친 것이 눈앞에 있는데도 손을 못 댄다.**
+   *
+   * 그래서 먼저 「저장됨」으로 바꾸고 뒤에서 보낸다. 서버가 돌려준 것으로
+   * 덮지 않는 이유: 기다리는 사이 사용자가 또 고쳤을 수 있고, 그때 덮으면
+   * **방금 친 것이 사라진다.** 서버 응답은 실패했을 때만 쓴다.
+   *
+   * **실패는 반드시 말한다.** 조용히 넘어가면 저장된 줄 알고 화면을 닫는다.
+   */
   async function save() {
-    setBusy(true);
+    const snapshot = { sectors, stocks };
+    setSaving(true);
     setError("");
+    setDirty(false);
     try {
-      const next = await saveProfile({
-        sectors,
-        stocks: stocks.map((s) => ({
+      await saveProfile({
+        sectors: snapshot.sectors,
+        stocks: snapshot.stocks.map((s) => ({
           symbol: s.symbol,
           sector: s.sector,
           kind: s.kind,
           note: s.note,
         })),
       });
-      setData((d) => (d ? { ...d, ...next } : d));
-      setStocks(next.stocks);
-      setSectors(next.sectors);
-      setDirty(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // **되돌리지 않는다.** 사용자가 친 것을 지우는 편이 더 나쁘다 —
+      // 대신 안 저장됐다고 말하고 다시 누를 수 있게 dirty로 되돌린다.
+      setDirty(true);
+      setError(
+        (e instanceof Error ? e.message : String(e)) + " — 저장되지 않았습니다.",
+      );
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
@@ -266,9 +282,15 @@ export function Coverage({
             ? `마지막 저장 ${data.updated_at.slice(0, 16).replace("T", " ")}`
             : "아직 저장한 적이 없습니다"}
         </span>
-        <Button onClick={() => void save()} disabled={busy || !dirty}>
-          {busy ? "저장 중…" : dirty ? "저장" : "저장됨"}
-        </Button>
+        <span className="flex items-center gap-2">
+          {/* **뒤에서 도는 중임을 알리되 막지 않는다.** */}
+          {saving && (
+            <span className="text-[11.5px] text-muted-foreground">보내는 중…</span>
+          )}
+          <Button onClick={() => void save()} disabled={!dirty}>
+            {dirty ? "저장" : "저장됨"}
+          </Button>
+        </span>
       </div>
     </div>
   );
