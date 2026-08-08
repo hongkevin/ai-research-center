@@ -17,7 +17,37 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 
 COPY web/ ./
+
+# **`NEXT_PUBLIC_*`는 빌드 시점에 번들에 박힌다.** 여기서 안 넘기면 화면은
+# 로그인이 꺼진 줄 알고 토큰을 안 붙이고, 서버는 401을 내고 **앱이 통째로 안
+# 열린다** — 서버만 보면 「인증이 잘 걸렸다」로 보여서 더 나쁘다. 로컬에서
+# 정확히 그 일에 물렸다(D78 곁들임).
+#
+# 배포 플랫폼 대시보드에서 **빌드 변수**로 넣는다. 런타임 변수만 넣으면
+# 이 스테이지에는 안 온다.
+#
+# `next.config.ts`가 저장소 루트 `.env`도 읽지만 이 스테이지에는 `web/`만
+# 복사되므로(위) 그 경로가 없다 — 여기서는 오직 이 ARG가 정본이다.
+ARG NEXT_PUBLIC_SUPABASE_URL=""
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY=""
+ARG NEXT_PUBLIC_API_BASE=""
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+    NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY \
+    NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+
+# **키가 안 들어왔으면 빌드를 세운다.** 로그인이 꺼진 번들을 만들어 놓고
+# 배포하면, 화면이 열리는데 데이터가 전부 401이 되는 상태로 나간다.
+# 인증을 일부러 끄고 띄우려면 `ARC_ALLOW_NO_AUTH=1`로 명시한다.
+ARG ARC_ALLOW_NO_AUTH=""
+RUN if [ -z "$NEXT_PUBLIC_SUPABASE_URL" ] && [ -z "$ARC_ALLOW_NO_AUTH" ]; then \
+      echo "빌드 중단: NEXT_PUBLIC_SUPABASE_URL이 비었습니다."; \
+      echo "  배포 플랫폼에서 **빌드 변수**로 넣으십시오 (런타임 변수로는 안 옵니다)."; \
+      echo "  인증 없이 띄울 의도라면 ARC_ALLOW_NO_AUTH=1 을 함께 주십시오."; \
+      exit 1; \
+    fi
+
 RUN npm run build
+
 
 # ── 런타임 ───────────────────────────────────────────────────────────
 FROM python:3.12-slim
@@ -34,7 +64,10 @@ WORKDIR /app
 # 없으면 메타데이터 생성이 실패한다 (CI가 잡았다)
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
-RUN pip install --no-cache-dir ".[web]"
+# **`db`를 빼면 조용히 파일로 떨어진다.** `DATABASE_URL`이 있어도 psycopg가
+# 없으면 `pg.available()`이 False가 되고, 개인 데이터가 볼륨에만 쌓인다 —
+# 경고는 로그에 남지만 화면은 멀쩡해 보인다(D80).
+RUN pip install --no-cache-dir ".[web,db]"
 
 COPY templates/ ./templates/
 
