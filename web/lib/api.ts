@@ -1202,6 +1202,63 @@ export async function getProfile(): Promise<ProfileData> {
  * 있지 않은 화면에서 부르는 것이라, 전체 저장을 쓰면 커버리지 탭에서
  * 편집하던 것이 조용히 사라진다. 이미 있으면 409다 — 그것도 결과다.
  */
+/**
+ * 발굴 후보 하나 (D87).
+ *
+ * **판단이 안 붙어 있다.** 상관은 「같이 움직였다」이지 「밸류체인에 있다」가
+ * 아니라서, 업종·시총·거래대금을 같이 받아 사람이 고른다.
+ */
+export interface Found {
+  symbol: string;
+  company: string;
+  correlation: number;
+  overlap: number;
+  cap: number | null;
+  cap_display: string;
+  avg_turnover: number | null;
+  board: string;
+  /** KSIC 업종명. **읽기 위한 꼬리표**이지 그룹의 근거가 아닙니다 (D68) */
+  industry: string;
+  /** 오늘 텔레그램 언급 수 */
+  mentions: number;
+  /** 아직 안 도는가. **0이 진짜 「숨겨진」 것입니다** */
+  unheard: boolean;
+}
+
+export interface DiscoverResult {
+  seeds: { symbol: string; company: string }[];
+  found: Found[];
+  /** 걸러진 뒤 상관을 낸 종목 수 — **이게 모수입니다** */
+  universe: number;
+  meaningful: boolean;
+  cohesion: number;
+  /** 무작위로 같은 크기 묶음을 지었을 때의 내부 상관 */
+  baseline: number;
+  note: string;
+  source: string;
+}
+
+/**
+ * 「숨겨진 ○○ 수혜주」 — 앵커 종목에서 **아직 내 목록에 없는 소형주**를 찾는다.
+ *
+ * 앵커를 둘 이상 주면 또렷해집니다 — 실측에서 하나일 때는 게임·바이오가
+ * 섞였는데 둘로 올리자 에너지·플랜트 쪽으로 모였습니다.
+ */
+export async function discover(input: {
+  seeds: string[];
+  max_cap?: number | null;
+  min_turnover?: number | null;
+  boards?: string[];
+}): Promise<DiscoverResult> {
+  const r = await api(`/api/discover`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
 export async function addStock(
   symbol: string,
   kind: CoverKind = "watch",
