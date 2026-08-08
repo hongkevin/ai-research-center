@@ -1727,6 +1727,35 @@ def api_health():
         "llm_limit": LLM_BUDGET.limit,
         # 볼륨이 붙었는지. false면 생성은 되지만 revision 추적이 죽는다.
         "store": _store_status(),
+        # **밖에서 시세가 채워졌는지 볼 수 있어야 한다** (D87). 시세가 없으면
+        # 등락·섹터 줄·피어 후보·발굴이 전부 비는데, 그걸 확인하려면 로그인해서
+        # 화면을 눌러 봐야 했다. 배포 직후에 가장 알고 싶은 것이 이것이다.
+        #
+        # 개인 데이터가 아니라 **시장 데이터의 적재 상태**다 — `dart_key: true`와
+        # 같은 종류라 인증 없이 열어 둔다.
+        "prices": _price_health(),
+    }
+
+
+def _price_health() -> dict:
+    """받아 둔 시세 요약.
+
+    **헬스체크를 느리게 하면 안 된다.** 기준일을 `_latest_price_date()`로
+    내려다 되돌렸다 — 그건 2,987개 파일을 메모리로 적재한다(260ms). 여기서는
+    **파일 하나만 읽는다**: 하루 응답이 전 종목이라 아무 종목이나 하나의
+    날짜 집합이 곧 받아 둔 날짜다(`dates_on_disk`가 그 규칙이다).
+    """
+    from arc.finmodel import market_facts
+    from arc.finmodel.price_store import available
+
+    days = market_facts.dates_on_disk(STORE_DIR)
+    return {
+        "symbols": available(STORE_DIR),
+        "market": market_facts.available(STORE_DIR),
+        "latest": max(days) if days else "",
+        "days": len(days),
+        "refreshing": refresh.STATUS.running,
+        "last_error": refresh.STATUS.error,
     }
 
 
