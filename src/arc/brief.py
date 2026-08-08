@@ -45,6 +45,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 
 from arc.finmodel.moves import MARKET_LABEL, Move, Moves
+from arc.llm.josa import attach
 from arc.store.profile import COVER, Profile
 
 # 브리프에 세울 등락 구간. **전체 구간을 다 싣지 않는다** — 아침에 보는 것은
@@ -208,6 +209,10 @@ class Brief:
     session_why: str = ""
     # 장중에 갱신되는 것. 주가를 뺀 자리를 이것이 채운다
     mentions: list[dict] = field(default_factory=list)
+    # **못 읽은 것.** 이 화면의 존재 이유가 「놓친 것이 없다는 확인」인데,
+    # 공시·기사·지수·매크로 실패가 전부 빈 목록으로 삼켜지면 그 확인이
+    # 거짓이 된다. 「없다」와 「못 읽었다」는 다른 말이다.
+    unavailable: list[str] = field(default_factory=list)
     # 칸마다 맨 위 한 줄. **LLM이 아니라 배열이다** — 아래 숫자를 다시 읽어
     # 문장 꼴로 세운 것이고, 없는 사실은 여기서도 없다
     heads: dict[str, str] = field(default_factory=dict)
@@ -261,6 +266,8 @@ def build_brief(
     market: Moves | None = None,
     indices: list[dict] | None = None,
     macro: list[dict] | None = None,
+    # 부르는 쪽이 못 읽은 것의 이름을 넘긴다 — 「공시」·「기사」·「지수」·「매크로」
+    unavailable: list[str] | None = None,
     # `{종목코드: 오늘 언급 수}`. 장중 브리프가 주가 대신 세우는 것
     mentions: dict[str, int] | None = None,
     session: str = "",
@@ -333,6 +340,7 @@ def build_brief(
             m.key: value for m in row.moves if (value := relative(m, brief.market)) is not None
         }
     brief.macro = list(macro or [])
+    brief.unavailable = list(unavailable or [])
     brief.mentions = [
         {"symbol": s, "count": n}
         for s, n in sorted(mentions.items(), key=lambda kv: -kv[1])
@@ -484,18 +492,45 @@ def _heads(brief: Brief) -> dict[str, str]:
             stock.append(
                 f"{NOTABLE:.0f}% 이상 {len(moved)}건 (최대 {big.company} {big.day_change:+.2f}%)"
             )
-        elif brief.cover:
+        elif brief.cover and any(x.day_change is not None for x in brief.cover):
             stock.append(f"{NOTABLE:.0f}% 이상 움직인 커버 종목 없음")
+        elif brief.cover:
+            # **잰 값이 하나도 없으면 「없다」고 못 한다.** 안 움직인 게 아니라
+            # 안 본 것이다. 위쪽 note는 「시세를 아직 받지 않았다」고 말하는데
+            # 여기서 「움직인 종목 없음」이라고 하면 한 화면이 모순된다.
+            #
+            # `asof`가 아니라 **등락값의 유무**로 판단한다 — 기준일이 안 실린
+            # 채로 등락만 있는 경우가 있다(테스트가 그 경우를 잡았다).
+            stock.append("시세가 없어 등락을 못 냅니다")
     if stock:
         out["stocks"] = " · ".join(stock)
     return out
 
 
 def _note(brief: Brief, profile: Profile) -> str:
-    """맨 위 한 줄. **없으면 없다고 말한다.**"""
+    """맨 위 한 줄. **없으면 없다고 말하되, 못 읽은 것은 못 읽었다고 말한다.**
+
+    둘을 섞으면 이 화면의 약속이 깨진다 — *"놓친 것이 없다는 확인"*이 목적인데,
+    실패를 「없음」으로 내면 그 확인이 거짓이 된다.
+    """
     if not profile.stocks:
         return "커버 종목을 먼저 넣으십시오 — 「내 커버리지」에서 정합니다."
 
+    body = _note_body(brief)
+    if not brief.unavailable:
+        return body
+
+    # **경고를 뒤에 붙이지 않고 문장을 바꾼다.** 「…없습니다 ⚠ 공시를 못
+    # 읽었습니다」는 앞뒤가 모순이라, 앞 절이 「없다」로 끝나면 그것을 뺀다.
+    # 조사를 맞춘다 — 「기사을(를)」은 아침에 읽기 나쁘다. 이 저장소에 이미
+    # 교정기가 있다(`llm/josa.py`).
+    missing = " · ".join(brief.unavailable)
+    warn = f"⚠ {attach(missing, '을', '를')} 못 읽었습니다 — 이 화면이 전부가 아닙니다"
+    return warn if body.endswith("없습니다.") else f"{body} · {warn}"
+
+
+def _note_body(brief: Brief) -> str:
+    """못 읽은 것을 빼고, 찾은 것만으로 만든 한 줄."""
     parts = []
     if brief.filing_count:
         parts.append(f"공시 {brief.filing_count}건")
@@ -511,8 +546,7 @@ def _note(brief: Brief, profile: Profile) -> str:
 
     if not brief.asof:
         return "시세를 아직 받지 않아 등락을 낼 수 없습니다."
-    moved = brief.notable_count
-    if moved:
+    if moved := brief.notable_count:
         parts.append(f"{NOTABLE:.0f}% 이상 움직인 종목 {moved}건")
     if not parts:
         return "커버 종목에 큰 움직임도 새 공시도 없습니다."

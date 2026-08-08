@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -43,10 +43,20 @@ import { cn } from "@/lib/utils";
 export function Coverage({
   onComposePeer,
   onOpenCard,
+  onGuard,
 }: {
   /** 씨앗을 들고 피어 그룹 만들기로 간다 */
   onComposePeer?: (seeds: string[], name: string) => void;
   onOpenCard?: (cardId: string) => void;
+  /**
+   * 떠나도 되는지 묻는 함수를 부모에게 준다.
+   *
+   * 탭은 조건부 렌더라 옮기는 순간 이 컴포넌트가 **언마운트되고 편집이 통째로
+   * 사라진다.** 시드 채택 + 커버 승격 + 종목 추가로 10분을 쓴 뒤 확인차
+   * 브리프를 눌렀다 돌아오면 빈 화면이었다 — 첫 사용의 유일한 관문에서 한 번
+   * 날리면 두 번째 시도는 없다.
+   */
+  onGuard?: (guard: (() => Promise<boolean>) | null) => void;
 }) {
   const [data, setData] = useState<ProfileData | null>(null);
   const [stocks, setStocks] = useState<Covered[]>([]);
@@ -56,6 +66,31 @@ export function Coverage({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [newSector, setNewSector] = useState("");
+
+  // **최신 값을 ref로 잡는다.** 가드는 부모가 나중에 부르므로, 등록 시점의
+  // 클로저를 그대로 쓰면 옛 `dirty`·옛 `save`를 본다.
+  const dirtyRef = useRef(false);
+  const saveRef = useRef<() => Promise<boolean>>(async () => true);
+  dirtyRef.current = dirty;
+
+  useEffect(() => {
+    // **묻지 않고 저장한다.** 이 저장소의 원칙이 「사용자가 친 것을 지우는
+    // 편이 더 나쁘다」이고 저장은 이미 낙관적이라 기다림이 없다. 대화 상자를
+    // 띄우면 탭을 옮길 때마다 한 번씩 물어야 한다.
+    //
+    // **실패하면 못 떠난다** — 조용히 넘어가면 저장된 줄 알고 화면을 닫는다.
+    onGuard?.(async () => (dirtyRef.current ? await saveRef.current() : true));
+    return () => onGuard?.(null);
+  }, [onGuard]);
+
+  // 브라우저를 닫거나 새로고침할 때. **여기서는 저장을 못 한다** — 비동기가
+  // 안 끝나므로 브라우저의 기본 경고에 맡긴다.
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
 
   useEffect(() => {
     let alive = true;
@@ -97,7 +132,10 @@ export function Coverage({
    *
    * **실패는 반드시 말한다.** 조용히 넘어가면 저장된 줄 알고 화면을 닫는다.
    */
-  async function save() {
+  // 가드가 부를 함수. **매 렌더마다 최신으로 갈아 끼운다**
+  saveRef.current = save;
+
+  async function save(): Promise<boolean> {
     const snapshot = { sectors, stocks };
     setSaving(true);
     setError("");
@@ -112,6 +150,7 @@ export function Coverage({
           note: s.note,
         })),
       });
+      return true;
     } catch (e) {
       // **되돌리지 않는다.** 사용자가 친 것을 지우는 편이 더 나쁘다 —
       // 대신 안 저장됐다고 말하고 다시 누를 수 있게 dirty로 되돌린다.
@@ -119,6 +158,7 @@ export function Coverage({
       setError(
         (e instanceof Error ? e.message : String(e)) + " — 저장되지 않았습니다.",
       );
+      return false;
     } finally {
       setSaving(false);
     }

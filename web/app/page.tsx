@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { PenLineIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -115,6 +115,24 @@ export default function Workbench() {
   >("brief");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
+
+  /**
+   * 커버리지가 「떠나도 되나」에 답하는 함수. **없으면 그 탭이 아니다.**
+   *
+   * 탭은 조건부 렌더라 옮기는 순간 `Coverage`가 언마운트되고 편집이 통째로
+   * 사라진다. 여기서 막지 않으면 10분치 작업이 경고 없이 없어진다.
+   */
+  const coverageGuard = useRef<(() => Promise<boolean>) | null>(null);
+
+  /** 탭을 옮긴다. **떠나기 전에 저장한다** — 실패하면 안 옮긴다. */
+  async function goTab(next: typeof tab) {
+    if (tab === "me" && coverageGuard.current) {
+      const ok = await coverageGuard.current();
+      if (!ok) return; // 저장이 실패했다. 화면에 이유가 떠 있다
+    }
+    setTab(next);
+    if (next !== "board") setOpen(null);
+  }
   // 커버리지에서 「피어 그룹 만들기」를 누르면 그 섹터의 커버 종목이 씨앗으로
   // 따라온다 — **다시 치게 하지 않는다.**
   const [peerSeeds, setPeerSeeds] = useState<
@@ -307,8 +325,29 @@ export default function Workbench() {
     setCards(await listCards());
   }
 
+  /**
+   * 지울 카드. **한 번 누르면 끝나던 것을 두 걸음으로 만든다.**
+   *
+   * 삭제 링크는 11px 회색 글씨로 「검토 시작」 버튼과 같은 타일 안에 있었다.
+   * 한 번의 실수로 본문·레지스트리·수정 이력 전부가 사라지고, 확인도 휴지통도
+   * 되돌리기도 없었다.
+   */
+  const [deleting, setDeleting] = useState<CardSummary | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+
   async function remove(id: string) {
-    await deleteCard(id);
+    setDeleteError("");
+    try {
+      await deleteCard(id);
+    } catch (e) {
+      // **다이얼로그를 안 닫는다.** 조용히 닫히면 지워진 줄 알고,
+      // 다음에 그 카드를 보고 「왜 아직 있지」가 된다.
+      setDeleteError(
+        (e instanceof Error ? e.message : String(e)) + " — 지우지 못했습니다.",
+      );
+      return;
+    }
+    setDeleting(null);
     setOpen((cur) => (cur?.id === id ? null : cur));
     setCards(await listCards());
   }
@@ -365,10 +404,7 @@ export default function Workbench() {
             <button
               key={key}
               type="button"
-              onClick={() => {
-                setTab(key);
-                if (key !== "board") setOpen(null);
-              }}
+              onClick={() => void goTab(key)}
               className={cn(
                 "border-b-2 pb-2 text-[13px] transition-colors",
                 tab === key
@@ -517,15 +553,29 @@ export default function Workbench() {
           {tab === "me" ? (
             <Coverage
               onOpenCard={(id) => {
-                setTab("peer");
-                void openCard(id);
+                void (async () => {
+                  await goTab("peer");
+                  void openCard(id);
+                })();
+              }}
+              onGuard={(g) => {
+                coverageGuard.current = g;
               }}
               onComposePeer={(seeds, name) => {
-                setPeerSeeds(
-                  seeds.map((symbol) => ({ symbol, company: symbol })),
-                );
-                setPeerName(name);
-                setComposingPeer(true);
+                // **먼저 저장한다.** 피어 카드를 만들면 `onCreated`가 탭을
+                // 옮기고, 그러면 커버리지 편집이 사라진다. 게다가 서버의
+                // `_peer_sector`는 **저장된** 프로필로 섹터를 정하므로,
+                // 저장 전에 만들면 그 그룹이 「섹터 없음」으로 잘못 분류된다.
+                void (async () => {
+                  if (coverageGuard.current && !(await coverageGuard.current())) {
+                    return;
+                  }
+                  setPeerSeeds(
+                    seeds.map((symbol) => ({ symbol, company: symbol })),
+                  );
+                  setPeerName(name);
+                  setComposingPeer(true);
+                })();
               }}
             />
           ) : tab === "senti" ? (
@@ -751,7 +801,9 @@ export default function Workbench() {
                     kind={tab === "peer" ? "peer" : "single"}
                     onOpen={openCard}
                     onConfirm={confirm}
-                    onDelete={remove}
+                    onDelete={(id) =>
+                      setDeleting(cards.find((c) => c.id === id) ?? null)
+                    }
                     onComposePeer={() => setComposingPeer(true)}
                   />
                   <BoardHint />
@@ -801,6 +853,47 @@ export default function Workbench() {
           )}
         </div>
       </div>
+
+      {/* **무엇을 잃는지 적는다.** 「정말 삭제할까요?」만으로는 이 카드에
+          수정 이력과 직접 편집분이 들어 있다는 것을 모른다. */}
+      <Dialog
+        open={!!deleting}
+        onOpenChange={(v) => {
+          if (!v) {
+            setDeleting(null);
+            setDeleteError("");
+          }
+        }}
+      >
+        <DialogContent className="w-full max-w-[440px] sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>
+              {deleting?.company || deleting?.symbol} 카드를 지웁니다
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-[13px] leading-[1.8] text-muted-foreground">
+            본문과 <strong>수정 이력</strong>, 직접 고친 문장이 함께 사라집니다.
+            <strong> 되돌릴 수 없습니다.</strong>
+            {(deleting?.revision_count ?? 0) > 0 && (
+              <> 지금까지 {deleting?.revision_count}번 고치셨습니다.</>
+            )}
+          </p>
+          {deleteError && (
+            <p className="text-[12.5px] text-bad">{deleteError}</p>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleting(null)}>
+              그대로 둡니다
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleting && void remove(deleting.id)}
+            >
+              지웁니다
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AskWidget cardCount={cards.length} />
 

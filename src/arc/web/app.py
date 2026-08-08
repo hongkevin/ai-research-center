@@ -1968,6 +1968,10 @@ def _moves_payload(symbols: list[str]) -> list[dict]:
 
 _BRIEF_FILINGS: dict[tuple[str, str], list[dict]] = {}
 
+# **못 읽은 종목을 기억한다** (D85). 빈 목록만으로는 「공시가 없다」와
+# 「DART가 안 됐다」를 구분할 수 없고, 브리프는 그 둘을 같은 말로 냈다.
+_FILINGS_FAILED: set[tuple[str, str]] = set()
+
 
 def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
     """어젯밤 사이 나온 공시. **하루 한 번만 묻는다.**
@@ -1984,6 +1988,9 @@ def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
         ds = _shared_provider().get_disclosures(symbol, end - dt.timedelta(days=days), end)
     except Exception as exc:  # noqa: BLE001 — 한 종목이 실패해도 브리프는 나간다
         log.warning("공시를 못 읽었습니다 (%s): %s", symbol, exc)
+        # **실패를 캐시하지 않는다.** 다음 요청이 다시 시도해야 한다 —
+        # 빈 목록을 하루 종일 들고 있으면 일시적 장애가 사실로 굳는다.
+        _FILINGS_FAILED.add(key)
         return []
     out = [
         {
@@ -1994,6 +2001,7 @@ def _recent_filings(symbol: str, *, days: int = 3) -> list[dict]:
         for d in sorted(ds, key=lambda d: d.filed_at, reverse=True)[:5]
     ]
     _BRIEF_FILINGS[key] = out
+    _FILINGS_FAILED.discard(key)  # 이번엔 됐다
     return out
 
 
@@ -2024,8 +2032,9 @@ def api_brief(news: bool = True, session: str = ""):
                 profile,
                 {},
                 filings={s: _recent_filings(s, days=1) for s in profile.covering()},
-                macro=_macro_now(),
+                macro=(mid_macro := _macro_now()),
                 mentions=_mentions_today(profile),
+                unavailable=[] if mid_macro else ["환율·금리"],
                 session=session,
             )
         )
@@ -2038,7 +2047,13 @@ def api_brief(news: bool = True, session: str = ""):
     # **커버 종목만** 공시·기사를 붙인다. 관심 종목까지 붙이면 호출이 배로
     # 늘고 화면이 길어져 정작 볼 것을 못 본다.
     cover = profile.covering()
+    # **못 읽은 것의 이름을 모은다** (D85). 전에는 전부 빈 목록으로 삼켜져
+    # 「공시가 없다」와 「공시를 못 읽었다」가 같은 화면이었다.
+    missing: list[str] = []
     filings = {s: _recent_filings(s) for s in cover}
+    today = dt.datetime.now(dt.UTC).date().isoformat()
+    if any((s, today) in _FILINGS_FAILED for s in cover):
+        missing.append("공시")
     articles: dict[str, list[dict]] = {}
     if news and news_available():
         for s in cover:
@@ -2064,14 +2079,24 @@ def api_brief(news: bool = True, session: str = ""):
         names.update(_names_for(extra))
         moves.update({m.symbol: m for m in moves_for_symbols(prices, extra, names=names)})
 
+    indices = _index_today(asof)
+    if not indices:
+        missing.append("지수")
+    macro = _macro_now()
+    if not macro:
+        missing.append("환율·금리")
+    if news and news_available() and cover and not articles:
+        missing.append("기사")
+
     brief = build_brief(
         profile,
         moves,
         filings=filings,
         articles=articles,
         market=_market_moves(prices),
-        indices=_index_today(asof),
-        macro=_macro_now(),
+        indices=indices,
+        macro=macro,
+        unavailable=missing,
         universe=universe,
         mentions=_mentions_today(profile),
         session=session,
@@ -3437,6 +3462,16 @@ def api_recompute(card_id: str, payload: dict):
 
     changed = [f"{a['label']} {a['value']}{a['unit']}" for a in vm.assumptions if a.get("override")]
     _events().note(GENERATED, card.symbol or card.id, card_id=card.id, year=card.year)
+
+    # **손으로 고친 문장이 여기서 사라진다.** 본문을 통째로 갈아 끼우기 때문이다.
+    # 그것 자체는 맞다 — 숫자가 바뀌면 그 숫자를 말하는 문장도 다시 써야 한다.
+    #
+    # 문제는 **잃은 것을 볼 수가 없었다**는 것이다. 버전 기록의 `before`/`after`가
+    # 빈 문자열이라 수정 이력에서 그 버전을 펼치면 diff가 빈 화면이었다.
+    # 조립본을 그대로 담는다 — 플레이스홀더뿐이라 불변식과 무관하고, 되돌리고
+    # 싶으면 사람이 읽고 다시 쓸 수 있다.
+    before_body = card.assembled
+
     card.vm = vm.__dict__
     card.assembled = doc.get("assembled", "")
     card.registry = doc.get("registry", [])
@@ -3451,13 +3486,20 @@ def api_recompute(card_id: str, payload: dict):
             "created_at": now_iso(),
             "section": "추정 가정",
             "comment": "가정 변경 — " + (", ".join(changed) or "기준선으로 되돌림"),
-            "before": "",
-            "after": "",
+            "before": before_body,
+            "after": card.assembled,
         }
     )
     card.version = next_version(card.version)
     cards.save(card)
-    return {"version": card.version, "assumptions": vm.assumptions}
+    # **본문이 다시 쓰였다는 것을 화면이 알아야 한다.** 손으로 고친 문장이
+    # 있었다면 그게 사라졌다는 뜻이다.
+    return {
+        "version": card.version,
+        "assumptions": vm.assumptions,
+        "body_rewritten": before_body != card.assembled,
+        "had_edits": len(card.versions) > 1,
+    }
 
 
 @app.post("/api/cards/{card_id}/publish")

@@ -114,6 +114,20 @@ export function MorningBrief({
         </span>
       </div>
 
+      {/* **못 읽은 것을 맨 위에 둔다.** 이 화면은 「놓친 것이 없다」는 확인이
+          목적이라, 그 확인이 불완전하다는 사실이 가장 먼저 보여야 한다. */}
+      {(data.unavailable?.length ?? 0) > 0 && (
+        <div className="rounded-lg border border-warn px-3.5 py-2.5">
+          <p className="text-[12.5px] leading-[1.75]">
+            <strong className="text-warn">
+              {data.unavailable.join(" · ")}을(를) 못 읽었습니다.
+            </strong>{" "}
+            아래 화면이 전부가 아닙니다 — 「없다」가 아니라 <strong>확인하지
+            못했다</strong>는 뜻입니다.
+          </p>
+        </div>
+      )}
+
       {empty && (
         <button
           type="button"
