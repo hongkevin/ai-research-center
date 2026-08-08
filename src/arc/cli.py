@@ -883,12 +883,18 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
         found: list[TgChannel] = []
         for r in rows:
             subs = 0
+            last = ""
             try:
                 entity = await client.get_entity(r["chat_id"])
                 full = await client(GetFullChannelRequest(entity))
                 subs = int(getattr(full.full_chat, "participants_count", 0) or 0)
+                # **마지막 글을 같이 받는다** (D85). 이게 없으면 💀가 절대 안
+                # 뜨고, 목록이 결국 구독자 수 순이 된다 — 그건 이 화면이
+                # 막겠다고 선언한 바로 그 실패다(20,437명짜리가 219일째 정지).
+                async for msg in client.iter_messages(entity, limit=1):
+                    last = msg.date.date().isoformat()
             except Exception as exc:  # noqa: BLE001 — 있으면 좋은 것이지 필수가 아니다
-                log.debug("구독자 수를 못 읽었습니다 (%s): %s", r["name"], exc)
+                log.debug("채널 정보를 못 읽었습니다 (%s): %s", r["name"], exc)
             found.append(
                 TgChannel(
                     chat_id=r["chat_id"],
@@ -899,6 +905,7 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
                     kind=known_kind(r.get("username") or "")
                     or classify_channel(r["name"], chat_type=r["chat_type"]).value,
                     subscribers=subs,
+                    last_post=last,
                 )
             )
         await client.disconnect()
@@ -917,6 +924,7 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
                     "username": c.username,
                     "kind": c.kind,
                     "subscribers": c.subscribers,
+                    "last_post": c.last_post,
                 }
                 for c in found
             ],

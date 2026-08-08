@@ -194,7 +194,9 @@ def build_sentiment(
 def _note(s: Sentiment) -> str:
     """맨 위 한 줄. **없으면 없다고 말한다.**"""
     if s.total == 0:
-        return "이 날짜에 받아 둔 메시지가 없습니다 — `arc telegram sync`로 가져옵니다."
+        # **터미널로 보내지 않는다** (D71 미완 · D85). 화면에 「가져오기」
+        # 버튼이 바로 위에 있는데 터미널을 쓰라고 말하고 있었다.
+        return "이 날짜에 받아 둔 메시지가 없습니다 — 위에서 채널을 켜고 가져오십시오."
     parts = [f"메시지 {s.total:,}건"]
     if s.mentions:
         parts.append(f"급증 {len(s.mentions)}종목")
