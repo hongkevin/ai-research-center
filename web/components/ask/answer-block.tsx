@@ -41,6 +41,38 @@ export function AnswerBlock({
   onMakeReport?: (symbol: string) => void;
 }) {
   const [openSources, setOpenSources] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  /**
+   * 메일에 붙일 형태로 복사한다.
+   *
+   * **모델명·비용·「미검증」 배지는 안 넣는다** — 클라이언트에게 갈 글이다.
+   * 대신 **출처는 넣는다.** 우리 제품의 요점이 「숫자마다 출처」인데 복사하면서
+   * 그것을 떼면 남는 것은 출처 없는 주장이다.
+   *
+   * 미검증 레인(기사 힌트)도 안 넣는다 — 검증된 것과 섞여 나가면 받는 쪽이
+   * 구분할 방법이 없다.
+   */
+  async function copy() {
+    const lines = [answer.facts, answer.analysis].filter(Boolean);
+    const sourced = answer.sources.filter((s) => s.kind === "number");
+    if (sourced.length > 0) {
+      lines.push(
+        "",
+        "[출처]",
+        ...sourced.map(
+          (s) => `· ${s.label} ${s.value} — ${s.dataset || s.company}`,
+        ),
+      );
+    }
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* 클립보드가 막힌 브라우저. 드래그 복사가 남아 있다 */
+    }
+  }
 
   // **D4로 거부한 것은 답이 아니다.** 다른 것을 그리지 않는다.
   if (answer.refused) {
@@ -166,11 +198,25 @@ export function AnswerBlock({
         </div>
       )}
 
-      <p className="text-[11px] text-muted-foreground">
-        {answer.grounded ? "근거에 연결됨" : "근거를 찾지 못함"}
-        {answer.model && ` · ${answer.model}`}
-        {answer.cost_usd != null && ` · $${answer.cost_usd.toFixed(4)}`}
-      </p>
+      <div className="flex items-baseline gap-3">
+        {/* **하루의 마지막 동작이 「메일에 붙이기」다** (D86). 웹 전체에
+            복사 기능이 0건이었다 — 드래그로 긁으면 모델명과 달러 비용까지
+            딸려 간다. 클라이언트에게 갈 글에. */}
+        {(answer.facts || answer.analysis) && (
+          <button
+            type="button"
+            onClick={() => void copy()}
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {copied ? "복사했습니다" : "답변 복사"}
+          </button>
+        )}
+        <p className="text-[11px] text-muted-foreground">
+          {answer.grounded ? "근거에 연결됨" : "근거를 찾지 못함"}
+          {answer.model && ` · ${answer.model}`}
+          {answer.cost_usd != null && ` · $${answer.cost_usd.toFixed(4)}`}
+        </p>
+      </div>
     </div>
   );
 }

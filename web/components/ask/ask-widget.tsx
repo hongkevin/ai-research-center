@@ -82,7 +82,14 @@ export function AskWidget({
         const list = await listChats();
         if (!alive) return;
         setSessions(list);
-        setActiveId(list[0]?.id ?? "");
+        // **직전 대화를 열지 않는다** (D86). 리퀘스트 하나 = 세션 하나가
+        // 원칙인데, 열면 앞 세션이 활성이라 A고객 스레드에 B고객 질문이
+        // 붙었다. 더 나쁜 것은 그 세션의 종목 맥락까지 이어받아 **다른
+        // 종목 기준으로 답할 수 있다**는 점이다.
+        //
+        // 빈 채로 연다 — 첫 질문에서 세션이 만들어진다. 옛 대화는 목록에서
+        // 고르면 된다.
+        setActiveId("");
       } catch (e) {
         // 세션 없이도 물을 수 있다 — 기록만 안 남는다
         if (alive) setStoreError(reason(e));

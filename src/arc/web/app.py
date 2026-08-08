@@ -954,6 +954,39 @@ class _Background:
         return self._inner.read(**kwargs)
 
 
+def _symbol_in(question: str, standing) -> str:
+    """질문에 내 종목이 있으면 그 코드. **내가 보는 것만 본다.**
+
+    전 상장사를 훑지 않는 이유: 「한화」가 다섯 회사이고, 커버 밖 종목까지
+    이름으로 맞히면 오탐이 답의 주어를 바꾼다. 내 목록 안이면 그 사람이 그
+    회사를 말한 것이 거의 확실하다.
+
+    **긴 이름부터 본다** — 「신한지주」와 「신한」이 둘 다 있으면 긴 쪽이다.
+    """
+    pairs = [(name, sym) for sym, name in standing.covers + standing.watches if name]
+    for name, symbol in sorted(pairs, key=lambda x: -len(x[0])):
+        if name in question:
+            return symbol
+    return ""
+
+
+def _market_facts(symbol: str):
+    """시세·공시를 근거로 (D86). **실패해도 답변을 막지 않는다.**"""
+    from arc.chat.market import build_market_facts
+
+    try:
+        moves = _moves_payload([symbol])
+        return build_market_facts(
+            symbol,
+            company=_names_for([symbol]).get(symbol, ""),
+            moves=moves[0] if moves else None,
+            filings=_recent_filings(symbol, days=14),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("시세·공시를 못 모았습니다 (%s): %s", symbol, exc)
+        return None
+
+
 def _standing_for(subject: str = ""):
     """이 사람의 배경. **실패해도 답변을 막지 않는다** (D84).
 
@@ -1722,6 +1755,15 @@ def api_ask(payload: dict):
     subject = context.symbols[0] if context and context.symbols else ""
     standing = _standing_for(subject)
 
+    # **배경이 아는 종목을 질문에서 찾는다** (D86). 「신한지주」가 프로필에
+    # 있는데 `parse_query`는 `symbols: []`를 냈고, 그래서 기사 레인이 「어느
+    # 회사인지 가리지 못해」로 죽었다 — 배경이 프롬프트에만 들어가고 검색에는
+    # 안 들어갔다.
+    if not subject and standing is not None:
+        subject = _symbol_in(question, standing)
+
+    market = _market_facts(subject) if subject else None
+
     news = _news_by_name if news_available() else None
     try:
         answer = answer_question(
@@ -1729,6 +1771,7 @@ def api_ask(payload: dict):
             [c for c in cards.list() if c.kind == SINGLE],
             client=get_client(),
             standing=standing,
+            market=market,
             news=news,
             context=context,
         )

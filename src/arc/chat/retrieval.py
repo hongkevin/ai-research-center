@@ -117,8 +117,12 @@ class Retrieval:
     def card_of(self, tag: str) -> CardRef | None:
         return next((c for c in self.cards if c.tag == tag), None)
 
+    # 카드 밖 레인이 쓰는 태그. **비어 있는 것이 기본이다** — 시세·공시가
+    # 붙을 때만 채워진다(D86).
+    extra_tags: list[str] = field(default_factory=list)
+
     def tags(self) -> list[str]:
-        return [c.tag for c in self.cards]
+        return [c.tag for c in self.cards] + self.extra_tags
 
     def next_context(self) -> Context:
         """다음 턴에 넘길 것. **근거가 비어도 주어는 넘긴다** — 「현대로템
