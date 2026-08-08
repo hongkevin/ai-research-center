@@ -84,10 +84,12 @@ from arc.store.cards import (
     SINGLE,
     Card,
     CardStore,
+    PgCardStore,
     attention_reasons,
     column_for,
     next_version,
     now_iso,
+    open_cards,
     peer_attention_reasons,
     peer_member,
     resolve_peer_members,
@@ -945,14 +947,14 @@ def _company_name(symbol: str) -> str:
         return ""
 
 
-def _open_cards() -> CardStore | None:
+def _open_cards() -> CardStore | PgCardStore | None:
     """카드 저장소. 볼륨이 없으면 None — 생성은 계속되고 이력만 안 남는다.
 
     `_open_store()`와 같은 판단이다. 저장이 실패했다고 리포트 생성을 막으면
     안 된다.
     """
     try:
-        return CardStore(_my_dir())
+        return open_cards(_my_dir(), current_user())
     except OSError as exc:
         log.warning("카드 저장소를 열지 못했습니다 (%s): %s", STORE_DIR, exc)
         return None

@@ -384,7 +384,7 @@ class CardStore:
         return True
 
 
-def resolve_peer_members(store: CardStore, members: list[dict]) -> list[dict]:
+def resolve_peer_members(store: CardStore | PgCardStore, members: list[dict]) -> list[dict]:
     """피어 카드의 구성원을 **읽을 때마다 저장소에서 다시 찾는다.**
 
     `Card.members`에는 **의도**만 둔다 — 어느 종목을 묶었는가. `card_id`·연도·
@@ -445,3 +445,151 @@ def _migrate(card: Card) -> Card:
 
 def now_iso() -> str:
     return dt.datetime.now(dt.UTC).isoformat(timespec="seconds")
+
+
+class PgCardStore:
+    """Postgres 판. **`CardStore`와 같은 인터페이스다** (D80).
+
+    uid를 **만들 때 한 번** 받는다 — 남의 카드를 읽는 경로를 만들지 않는다.
+    RLS가 그 위에 한 겹 더 있다.
+
+    **문서 하나로 둔다.** 본문(`vm`·`assembled`·`registry`)을 따로 가르지
+    않은 이유는 지금 `list()`를 쓰는 곳이 대부분 본문을 필요로 해서다 —
+    피어 구성원 해석은 `registry`를, 채팅 검색은 본문 전체를 본다. 나눠 두면
+    「목록만 읽는」 경로가 생기기 전까지는 조인만 는다.
+    """
+
+    def __init__(self, uid: str) -> None:
+        self.uid = uid
+
+    def new_id(self) -> str:
+        return uuid.uuid4().hex[:16]
+
+    def _check(self, card_id: str) -> str:
+        """id 검증은 **경로가 없어도 한다.**
+
+        파일 판에서는 경로 조작을 막으려는 것이었지만, 여기서도 같은 모양을
+        지킨다 — 두 저장소가 다른 것을 받으면 갈아끼울 때 동작이 갈린다.
+        """
+        if not _ID_RE.match(card_id):
+            raise ValueError(f"잘못된 카드 id: {card_id!r}")
+        return card_id
+
+    def save(self, card: Card) -> None:
+        from arc.store import pg
+
+        try:
+            with pg.connect(self.uid) as conn:
+                conn.execute(
+                    "insert into arc_cards (uid, id, doc, updated_at)"
+                    " values (%s, %s, %s, now())"
+                    " on conflict (uid, id) do update set doc = excluded.doc,"
+                    " updated_at = excluded.updated_at",
+                    (self.uid, self._check(card.id), json.dumps(card.__dict__, ensure_ascii=False)),
+                )
+                conn.commit()
+        except ValueError:
+            raise
+        except Exception as exc:
+            # **삼키지 않는다.** 리포트를 만들었는데 조용히 안 저장되면
+            # 사용자는 저장된 줄 알고 화면을 닫는다. 프로필과 같은 판단이다.
+            log.error("카드를 못 저장했습니다 (%s): %s", card.id, exc)
+            raise
+
+    def get(self, card_id: str) -> Card | None:
+        from arc.store import pg
+
+        # id 검증은 **try 밖에서** 한다. 안에 두면 잘못된 id가 "없는 카드"로
+        # 조용히 삼켜져 검증이 무력해진다 (파일 판과 같은 이유).
+        self._check(card_id)
+        try:
+            with pg.connect(self.uid) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "select doc from arc_cards where uid = %s and id = %s", (self.uid, card_id)
+                )
+                row = cur.fetchone()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("카드를 못 읽었습니다 (%s): %s", card_id, exc)
+            return None
+        return _from_doc(dict(row[0])) if row and row[0] else None
+
+    def list(self) -> list[Card]:
+        """최신순. **깨진 문서 하나가 목록 전체를 막지 않는다** (파일 판과 같다)."""
+        from arc.store import pg
+
+        try:
+            with pg.connect(self.uid) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "select doc from arc_cards where uid = %s order by created_at desc nulls last",
+                    (self.uid,),
+                )
+                rows = cur.fetchall()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("카드 목록을 못 읽었습니다: %s", exc)
+            return []
+
+        out: list[Card] = []
+        for (doc,) in rows:
+            try:
+                out.append(_from_doc(dict(doc)))
+            except (TypeError, ValueError) as exc:
+                log.warning("카드를 읽지 못했습니다: %s", exc)
+        return out
+
+    def delete(self, card_id: str) -> bool:
+        from arc.store import pg
+
+        self._check(card_id)
+        try:
+            with pg.connect(self.uid) as conn:
+                cur = conn.execute(
+                    "delete from arc_cards where uid = %s and id = %s", (self.uid, card_id)
+                )
+                conn.commit()
+                return cur.rowcount > 0
+        except Exception as exc:  # noqa: BLE001
+            log.warning("카드를 못 지웠습니다 (%s): %s", card_id, exc)
+            return False
+
+
+def _from_doc(raw: dict) -> Card:
+    """문서 → `Card`. **모르는 필드는 버린다** ([D65](../../docs/decisions.md#d65)).
+
+    필드를 추가하기 **전에** 저장된 카드가 화면을 죽이면 안 된다. 파일 판은
+    `Card(**raw)`가 `TypeError`를 던지게 두고 목록에서 그 한 장만 빠졌는데,
+    그건 「왜 내 카드가 사라졌지」가 된다. 여기서는 아는 것만 취한다.
+    """
+    known = {k: v for k, v in raw.items() if k in Card.__dataclass_fields__}
+    return _migrate(Card(**known))
+
+
+def open_cards(base_dir: str | Path, uid: str) -> CardStore | PgCardStore:
+    """저장소를 고른다. **부르는 쪽은 어느 쪽인지 모른다.**"""
+    from arc.store import pg
+
+    return PgCardStore(uid) if pg.available() else CardStore(base_dir)
+
+
+def migrate_cards(base_dir: str | Path, uid: str) -> int:
+    """파일 카드를 Postgres로. **복사한다, 지우지 않는다.**
+
+    **이미 있는 id는 안 덮는다** — DB에서 고친 것을 옛 파일이 되돌리면 안 된다.
+    """
+    from arc.store import pg
+
+    if not pg.available():
+        return 0
+    target = PgCardStore(uid)
+    have = {c.id for c in target.list()}
+    moved = 0
+    for card in CardStore(base_dir).list():
+        if card.id in have:
+            continue
+        try:
+            target.save(card)
+            moved += 1
+        except Exception as exc:  # noqa: BLE001 — 한 장이 실패해도 나머지는 옮긴다
+            log.warning("카드를 못 옮겼습니다 (%s): %s", card.id, exc)
+    if moved:
+        log.info("카드 %d장을 Postgres로 옮겼습니다 (원본은 그대로 둡니다)", moved)
+    return moved
