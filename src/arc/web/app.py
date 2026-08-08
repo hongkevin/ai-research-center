@@ -2021,7 +2021,12 @@ def _telegram_messages() -> list:
     if not folder.is_dir():
         return []
     out = []
+    # **메시지 파일만 읽는다.** 파일 이름이 대화방 id(정수)다 — 같은
+    # 디렉터리에 카탈로그(`channels.json`)가 함께 있고, 그걸 내보내기로
+    # 읽으려다 500이 났다. 이름으로 거르면 앞으로 무엇이 더 들어와도 안전하다.
     for path in sorted(folder.glob("*.json")):
+        if not path.stem.lstrip("-").isdigit():
+            continue
         try:
             channel = parse_export(json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError) as exc:
