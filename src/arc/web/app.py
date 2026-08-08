@@ -879,6 +879,18 @@ def _news_by_name(company: str):
     return list(select(raw, now=now, months=3, limit=10, company=name) or [])
 
 
+def _tg_dir() -> Path:
+    """텔레그램 수집기가 쓰는 곳. **사람마다가 아니라 서비스 하나다** (D79).
+
+    세션은 계정 하나이고 받아 둔 메시지는 채널당 하나다 — 같은 채널을 다섯
+    사람이 봐도 한 번만 긁는다. **어느 채널을 볼지만** 사람마다 다르고,
+    그건 프로필에 있다.
+    """
+    from arc.ingest.telegram_collect import service_dir
+
+    return service_dir(STORE_DIR)
+
+
 def _events() -> EventStore:
     """이 사람의 사건 로그. **기록 실패가 본 일을 막지 않는다** (D77).
 
@@ -2000,7 +2012,7 @@ def _telegram_messages() -> list:
     """
     from arc.ingest.telegram_parse import ChannelKind, parse_export
 
-    folder = _my_dir() / "telegram"
+    folder = _tg_dir()
     if not folder.is_dir():
         return []
     out = []
@@ -2025,6 +2037,35 @@ def _name_index():
     return _NAME_INDEX
 
 
+def _seed_from_catalog(profile) -> bool:
+    """프로필에 채널이 없으면 **카탈로그에서 목록만** 가져온다 (전부 꺼진 채로).
+
+    수집 계정이 이미 들어가 있는 방을 사람마다 다시 받게 할 이유가 없다.
+    **켜는 것은 사람이 한다** — 다 켜서 주면 D66이 막은 「하루 3,000건」이
+    그대로 온다.
+    """
+    from arc.ingest.telegram_collect import load_catalog
+    from arc.store.profile import TgChannel
+
+    if profile.channels:
+        return False
+    rows = load_catalog(_tg_dir())
+    if not rows:
+        return False
+    for row in rows:
+        profile.channels.append(
+            TgChannel(
+                chat_id=int(row.get("chat_id", 0)),
+                name=str(row.get("name", "")),
+                username=str(row.get("username") or ""),
+                kind=str(row.get("kind") or "unknown"),
+                subscribers=int(row.get("subscribers") or 0),
+                enabled=False,
+            )
+        )
+    return True
+
+
 @app.get("/api/telegram/channels")
 def api_telegram_channels():
     """볼 채널 고르기 — **센티 탭이 쓴다.**
@@ -2037,7 +2078,11 @@ def api_telegram_channels():
     내 종목·섹터가 몇 번 나왔는지 세고, 없으면 종류(증권사·리서치 먼저)와
     구독자 수로 떨어진다 — **셀 수 있을 때만 세고, 없으면 없다고 한다.**
     """
-    profile = ProfileStore(_my_dir()).load(current_user())
+    store = ProfileStore(_my_dir())
+    profile = store.load(current_user())
+    # 수집 계정이 이미 들어가 있는 방을 사람마다 다시 받게 할 이유가 없다
+    if _seed_from_catalog(profile):
+        store.save(profile)
     mine = {s.symbol for s in profile.stocks}
     sectors = [x for x in profile.sectors if x]
 
@@ -2232,6 +2277,23 @@ def api_telegram_refresh():
     except Exception as exc:  # noqa: BLE001 — 로그인 안 됨·네트워크 등 그대로 보여준다
         return JSONResponse({"error": _telegram_hint(exc)}, status_code=400)
 
+    # **카탈로그는 서비스 것, 선택은 사람 것** (D79). 둘 다 갱신한다 —
+    # 카탈로그가 있어야 다른 사람도 같은 목록에서 고를 수 있다.
+    from arc.ingest.telegram_collect import save_catalog
+
+    save_catalog(
+        _tg_dir(),
+        [
+            {
+                "chat_id": c.chat_id,
+                "name": c.name,
+                "username": c.username,
+                "kind": c.kind,
+                "subscribers": c.subscribers,
+            }
+            for c in found
+        ],
+    )
     store = ProfileStore(_my_dir())
     profile = merge_channels(store.load(current_user()), found)
     store.save(profile)
@@ -2264,8 +2326,7 @@ def api_telegram_sync(payload: dict | None = None):
         )
 
     since = dtm.datetime.now(dtm.UTC) - dtm.timedelta(days=days)
-    out_dir = _my_dir() / "telegram"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = _tg_dir()
 
     async def run(client):
         got = []
@@ -2311,7 +2372,7 @@ def _run_telethon(job):
     api_id, api_hash = credentials()
 
     async def go():
-        client = TelegramClient(str(session_path(_my_dir())), api_id, api_hash)
+        client = TelegramClient(str(session_path(_tg_dir())), api_id, api_hash)
         await client.connect()
         try:
             if not await client.is_user_authorized():

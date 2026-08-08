@@ -29,6 +29,7 @@ Telethon 인증은 **전화번호 → 코드 → (2FA면) 비밀번호**로 사�
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -69,8 +70,63 @@ class Fetched:
         return out
 
 
+def service_dir(store: str | Path) -> Path:
+    """수집기가 쓰는 곳. **사람마다가 아니라 서비스 하나다** (D79).
+
+        .arc-store/
+          telegram/
+            session.session      ← 수집 계정. 사람마다가 아니다
+            {chat_id}.json       ← 받아 둔 메시지. **채널당 하나**
+          users/{uid}/…          ← 어느 채널을 볼지는 사람마다
+
+    시세(`prices/`)와 같은 자리다 — 텔레그램 원문은 **시장에서 온 것**이지
+    누구의 것이 아니다. 사람마다 복제하면 같은 채널을 사람 수만큼 긁는다.
+
+    **약관 경계가 여기 있다.** 계정 하나가 여러 사람을 대신해 긁으면 그건
+    개인 도구가 아니라 서비스에 가깝다([D66](../../../docs/decisions.md#d66)).
+    지금은 사용자가 한 명이라 성립하지만, 두 번째 사람이 붙을 때 다시 봐야
+    한다 — 그때는 사람마다 자기 계정으로 돌아가는 편이 안전하다.
+    """
+    path = Path(store) / "telegram"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def catalog_path(service: str | Path) -> Path:
+    """수집 계정이 **볼 수 있는** 채널 목록. `{service}/channels.json`.
+
+    **카탈로그와 선택을 가른다** (D79):
+
+    * 카탈로그 — 계정 하나가 들어가 있는 방. 서비스 것이고 사람마다가 아니다
+    * 선택 — 그중 무엇을 볼지. **프로필에 있고 사람마다다**
+
+    전에는 CLI가 이걸 프로필에 바로 썼는데, CLI에는 토큰이 없어 늘 `local`
+    프로필로 갔다. 그래서 터미널에서 채널을 받아도 로그인한 계정 화면에는
+    안 나왔다.
+    """
+    return Path(service) / "channels.json"
+
+
+def save_catalog(service: str | Path, channels: list[dict]) -> Path:
+    """카탈로그를 덮어쓴다. **원자적으로** — 읽는 중에 깨지면 안 된다."""
+    path = catalog_path(service)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(channels, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def load_catalog(service: str | Path) -> list[dict]:
+    """카탈로그. 없거나 깨졌으면 빈 목록 — **예외를 던지지 않는다.**"""
+    try:
+        raw = json.loads(catalog_path(service).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [x for x in raw if isinstance(x, dict) and x.get("chat_id")]
+
+
 def session_path(base: str | Path) -> Path:
-    """`{store}/telegram.session`. **사용자 디렉터리 안이다** — 계정은 사람마다다."""
+    """`{base}/telegram.session`. `base`는 **서비스 디렉터리**를 넘긴다."""
     return Path(base) / SESSION_NAME
 
 
