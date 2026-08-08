@@ -68,3 +68,6 @@ docs/KakaoTalk_Photo_*
 
 # 에이전트 워크트리 — 저장소 안의 저장소다. 커밋에 딸려 들어가면 안 된다
 .claude/worktrees/
+
+# DB 덤프 — 개인 데이터다. 커밋하지 않는다
+.arc-db-dump*.json

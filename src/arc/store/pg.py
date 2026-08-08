@@ -258,3 +258,97 @@ def rls_enforced(uid: str = "rls-probe") -> bool:
     except psycopg.Error as exc:
         log.warning("RLS 적용 여부를 못 봤습니다: %s", exc)
         return False
+
+
+# 내보내기가 다루는 표. **순서가 있다** — 들여올 때 이 순서로 넣는다.
+TABLES = ("arc_profiles", "arc_cards", "arc_events")
+
+# 시험하다 남은 uid. 내보낼 때 뺀다 — 옮긴 DB에 쓰레기를 들고 가지 않는다.
+_JUNK_PREFIXES = ("test-", "probe-", "rls-probe", "alice-", "bob-")
+
+
+def _is_junk(uid: str) -> bool:
+    return any(uid.startswith(x) for x in _JUNK_PREFIXES)
+
+
+def export_all(*, skip_junk: bool = True) -> dict:
+    """전부 내보낸다. **소유자 연결로 읽는다** — RLS를 우회해야 전 사용자를 본다.
+
+    리전을 옮기려면 새 프로젝트를 만들어야 하고(Supabase는 리전 변경이 안 된다),
+    그때 **DB에만 있는 것**이 사라진다. 파일에 원본이 있는 것들과 달리 로그인
+    뒤에 화면에서 넣은 커버리지는 여기밖에 없다.
+    """
+    import psycopg
+
+    out: dict = {"tables": {}}
+    with psycopg.connect(database_url()) as conn, conn.cursor() as cur:
+        for table in TABLES:
+            cur.execute(f"select * from {table}")
+            cols = [d.name for d in cur.description]
+            rows = []
+            for row in cur.fetchall():
+                item = dict(zip(cols, row, strict=True))
+                if skip_junk and _is_junk(str(item.get("uid", ""))):
+                    continue
+                rows.append(item)
+            out["tables"][table] = {"columns": cols, "rows": rows}
+    return out
+
+
+def import_all(dump: dict) -> dict[str, int]:
+    """내보낸 것을 넣는다. **이미 있는 것은 안 덮는다.**
+
+    두 번 돌려도 안전해야 한다 — 옮기다 중간에 끊기면 다시 돌리게 된다.
+    `generated` 열(카드의 kind·symbol·created_at)은 **넣지 않는다**: 문서에서
+    파생되므로 넣으려 하면 Postgres가 거절한다.
+    """
+    import psycopg
+
+    generated = {"kind", "symbol", "created_at"}
+    counts: dict[str, int] = {}
+    with psycopg.connect(database_url()) as conn:
+        for table in TABLES:
+            block = (dump.get("tables") or {}).get(table) or {}
+            rows = block.get("rows") or []
+            done = 0
+            for row in rows:
+                item = {
+                    k: v
+                    for k, v in row.items()
+                    if not (table == "arc_cards" and k in generated)
+                    # 사건의 `id`는 시퀀스가 새로 준다 — 옮긴 DB의 시퀀스와
+                    # 충돌하지 않게 버린다
+                    and not (table == "arc_events" and k == "id")
+                }
+                cols = ", ".join(item)
+                marks = ", ".join(["%s"] * len(item))
+                values = [
+                    json.dumps(v, ensure_ascii=False, default=str)
+                    if isinstance(v, dict | list)
+                    else v
+                    for v in item.values()
+                ]
+                conn.execute(
+                    f"insert into {table} ({cols}) values ({marks}) on conflict do nothing",
+                    values,
+                )
+                done += 1
+            counts[table] = done
+        conn.commit()
+    return counts
+
+
+def purge_junk() -> dict[str, int]:
+    """시험하다 남은 행을 지운다. **소유자 연결로 한다.**"""
+    import psycopg
+
+    out: dict[str, int] = {}
+    with psycopg.connect(database_url()) as conn:
+        for table in TABLES:
+            cur = conn.execute(
+                f"delete from {table} where " + " or ".join(["uid like %s"] * len(_JUNK_PREFIXES)),
+                [f"{x}%" for x in _JUNK_PREFIXES],
+            )
+            out[table] = cur.rowcount
+        conn.commit()
+    return out
