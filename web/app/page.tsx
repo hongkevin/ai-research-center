@@ -23,6 +23,7 @@ import { CheckRail } from "@/components/workbench/check-rail";
 import { StageRail } from "@/components/workbench/stage-rail";
 import { StartChoice } from "@/components/workbench/start-choice";
 import { UploadConfirm } from "@/components/workbench/upload-confirm";
+import { Discover } from "@/components/discover/discover";
 import { LensPanel } from "@/components/note/lens-panel";
 import { ReportHead } from "@/components/note/report-head";
 import { NoteBody, type Heading } from "@/components/note/note-body";
@@ -114,7 +115,7 @@ export default function Workbench() {
   //   peer  이 종목이 동종 대비 어디인가  (횡단면축)
   //   board 이 종목을 어떻게 쓸 것인가    (깊이축)
   const [tab, setTab] = useState<
-    "me" | "brief" | "senti" | "peer" | "board"
+    "me" | "brief" | "senti" | "discover" | "peer" | "board"
   >("brief");
   // 피어 그룹 만들기. 종목 리포트와 다른 흐름이라 다이얼로그가 따로다.
   const [composingPeer, setComposingPeer] = useState(false);
@@ -426,6 +427,10 @@ export default function Workbench() {
               ["me", "커버리지"],
               ["brief", "모닝 브리프"],
               ["senti", "시장 센티"],
+              /* **발굴은 센티 다음이다** (D87). 시장에서 도는 것을 본 뒤에
+                 「아직 안 도는 것」을 찾는 순서다 — 나머지 탭이 전부 이미
+                 아는 종목에서 시작하는데, 이 탭만 목록 밖을 본다. */
+              ["discover", "발굴"],
               ["peer", "피어그룹"],
               ["board", "리포트"],
             ] as const
@@ -609,6 +614,11 @@ export default function Workbench() {
             />
           ) : tab === "senti" ? (
             <Senti
+              onAsk={(company) => setAskFor({ company, at: Date.now() })}
+              onReport={(symbol) => openCompose(symbol)}
+            />
+          ) : tab === "discover" ? (
+            <Discover
               onAsk={(company) => setAskFor({ company, at: Date.now() })}
               onReport={(symbol) => openCompose(symbol)}
             />

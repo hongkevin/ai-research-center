@@ -2116,9 +2116,7 @@ def _disclosures(symbol: str) -> list:
         return cached
     end = dt.datetime.now(dt.UTC).date()
     try:
-        ds = _shared_provider().get_disclosures(
-            symbol, end - dt.timedelta(days=CONTRACT_DAYS), end
-        )
+        ds = _shared_provider().get_disclosures(symbol, end - dt.timedelta(days=CONTRACT_DAYS), end)
     except Exception as exc:  # noqa: BLE001 — 한 종목이 실패해도 브리프는 나간다
         log.warning("공시를 못 읽었습니다 (%s): %s", symbol, exc)
         # **실패를 캐시하지 않는다.** 다음 요청이 다시 시도해야 한다 —
@@ -2307,7 +2305,7 @@ def api_brief(news: bool = True, session: str = ""):
     return dataclasses.asdict(brief)
 
 
-def _mentions_today(profile) -> dict[str, int]:
+def _mentions_today(profile, *, everything: bool = False) -> dict[str, int]:
     """오늘 텔레그램에서 **내 종목이** 몇 번 나왔나. `{종목코드: 횟수}`.
 
     **미검증 레인이다** ([D45](../../docs/decisions.md#d45)) — 숫자가 본문에
@@ -2321,8 +2319,10 @@ def _mentions_today(profile) -> dict[str, int]:
     """
     from arc.ingest.telegram_mentions import mention_surges
 
+    # 발굴은 **내 목록 밖**을 본다 — 「아직 안 도는 종목」을 가르려면 전 종목의
+    # 언급을 알아야 하고, 내 것만 세면 후보가 전부 「언급 0」이 된다 (D87).
     mine = set(profile.symbols())
-    if not mine:
+    if not mine and not everything:
         return {}
     messages = _telegram_messages()
     if not messages:
@@ -2346,7 +2346,35 @@ def _mentions_today(profile) -> dict[str, int]:
         return {}
     # **오늘을 우리가 정하지 않는다.** 받아 둔 메시지 중 가장 최근 날짜가
     # 「오늘」이다 — 달력으로 정하면 주말·연휴에 늘 0이 나온다.
-    return {s.symbol: s.today for s in surges if s.symbol in mine and s.today > 0}
+    return {s.symbol: s.today for s in surges if s.today > 0 and (everything or s.symbol in mine)}
+
+
+_INDUSTRY: dict[str, str] = {}
+
+
+def _industry_of(symbol: str) -> str:
+    """업종 한 마디. **후보 목록을 읽을 수 있게 하는 최소한이다** (D87).
+
+    상관만 낸 목록은 종목명 열두 줄이라 무엇을 볼지 못 고른다. 「반도체 장비」
+    · 「의약품」이 붙는 순간 눈이 걸러낸다.
+
+    기업개황(`company.json`)의 KSIC 코드를 이름으로 바꾼 것이다 — **가벼운
+    콜 하나**고, 프로세스 안에 캐시한다(종목의 업종은 거의 안 바뀐다).
+
+    **이걸로 그룹을 짓지 않는다.** KSIC로는 방산 4종목이 어느 자릿수에서도 한
+    묶음이 안 된다는 것이 D68의 실측이다. 여기서는 읽기 위한 꼬리표일 뿐이다.
+    """
+    if symbol in _INDUSTRY:
+        return _INDUSTRY[symbol]
+    try:
+        from arc.data.kr.ksic import industry_name
+
+        company = _shared_provider().get_company(symbol)
+        name = industry_name(getattr(company, "industry", "") or "") or ""
+    except Exception:  # noqa: BLE001 — 꼬리표 하나가 목록을 막지 않는다
+        name = ""
+    _INDUSTRY[symbol] = name
+    return name
 
 
 def _sector_universe(profile) -> dict[str, list[str]]:
@@ -3248,6 +3276,94 @@ def api_suggest_peers(payload: dict):
         "cohesion": round(group.cohesion, 3),
         "note": group.note,
         "universe": len(prices),
+        "source": source,
+    }
+
+
+@app.post("/api/discover")
+def api_discover(payload: dict):
+    """발굴 — **「숨겨진 ○○ 수혜주」** (D87).
+
+    이 제품은 지금까지 **이미 아는 종목**만 다뤘다. 커버리지·브리프·피어그룹·
+    리포트가 전부 「내가 넣은 종목」에서 시작한다. 그런데 미드스몰캡 애널리스트가
+    돈 버는 순간은 그 목록에 **없던 이름을 찾을 때**다 — 공개 리포트 60여 편에서
+    「숨겨진 ○○ 수혜주」가 제목에만 다섯 번 나온다.
+
+    **새 엔진을 안 만든다.** `peer_suggest`가 이미 마켓베타를 제거한 상관을
+    내고 무작위 기준선과 비교해 판정까지 한다. 없던 것은 **크기 감각**뿐이고
+    (상관만 보면 대형주가 위에 앉는다), 그건 이제 `market_facts`가 준다.
+
+    **우리가 「수혜주입니다」라고 말하지 않는다.** 상관은 「같이 움직였다」이지
+    「밸류체인에 있다」가 아니라서, 후보마다 업종·시총·거래대금을 같이 내고
+    판단은 사람이 한다.
+    """
+    from arc.finmodel.discover import DEFAULT_MAX_CAP, DEFAULT_MIN_TURNOVER, discover
+
+    raw = payload.get("seeds") or []
+    if not isinstance(raw, list) or not raw:
+        return JSONResponse({"error": "앵커 종목을 하나 이상 지정하십시오."}, status_code=400)
+    seeds: list[str] = []
+    for item in raw[:4]:
+        try:
+            seeds.append(_resolve_symbol(str(item).strip()))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+    prices, source = _price_source()
+    missing = [s for s in seeds if s not in prices]
+    if missing:
+        return JSONResponse(
+            {"error": f"시세가 없는 종목입니다 — {', '.join(missing)}"}, status_code=400
+        )
+
+    def _cap(key: str, default: float) -> float | None:
+        value = payload.get(key, default)
+        if value in (None, "", 0):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    # **내가 이미 보는 종목은 후보가 아니다.** 나오면 그건 발굴이 아니라 반복이다
+    profile = open_profile(_my_dir(), current_user()).load(current_user())
+    exclude = set(profile.symbols())
+
+    found = discover(
+        seeds,
+        base=STORE_DIR,
+        prices=prices,
+        exclude=exclude,
+        max_cap=_cap("max_cap", DEFAULT_MAX_CAP),
+        min_turnover=_cap("min_turnover", DEFAULT_MIN_TURNOVER),
+        boards=tuple(payload.get("boards") or ("KOSDAQ",)),
+        mentions=_mentions_today(profile, everything=True),
+    )
+    # 이름은 **후보가 정해진 뒤에** 푼다 — 전 종목 이름을 미리 푸는 것은 낭비다
+    names = _names_for([f.symbol for f in found.found] + seeds)
+    return {
+        "seeds": [{"symbol": s, "company": names.get(s, "")} for s in seeds],
+        "found": [
+            {
+                "symbol": f.symbol,
+                "company": names.get(f.symbol) or f.company,
+                "correlation": round(f.correlation, 3),
+                "overlap": f.overlap,
+                "cap": f.cap,
+                "cap_display": f.cap_display,
+                "avg_turnover": f.avg_turnover,
+                "board": f.board,
+                "industry": _industry_of(f.symbol),
+                "mentions": f.mentions,
+                "unheard": f.unheard,
+            }
+            for f in found.found
+        ],
+        "universe": found.universe,
+        "meaningful": found.meaningful,
+        "cohesion": round(found.cohesion, 3),
+        "baseline": round(found.baseline, 3),
+        "note": found.note,
         "source": source,
     }
 
