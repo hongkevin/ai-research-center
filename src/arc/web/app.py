@@ -92,6 +92,16 @@ from arc.store.cards import (
     peer_member,
     resolve_peer_members,
 )
+from arc.store.events import (
+    ASKED,
+    EDITED,
+    GENERATED,
+    OPENED,
+    PEER_SKIPPED,
+    PUBLISHED,
+    EventStore,
+    summarize,
+)
 from arc.store.notes import (
     NOTE_DATASET,
     compare_notes,
@@ -869,6 +879,14 @@ def _news_by_name(company: str):
     return list(select(raw, now=now, months=3, limit=10, company=name) or [])
 
 
+def _events() -> EventStore:
+    """이 사람의 사건 로그. **기록 실패가 본 일을 막지 않는다** (D77).
+
+    `EventStore`가 예외를 안 던지므로 부르는 쪽에서 감쌀 필요가 없다.
+    """
+    return EventStore(_my_dir())
+
+
 def _my_dir() -> Path:
     """**지금 요청한 사람의** 저장소 경로.
 
@@ -1503,6 +1521,10 @@ def api_card(card_id: str):
         return JSONResponse({"error": str(exc)}, status_code=400)
     if card is None:
         return JSONResponse({"error": "없는 카드입니다."}, status_code=404)
+    # **자주 여는 것이 지금 집중하는 것이다** (D77)
+    # `kind`는 note()의 첫 인자 이름이라 상세에는 다른 이름으로 넣는다
+    _events().note(OPENED, card.symbol or card.id, card_id=card.id, card_kind=card.kind)
+
     body = dict(card.__dict__, vm=_complete_vm(card.vm))
     if card.kind == PEER:
         resolved = resolve_peer_members(cards, card.members)
@@ -1559,6 +1581,14 @@ def api_ask(payload: dict):
 
     # 기사 레인은 **켤 수 있으면 켠다.** 없으면 답변이 그 사실을 `problems`에
     # 남기고 앞의 두 레인은 그대로 돈다.
+    # **같은 것을 또 물었다면 답이 부족했다는 뜻이다** (D77). 질문 문장은
+    # 사람이 친 것이라 가려서 적는다.
+    _events().note_text(
+        ASKED,
+        question,
+        subject=(context.symbols[0] if context and context.symbols else ""),
+    )
+
     news = _news_by_name if news_available() else None
     try:
         answer = answer_question(
@@ -2383,6 +2413,52 @@ def _peer_sector(card, sector_of: dict[str, str]) -> str:
     return max(hits.items(), key=lambda kv: kv[1])[0] if hits else ""
 
 
+@app.get("/api/events")
+def api_events(days: int = 30, limit: int = 200):
+    """내가 무엇을 했나 (D77). **쌓인 것이 보여야 쌓을 마음이 든다.**
+
+    사건 로그를 눈에 안 보이는 데 두면 그게 맞게 쌓이는지 아무도 모른다.
+    그리고 여기 나오는 것이 곧 나중에 맥락으로 들어갈 것들이다 — 미리 보고
+    「이건 아닌데」를 말할 수 있어야 한다.
+    """
+    import datetime as dtm
+
+    days = max(1, min(days, 365))
+    since = dtm.datetime.now(dtm.UTC) - dtm.timedelta(days=days)
+    events = _events().read(limit=max(1, min(limit, 1000)), since=since)
+    summary = summarize(events, days=days)
+
+    names = _names_for([e.subject for e in events if len(e.subject) == 6 and e.subject.isdigit()])
+    return {
+        "days": days,
+        "summary": {
+            "total": summary.total,
+            "focus": [
+                {"subject": s, "count": n, "company": names.get(s, "")} for s, n in summary.focus
+            ],
+            "edited_sections": [{"section": s, "count": n} for s, n in summary.edited_sections],
+            "repeated": [
+                {"subject": s, "count": n, "company": names.get(s, "")} for s, n in summary.repeated
+            ],
+            "skipped_peers": [
+                {"subject": s, "count": n, "company": names.get(s, "")}
+                for s, n in summary.skipped_peers
+            ],
+            "by_kind": summary.by_kind,
+        },
+        "events": [
+            {
+                "at": e.at,
+                "kind": e.kind,
+                "subject": e.subject,
+                "company": names.get(e.subject, ""),
+                "detail": e.detail,
+            }
+            for e in events[:60]
+        ],
+    }
+
+
 @app.get("/api/sectors/seed")
 def api_sector_seed():
     """고르면 그대로 들어오는 섹터 목록. **정답이 아니라 출발점이다.**
@@ -2600,6 +2676,13 @@ def api_create_peer(payload: dict):
         members=members,
     )
     cards.save(card)
+
+    # **안 넣은 것이 넣은 것만큼 말해 준다** (D77). 화면이 후보 목록을 같이
+    # 보내 주므로 서버가 세션을 들고 있을 필요가 없다.
+    offered = {str(x) for x in (payload.get("offered") or []) if isinstance(x, str)}
+    for symbol in sorted(offered - set(codes)):
+        _events().note(PEER_SKIPPED, symbol, group=card.id)
+
     return {
         "card_id": card.id,
         "members": card.members,
@@ -2951,6 +3034,12 @@ def api_accept_revision(card_id: str, payload: dict):
     )
     card.version = next_version(card.version)
     cards.save(card)
+
+    # **생성 문장을 고친 것이 가장 값진 신호다** — 문체·판단 선호가 여기 있다.
+    # 조립본은 플레이스홀더뿐이라 가릴 필요가 없다.
+    _events().note_draft(
+        EDITED, after, subject=card.symbol or card.id, section=title, card_id=card.id
+    )
     return {"version": card.version, "revision_count": len(card.versions)}
 
 
@@ -2992,6 +3081,7 @@ def api_recompute(card_id: str, payload: dict):
         return JSONResponse({"error": f"{type(exc).__name__}: {exc}"}, status_code=400)
 
     changed = [f"{a['label']} {a['value']}{a['unit']}" for a in vm.assumptions if a.get("override")]
+    _events().note(GENERATED, card.symbol or card.id, card_id=card.id, year=card.year)
     card.vm = vm.__dict__
     card.assembled = doc.get("assembled", "")
     card.registry = doc.get("registry", [])
@@ -3041,6 +3131,10 @@ def api_publish(card_id: str):
     published_at = dt.datetime.now(dt.UTC).date()
     registry = NumberRegistry.load(card.registry)
     rendered = registry.render_text(card.assembled)
+
+    # **넘긴 것은 통과한 형태다** (D77). 고친 횟수를 함께 남긴다 — 몇 번
+    # 손대야 내보낼 만해지는가가 생성 품질의 실제 지표다.
+    _events().note(PUBLISHED, card.symbol or card.id, card_id=card.id, revisions=len(card.versions))
 
     DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
     path = DRAFTS_DIR / f"{card.symbol}-FY{card.year}-{published_at.isoformat()}.md"
