@@ -100,6 +100,8 @@ from arc.store.events import (
     PEER_SKIPPED,
     PUBLISHED,
     EventStore,
+    PgEventStore,
+    open_events,
     summarize,
 )
 from arc.store.notes import (
@@ -891,12 +893,15 @@ def _tg_dir() -> Path:
     return service_dir(STORE_DIR)
 
 
-def _events() -> EventStore:
+def _events() -> EventStore | PgEventStore:
     """이 사람의 사건 로그. **기록 실패가 본 일을 막지 않는다** (D77).
 
     `EventStore`가 예외를 안 던지므로 부르는 쪽에서 감쌀 필요가 없다.
+
+    **`DATABASE_URL`이 있으면 Postgres로 간다** (D80). 부르는 쪽은 어느 쪽인지
+    모른다 — 두 저장소가 같은 인터페이스를 갖는다.
     """
-    return EventStore(_my_dir())
+    return open_events(_my_dir(), current_user())
 
 
 def _my_dir() -> Path:

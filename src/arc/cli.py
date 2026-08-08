@@ -411,6 +411,59 @@ def web(
     uvicorn.run("arc.web.app:app", host=host, port=port, reload=reload)
 
 
+db_app = typer.Typer(help="Postgres — 스키마 만들기·파일에서 옮기기")
+app.add_typer(db_app, name="db")
+
+
+@db_app.command("init")
+def db_init() -> None:
+    """스키마와 RLS 정책을 만든다. **여러 번 돌려도 안전하다.**"""
+    from arc.store import pg
+
+    if not pg.database_url():
+        typer.secho(
+            "DATABASE_URL이 없습니다 — .env에 넣으십시오.\n"
+            "  Supabase → Settings → Database → Connection string (URI)",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(1)
+    try:
+        pg.init_schema()
+    except Exception as exc:
+        typer.secho(f"\n  실패: {exc}\n", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+    typer.secho("\n  스키마 확인 완료.", fg=typer.colors.GREEN)
+    # **RLS를 켜 놓고 안 지켜지는 상태**가 가장 나쁘다. 소유자로 붙으면
+    # 정책이 적용되지 않으니 그 사실을 말해 준다.
+    try:
+        if pg.owner_bypass():
+            typer.secho(
+                "  ⚠ 지금 연결이 RLS를 우회합니다 (테이블 소유자·superuser).\n"
+                "    앱 전용 역할을 만들기 전까지는 uid를 저장소에 묶는 것이 실질적 방어입니다.",
+                fg=typer.colors.YELLOW,
+            )
+    except Exception as exc:  # noqa: BLE001 — 확인 실패가 init을 막지 않는다
+        log.debug("RLS 우회 여부를 못 봤습니다: %s", exc)
+    typer.echo("")
+
+
+@db_app.command("migrate")
+def db_migrate(
+    uid: str = typer.Option("local", "--uid", help="어느 사용자의 파일을 옮길 것인가"),
+) -> None:
+    """파일에 쌓인 사건을 Postgres로 **복사**한다.
+
+    **지우지 않는다.** 원본을 두면 잘못돼도 되돌릴 수 있다 — 이 저장소의
+    카드를 이미 두 번 잃었다. 두 번 돌리면 두 번 들어가니 한 번만 돌린다.
+    """
+    from arc.store.events import migrate_events
+    from arc.web.identity import user_dir
+
+    moved = migrate_events(user_dir(_store_root(), uid), uid)
+    typer.secho(f"\n  사건 {moved}건을 옮겼습니다 (원본은 그대로).\n", fg=typer.colors.GREEN)
+
+
 telegram_app = typer.Typer(help="텔레그램 — 로그인·채널 목록·수집")
 app.add_typer(telegram_app, name="telegram")
 

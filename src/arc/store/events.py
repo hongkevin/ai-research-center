@@ -36,6 +36,14 @@
 ------------
 한 줄 한 사건. 추가만 하므로 잠금이 필요 없고, 중간이 깨져도 그 줄만 잃는다.
 그리고 **Postgres로 옮길 때 한 줄이 한 행**이라 이관이 기계적이다.
+
+Postgres로 갈 때
+----------------
+`DATABASE_URL`이 있으면 `PgEventStore`가 같은 자리를 대신한다([pg.py](pg.py)).
+**두 저장소가 같은 인터페이스를 갖는다** — 부르는 쪽은 어느 쪽인지 모른다.
+
+옮기는 이유는 재배포 생존과 시간축 질의다. *"지난 3개월간 한화오션에 대해 뭘
+물었나"*를 디렉터리 스캔으로 답하는 것은 오래 못 간다.
 """
 
 from __future__ import annotations
@@ -264,3 +272,139 @@ def summarize(events: list[Event], *, days: int = 30, top: int = 5) -> Summary:
     skipped = Counter(e.subject for e in events if e.kind == PEER_SKIPPED and e.subject)
     out.skipped_peers = skipped.most_common(top)
     return out
+
+
+class PgEventStore:
+    """Postgres 판. **`EventStore`와 같은 인터페이스다.**
+
+    uid를 **만들 때 한 번** 받고 모든 질의에 그걸 쓴다 — uid를 인자로 받는
+    메서드가 없다. 파일 저장소가 디렉터리를 한 번 받는 것과 같은 모양이고,
+    그래서 「거르는 것을 빠뜨릴 수」가 없다. RLS가 그 위에 한 겹 더 있다.
+    """
+
+    def __init__(self, uid: str) -> None:
+        self.uid = uid
+
+    # ── 쓰기 ─────────────────────────────────────────────────────────
+    def record(self, event: Event) -> bool:
+        """**실패해도 예외를 안 던진다.** 파일 판과 같은 약속이다 —
+        기록은 본 일의 부산물이라 DB가 죽어도 리포트 생성은 돌아야 한다."""
+        if event.kind not in KINDS:
+            log.warning("모르는 사건 종류라 안 적습니다: %s", event.kind)
+            return False
+        if event.text and event.safe not in (SAFE_PLACEHOLDER, SAFE_MASKED):
+            log.warning("가리지 않은 텍스트라 안 적습니다 (%s)", event.kind)
+            return False
+
+        from arc.store import pg
+
+        event.at = event.at or _now()
+        try:
+            with pg.connect(self.uid) as conn:
+                conn.execute(
+                    "insert into arc_events (uid, at, kind, subject, text, safe, detail)"
+                    " values (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        self.uid,
+                        event.at,
+                        event.kind,
+                        event.subject,
+                        event.text,
+                        event.safe,
+                        json.dumps(event.detail, ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+        except Exception as exc:  # noqa: BLE001 — 연결·권한·형식 전부 「못 적었다」다
+            log.warning("사건을 못 적었습니다 (%s): %s", event.kind, exc)
+            return False
+        return True
+
+    def note(self, kind: str, subject: str = "", **detail) -> bool:
+        return self.record(Event(kind=kind, subject=subject, detail=detail))
+
+    def note_text(self, kind: str, text: str, *, subject: str = "", **detail) -> bool:
+        return self.record(
+            Event(
+                kind=kind,
+                subject=subject,
+                text=mask_numbers(text),
+                safe=SAFE_MASKED,
+                detail=detail,
+            )
+        )
+
+    def note_draft(self, kind: str, assembled: str, *, subject: str = "", **detail) -> bool:
+        return self.record(
+            Event(
+                kind=kind,
+                subject=subject,
+                text=assembled,
+                safe=SAFE_PLACEHOLDER,
+                detail=detail,
+            )
+        )
+
+    # ── 읽기 ─────────────────────────────────────────────────────────
+    def read(self, *, limit: int = MAX_LINES, since: dt.datetime | None = None) -> list[Event]:
+        """최근 것부터. **못 읽으면 빈 목록이다** — 화면이 죽지 않는다."""
+        from arc.store import pg
+
+        sql = "select at, kind, subject, text, safe, detail from arc_events where uid = %s"
+        args: list = [self.uid]
+        if since is not None:
+            sql += " and at >= %s"
+            args.append(since)
+        sql += " order by at desc limit %s"
+        args.append(max(1, limit))
+
+        try:
+            with pg.connect(self.uid) as conn, conn.cursor() as cur:
+                cur.execute(sql, args)
+                rows = cur.fetchall()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("사건을 못 읽었습니다: %s", exc)
+            return []
+
+        return [
+            Event(
+                kind=kind,
+                subject=subject,
+                text=text,
+                safe=safe,
+                detail=detail or {},
+                at=at.isoformat(timespec="seconds") if hasattr(at, "isoformat") else str(at),
+            )
+            for at, kind, subject, text, safe, detail in rows
+        ]
+
+
+def open_events(base_dir: str | Path, uid: str) -> EventStore | PgEventStore:
+    """저장소를 고른다. **부르는 쪽은 어느 쪽인지 모른다.**
+
+    `DATABASE_URL`이 있으면 Postgres, 없으면 파일. 로컬 개발과 테스트가 DB를
+    요구하면 안 된다.
+    """
+    from arc.store import pg
+
+    return PgEventStore(uid) if pg.available() else EventStore(base_dir)
+
+
+def migrate_events(base_dir: str | Path, uid: str) -> int:
+    """파일에 쌓인 것을 Postgres로. **복사한다, 지우지 않는다.**
+
+    이 저장소의 카드를 이미 두 번 잃었다. 원본을 두면 잘못돼도 되돌릴 수 있다.
+    두 번 돌리면 두 번 들어가므로 **한 번만 돌린다** — 옮긴 뒤 파일에 표시를
+    남기지 않는 것은, 표시를 믿기보다 사람이 한 번 확인하는 편이 낫아서다.
+    """
+    from arc.store import pg
+
+    if not pg.available():
+        return 0
+    events = EventStore(base_dir).read()
+    if not events:
+        return 0
+    target = PgEventStore(uid)
+    moved = sum(1 for e in reversed(events) if target.record(e))  # 오래된 것부터
+    log.info("사건 %d건을 Postgres로 옮겼습니다 (원본은 그대로 둡니다)", moved)
+    return moved
