@@ -28,8 +28,18 @@ function Exchange() {
       return;
     }
 
+    // **URL이 아니라 코드를 넘긴다.** `exchangeCodeForSession(authCode)`는
+    // 인증 코드 **문자열**을 받는다. URL 전체를 넘기면 서버가 그걸 코드로
+    // 조회하고 `invalid flow state, no valid flow state found`를 낸다 —
+    // 「설정이 틀렸다」처럼 읽혀서 한참 엉뚱한 데를 팠다.
+    const code = params.get("code");
+    if (!code) {
+      location.replace("/login/?error=" + encodeURIComponent("인증 코드가 없습니다."));
+      return;
+    }
+
     supabase()
-      .auth.exchangeCodeForSession(window.location.href)
+      .auth.exchangeCodeForSession(code)
       .then(({ error: e }) => {
         if (!alive) return;
         // **원인을 버리지 않는다.** 전에는 전부 `error=auth`로 덮어써서
