@@ -112,7 +112,7 @@ from arc.store.profile import (
 )
 from arc.store.snapshot import SnapshotStore
 from arc.web.auth import BasicAuthMiddleware, LLMBudget
-from arc.web.identity import current_user, migrate_legacy, user_dir
+from arc.web.identity import SOLO, adopt_local, current_user, migrate_legacy, user_dir
 from arc.web.jobs import JobStore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -875,8 +875,15 @@ def _my_dir() -> Path:
     `.arc-store/users/{uid}/`. 인증이 꺼져 있으면 `local` 한 사람이다.
     시세(`prices`)와 corpCode 캐시는 여기 안 들어간다 — 시장 데이터는
     누구의 것도 아니라서 사람마다 복제하면 디스크와 API 호출만 는다.
+
+    **로그인을 켜는 날 `local`에 쌓인 것을 넘긴다.** 안 하면 커버리지도
+    카드도 채널도 사라진 것처럼 보인다 — 실제로는 옆 디렉터리에 멀쩡히 있는데
+    화면이 못 찾는다. 한 번만 일어나고, 자격증명은 안 따라간다.
     """
     migrate_legacy(STORE_DIR)
+    uid = current_user()
+    if uid != SOLO and os.environ.get("ARC_ADOPT_LOCAL", "1") not in ("0", "false", "no"):
+        adopt_local(STORE_DIR, uid)
     return user_dir(STORE_DIR)
 
 
@@ -1853,7 +1860,7 @@ def _macro_now() -> list[dict]:
     except Exception as exc:  # noqa: BLE001 — 매크로 실패가 브리프를 막지 않는다
         log.warning("매크로를 못 읽었습니다: %s", exc)
         return []
-    return [
+    out = [
         {
             "key": p.key,
             "label": p.label,
@@ -1865,9 +1872,49 @@ def _macro_now() -> list[dict]:
             "change": p.change,
             "changed_at": p.changed_at,
             "stale_days": p.stale_days,
+            "scope": "",
         }
         for p in points
     ]
+    if (credit := _credit_now()) is not None:
+        out.append(credit)
+    return out
+
+
+def _credit_now() -> dict | None:
+    """신용공여 잔고 — **시장 전체다** ([D67](../../docs/decisions.md#d67)).
+
+    종목별 신용잔고는 KRX가 아예 공표하지 않고, 종목별을 주는 증권사 API는
+    약관이 제3자 제공을 막는다. 그래서 이건 종목별의 대체재가 아니라 **다른
+    것**이고, `scope`가 그 사실을 화면까지 들고 간다 — 종목 옆에 놓이면
+    「28조」가 그 종목 얘기로 읽힌다.
+    """
+    from arc.data.kr import kofia
+
+    if not kofia.available():
+        return None
+    try:
+        credit = kofia.fetch_credit()
+    except Exception as exc:  # noqa: BLE001 — 매크로 실패가 브리프를 막지 않는다
+        log.warning("신용공여 잔고를 못 읽었습니다: %s", exc)
+        return None
+    if credit is None:
+        return None
+    return {
+        "key": "credit_loan",
+        "label": "신용융자",
+        "value": credit.loan_total,
+        "display": credit.display,
+        "date": credit.date,
+        "unit": "",
+        "digits": 1,
+        # 조 단위로 낸다. 원 단위 변화량은 화면에서 못 읽는다
+        "change": round(credit.change / 1e12, 2) if credit.change is not None else None,
+        "changed_at": "",
+        "stale_days": kofia.stale_days(credit),
+        # **한계를 값에 붙여 보낸다.** 주석으로 어딘가 적어 두면 안 읽힌다
+        "scope": "시장 전체 — 종목별은 공표되지 않습니다",
+    }
 
 
 def _market_moves(prices: dict) -> Moves | None:

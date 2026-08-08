@@ -40,7 +40,7 @@ import {
 import { Hint } from "@/components/workbench/section-label";
 import { Brand, BRAND_LINE } from "@/components/workbench/brand";
 import { ThemeToggle } from "@/components/workbench/theme-toggle";
-import { authEnabled, signOut, supabase } from "@/lib/supabase";
+import { authEnabled, currentEmail, signOut, supabase } from "@/lib/supabase";
 import { useGeneration } from "@/lib/use-generation";
 import {
   confirmCard,
@@ -131,6 +131,12 @@ export default function Workbench() {
   const [signedIn, setSignedIn] = useState<boolean | null>(
     authEnabled ? null : true,
   );
+  // **누구 것인지 화면이 말해야 한다.** 남의 계정인 줄 모르고 커버 종목을
+  // 고치는 일이 있으면 안 된다.
+  const [email, setEmail] = useState("");
+  useEffect(() => {
+    void currentEmail().then(setEmail);
+  }, [signedIn]);
 
   // 로그인이 켜져 있으면 세션이 있어야 화면을 연다. 껍데기는 공개지만
   // 데이터는 전부 `/api/*` 뒤에 있어서, 세션 없이는 빈 보드만 보인다.
@@ -388,16 +394,26 @@ export default function Workbench() {
         <div className="ml-auto flex items-center gap-1">
           <ThemeToggle />
           {authEnabled && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() =>
-                void signOut().then(() => location.replace("/login/"))
-              }
-              className="h-7 text-[12px] text-muted-foreground"
-            >
-              로그아웃
-            </Button>
+            <>
+              {email && (
+                <span
+                  className="max-w-[180px] truncate text-[11.5px] text-muted-foreground"
+                  title={`${email}의 커버리지를 보고 있습니다`}
+                >
+                  {email}
+                </span>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  void signOut().then(() => location.replace("/login/"))
+                }
+                className="h-7 text-[12px] text-muted-foreground"
+              >
+                로그아웃
+              </Button>
+            </>
           )}
         </div>
       </header>

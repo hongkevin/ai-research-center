@@ -287,9 +287,21 @@ function MacroRow({ point: m }: { point: MacroPoint }) {
   return (
     <div
       className="flex items-baseline gap-2 py-1.5"
-      title={`${m.date} 기준${m.stale_days && m.stale_days > 1 ? ` · ${m.stale_days}일 전 값` : ""}`}
+      title={
+        `${m.date} 기준` +
+        (m.stale_days && m.stale_days > 1 ? ` · ${m.stale_days}일 전 값` : "") +
+        (m.scope ? ` · ${m.scope}` : "")
+      }
     >
-      <span className="text-[12.5px] text-muted-foreground">{m.label}</span>
+      <span className="text-[12.5px] text-muted-foreground">
+        {m.label}
+        {/* **한계를 값 옆에 적는다.** 어딘가 주석으로 두면 안 읽힌다 */}
+        {m.scope && (
+          <span className="ml-1 text-[9.5px] text-warn" title={m.scope}>
+            시장
+          </span>
+        )}
+      </span>
       <span className="ml-auto font-mono text-[12.5px] tabular-nums">
         {m.display}
       </span>
