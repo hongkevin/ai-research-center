@@ -16,7 +16,16 @@ import { cn } from "@/lib/utils";
 
 export interface Turn {
   question: string;
+  /** 이번에 받은 답. 출처·힌트가 다 붙어 있다 */
   answer: Answer | null;
+  /**
+   * 서버에서 되살린 답. **본문만 있다.**
+   *
+   * 저장하는 것이 본문뿐인 것은 빠뜨린 게 아니라 정한 것이다 — 출처 줄을
+   * 통째로 복제하면 카드가 바뀐 뒤에도 옛말을 하게 되고, 그게 정확히 D51에서
+   * 밟은 실수다. 출처가 필요하면 다시 물으면 된다.
+   */
+  saved: string;
   error: string;
 }
 
@@ -103,6 +112,40 @@ export function AnswerBlock({
         {answer.grounded ? "근거에 연결됨" : "근거를 찾지 못함"}
         {answer.model && ` · ${answer.model}`}
         {answer.cost_usd != null && ` · $${answer.cost_usd.toFixed(4)}`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * 저장해 둔 답.
+ *
+ * 숫자는 **서버가 끼워 준 것**이다 — 저장된 본문에는 `{{num:key}}`만 있고
+ * 치환은 경계에서 한 번 일어난다. 그래야 저장된 대화가 나중에 맥락으로
+ * 조립돼도 LLM이 값을 보지 않는다.
+ *
+ * 출처를 안 그리는 이유는 안 저장하기 때문이다(`Turn.saved` 주석). 그 사실을
+ * 숨기지 않고 밝힌다 — 「출처가 없는 답」과 「출처를 안 실은 기록」은 다르다.
+ */
+export function SavedAnswer({
+  text,
+  compact = false,
+}: {
+  text: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className="mt-3 space-y-2">
+      <p
+        className={cn(
+          "leading-[1.9] whitespace-pre-wrap",
+          compact ? "text-[12.5px]" : "text-[14px]",
+        )}
+      >
+        {text}
+      </p>
+      <p className="text-[11px] text-muted-foreground">
+        저장된 기록입니다 — 출처는 다시 물으면 나옵니다.
       </p>
     </div>
   );

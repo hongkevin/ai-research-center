@@ -23,7 +23,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from pydantic import BaseModel, Field
 
@@ -135,6 +135,41 @@ def mask_numbers(text: str, placeholder: str = "⟨수치⟩") -> str:
         out.append(text[pos:start])
         out.append(placeholder)
         pos = end
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def render_with(text: str, values: Mapping[str, str]) -> str:
+    """`{{num:key}}`를 주어진 값으로 치환한다. **없는 키는 그대로 둔다.**
+
+    `NumberRegistry.render_text()`의 본체를 여기로 뺐다. 레지스트리가 없는
+    자리에서 같은 치환이 필요해졌기 때문이다 — 저장해 둔 대화를 다시 그릴 때
+    (`arc.store.chats`). 거기에는 키와 표시 문자열만 남아 있고 레지스트리는
+    이미 사라진 뒤다.
+
+    **두 벌로 두지 않는 이유**는 조사 교정이다. 치환하면서 **바로 뒤의 조사를
+    고친다** — LLM은 값의 끝소리를 모른 채 조사를 붙이므로("{{num:...}}으로")
+    단위에 따라 틀린다("40.0%으로"). 한쪽만 이걸 빠뜨리면 같은 문장이 화면에
+    따라 다르게 나온다. 단위는 치환 시점에 확정되므로 판단이 아니라 계산이다
+    (`arc.llm.josa` 참조).
+    """
+    from arc.llm.josa import replace_particle
+
+    out: list[str] = []
+    pos = 0
+    for m in PLACEHOLDER_RE.finditer(text):
+        if m.start() < pos:  # 조사 교정으로 이미 지나친 구간
+            continue
+        out.append(text[pos : m.start()])
+        value = values.get(m.group(1))
+        if value is None:
+            out.append(m.group(0))
+            pos = m.end()
+            continue
+        out.append(value)
+        particle, consumed = replace_particle(value, text[m.end() : m.end() + 3])
+        out.append(particle)
+        pos = m.end() + consumed
     out.append(text[pos:])
     return "".join(out)
 
@@ -277,31 +312,15 @@ class NumberRegistry:
 
         미등록 key는 치환하지 않고 그대로 둔다 — G0가 잡는다.
 
-        치환하면서 **바로 뒤의 조사를 교정한다.** LLM은 값의 끝소리를 모른 채
-        조사를 붙이므로("{{num:...}}으로") 단위에 따라 틀린다("40.0%으로").
-        단위는 치환 시점에 확정되므로 이건 판단이 아니라 계산이다
-        (`arc.llm.josa` 참조).
+        **본체는 `render_with()`에 있다.** 레지스트리가 없는 자리에서도 같은
+        치환이 필요해져서 뺐다 (`arc.store.chats`).
         """
-        from arc.llm.josa import replace_particle
-
-        out: list[str] = []
-        pos = 0
-        for m in PLACEHOLDER_RE.finditer(text):
-            if m.start() < pos:  # 조사 교정으로 이미 지나친 구간
-                continue
-            out.append(text[pos : m.start()])
-            entry = self._entries.get(m.group(1))
-            if entry is None:
-                out.append(m.group(0))
-                pos = m.end()
-                continue
-            value = entry.rendered()
-            out.append(value)
-            particle, consumed = replace_particle(value, text[m.end() : m.end() + 3])
-            out.append(particle)
-            pos = m.end() + consumed
-        out.append(text[pos:])
-        return "".join(out)
+        values: dict[str, str] = {}
+        for key in self.extract_keys(text):
+            entry = self._entries.get(key)
+            if entry is not None:
+                values[key] = entry.rendered()
+        return render_with(text, values)
 
     def bindings(self, text: str) -> list[dict[str, object]]:
         """치환 감사 기록. 어떤 플레이스홀더가 무슨 값으로 바뀌었는지."""

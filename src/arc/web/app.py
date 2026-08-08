@@ -49,7 +49,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 
 from arc.brief import build_brief
-from arc.chat import answer_question
+from arc.chat import answer_question, number_values
 from arc.chat.retrieval import Context
 from arc.data.kr.dart import DartProvider
 from arc.finmodel.moves import MARKET_LABEL, Moves, market_series, moves_for, moves_for_symbols
@@ -94,6 +94,12 @@ from arc.store.cards import (
     peer_attention_reasons,
     peer_member,
     resolve_peer_members,
+)
+from arc.store.chats import (
+    ChatStore,
+    PgChatStore,
+    build_turn,
+    open_chats,
 )
 from arc.store.events import (
     ASKED,
@@ -951,6 +957,23 @@ def _events() -> _Background:
     return _Background(open_events(_my_dir(), current_user()))
 
 
+def _chats() -> ChatStore | PgChatStore:
+    """이 사람의 대화 (D82). `DATABASE_URL`이 있으면 Postgres로 간다.
+
+    **사건 로그와 달리 `_Background`로 감싸지 않는다.** D81이 기록을 화면 뒤로
+    보낸 이유는 *카드를 여는 것*이 원래 즉시였는데 400ms가 붙어서였다. 대화는
+    다르다:
+
+    * 쓰기가 붙는 자리가 `/api/ask`인데 그쪽은 이미 LLM 호출로 수 초다 —
+      400ms가 체감에 안 잡힌다
+    * **쓴 직후에 읽는다.** 목록의 턴 수와 제목이 바로 맞아야 하고, 던지고
+      잊으면 그게 경합이 된다
+
+    실패해도 답을 막지 않는 것은 같다 — `add_turn()`이 예외를 안 던진다.
+    """
+    return open_chats(_my_dir(), current_user())
+
+
 def _my_dir() -> Path:
     """**지금 요청한 사람의** 저장소 경로.
 
@@ -1613,14 +1636,23 @@ def api_ask(payload: dict):
     모른다고 하는** 것이 설계 원칙이다. 답을 지어내면 청구가 안 되고, 한 번
     틀리면 다음부터 안 쓴다.
 
-    **대화를 서버가 들고 있지 않다.** 직전 턴이 남긴 `context`(종목·주제·연도
-    셋뿐)를 화면이 돌려주고 우리는 그걸 그대로 다음 검색의 앵커로 쓴다.
-    세션 상태를 서버에 두면 워커가 늘어나는 순간 대화가 갈라진다 — 그리고
-    이 좁은 것만 이월하는 편이 대화 전체를 이고 다니는 것보다 정확하다.
+    **대화를 적어 두되, 답을 만들 때는 안 읽는다** (D82). `session_id`를 주면
+    질문과 답이 저장소에 남는다 — 리퀘스트 이력이 브라우저에만 있으면 나중에
+    맥락으로 쓸 수 없다.
+
+    그래도 **다음 검색의 앵커는 화면이 돌려준다.** 직전 턴이 남긴
+    `context`(종목·주제·연도 셋뿐)를 그대로 받아 쓴다. 저장된 대화를 서버가
+    다시 읽어 재구성하지 않는 이유는 둘이다: 이 좁은 것만 이월하는 편이 대화
+    전체를 이고 다니는 것보다 정확하고, `session_id` 없이도 채팅이 그대로
+    돌아야 한다.
+
+    저장된 답이 **플레이스홀더 형태**인 것이 핵심이다 — 렌더된 숫자를 남겼다가
+    맥락으로 조립하면 LLM이 값을 보게 되고 불변식 1이 조용히 깨진다.
     """
     question = str(payload.get("question", "")).strip()
     if not question:
         return JSONResponse({"error": "질문을 입력하십시오."}, status_code=400)
+    session_id = str(payload.get("session_id", "")).strip()
 
     cards = _open_cards()
     if cards is None:
@@ -1668,7 +1700,98 @@ def api_ask(payload: dict):
         return JSONResponse(
             {"error": f"답변을 만들지 못했습니다 — {type(exc).__name__}"}, status_code=500
         )
+
+    if session_id:
+        # **기록 실패가 답을 막지 않는다.** `add_turn()`이 예외를 안 던지므로
+        # 여기서 감쌀 필요가 없다 — 사건 로그와 같은 약속이다.
+        _chats().add_turn(
+            session_id,
+            build_turn(
+                question,
+                template=answer.template,
+                text=answer.text,
+                numbers=number_values(answer),
+            ),
+            symbols=list(answer.context.symbols),
+            tokens=list(answer.context.tokens),
+            year=answer.context.year,
+        )
     return dataclasses.asdict(answer)
+
+
+# ── 대화 (리서치 채팅의 세션) ────────────────────────────────────────
+#
+# 세션은 `localStorage`에 있었다. 그때는 그게 맞았지만 — *"리퀘스트 이력을
+# 장기기억으로 쌓는 것은 별도 결정"*(ask-widget.tsx) — 그 결정이 D82이다.
+# 브라우저를 지우면 사라지고, 기기 간 동기화가 없고, 무엇보다 나중에 맥락으로
+# 못 쓴다.
+@app.get("/api/chats")
+def api_chats():
+    """대화 목록. **본문은 빼고 준다** — `/api/cards`와 같은 판단이다.
+
+    목록 화면이 쓰는 것은 제목과 턴 수뿐인데 본문까지 실으면 대화 열두 개에
+    수백 KB가 된다.
+    """
+    return {"sessions": [s.summary() for s in _chats().list()]}
+
+
+@app.post("/api/chats")
+def api_new_chat(payload: dict | None = None):
+    """새 대화. **세션 하나 = 리퀘스트 하나**가 이 채팅의 전제다.
+
+    제목은 안 받아도 된다 — 첫 질문이 곧 이름이 된다(`add_turn`). 목록에서
+    리퀘스트를 알아보는 유일한 단서라 따로 짓게 하지 않는다.
+
+    **실패하면 알린다.** 사람이 「새 질문」을 누른 결과라 조용히 실패하면
+    다음 턴이 갈 곳이 없다 — 사건 로그와 다른 점이다.
+    """
+    title = str((payload or {}).get("title", ""))
+    try:
+        session = _chats().create(title)
+    except Exception as exc:  # noqa: BLE001 — 파일이든 DB든 「못 만들었다」다
+        log.warning("대화를 못 만들었습니다: %s", exc)
+        return JSONResponse({"error": "대화를 만들지 못했습니다."}, status_code=503)
+    return session.summary()
+
+
+@app.get("/api/chats/{session_id}")
+def api_chat(session_id: str):
+    """대화 하나를 턴까지. **여기서 값을 끼운다.**
+
+    저장된 본문에는 `{{num:key}}`만 있다(불변식 1). 화면에 그대로 내면 "매출은
+    {{num:c1.rev}}이다"가 보이므로, 함께 저장해 둔 표를 여기서 끼워 넣는다 —
+    치환은 **경계에서 한 번**이고 저장된 것은 안 바뀐다.
+    """
+    try:
+        session = _chats().get(session_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if session is None:
+        return JSONResponse({"error": "없는 대화입니다."}, status_code=404)
+    return {
+        **session.summary(),
+        # 다음 질문의 앵커. 화면이 이걸 들고 있다가 `/api/ask`에 돌려준다.
+        "context": {
+            "symbols": session.symbols,
+            "tokens": session.tokens,
+            "year": session.year,
+        },
+        "turns": [
+            {"question": t.question, "answer": t.rendered(), "at": t.at} for t in session.turns
+        ],
+    }
+
+
+@app.delete("/api/chats/{session_id}")
+def api_delete_chat(session_id: str):
+    """대화를 지운다. **지우는 것은 사람이 한다** — 자동 정리는 없다."""
+    try:
+        ok = _chats().delete(session_id)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if not ok:
+        return JSONResponse({"error": "없는 대화입니다."}, status_code=404)
+    return {"deleted": session_id}
 
 
 def _price_source() -> tuple[dict, str]:
