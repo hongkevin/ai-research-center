@@ -158,3 +158,54 @@ class TestMacroPoint:
         today = dt.datetime.now(dt.UTC).date()
         stamp = (today - dt.timedelta(days=3)).strftime("%Y%m%d")
         assert Point(key="usdkrw", label="원/달러", value=1.0, date=stamp).stale_days == 3
+
+
+class TestUnavailable:
+    """**「없다」와 「못 읽었다」는 다른 말이다** (D85).
+
+    이 화면의 존재 이유가 *"놓친 것이 없다는 확인"*인데, 공시·기사·지수·매크로
+    실패가 전부 빈 목록으로 삼켜지면 **그 확인이 거짓이 된다.** 공시 하나를
+    놓치면 사고가 나는 직업이다.
+    """
+
+    def test_it_refuses_to_say_nothing_happened(self):
+        p = _profile(Covered(symbol="042660", company="한화오션", kind=COVER))
+        brief = build_brief(
+            p,
+            {"042660": _moves("042660", 0.3)},
+            unavailable=["공시"],
+            keys=("1d",),
+            asof="20260806",
+        )
+        assert "없습니다" not in brief.note
+        assert "공시" in brief.note and "못 읽었습니다" in brief.note
+
+    def test_a_clean_run_says_nothing_happened(self):
+        """못 읽은 것이 없으면 **평소대로 말한다.** 경고가 늘 떠 있으면 안 읽힌다."""
+        p = _profile(Covered(symbol="042660", company="한화오션", kind=COVER))
+        brief = build_brief(p, {"042660": _moves("042660", 0.3)}, keys=("1d",), asof="20260806")
+        assert brief.note == "커버 종목에 큰 움직임도 새 공시도 없습니다."
+
+    def test_findings_and_failures_appear_together(self):
+        """찾은 것이 있어도 못 읽은 것을 숨기지 않는다."""
+        p = _profile(Covered(symbol="042660", company="한화오션", kind=COVER))
+        brief = build_brief(
+            p,
+            {"042660": _moves("042660", 6.2)},
+            unavailable=["기사"],
+            keys=("1d",),
+            asof="20260806",
+        )
+        assert "3% 이상" in brief.note
+        assert "기사" in brief.note
+
+    def test_no_prices_does_not_claim_nothing_moved(self):
+        """**안 움직인 게 아니라 안 본 것이다.**
+
+        시세가 없는데 「3% 이상 움직인 커버 종목 없음」이라고 하면, 같은 화면
+        위쪽의 「시세를 아직 받지 않았다」와 정면으로 모순된다.
+        """
+        p = _profile(Covered(symbol="042660", company="한화오션", kind=COVER))
+        brief = build_brief(p, {}, keys=("1d",))
+        assert "움직인 커버 종목 없음" not in brief.heads["stocks"]
+        assert "시세가 없어" in brief.heads["stocks"]
