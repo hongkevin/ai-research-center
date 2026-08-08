@@ -1232,6 +1232,26 @@ export interface BriefArticle {
   date: string;
 }
 
+/**
+ * 수주 한 건.
+ *
+ * **금액·비율·상대방은 공시 서식의 칸에 적힌 값**이지 우리가 계산한 것이
+ * 아니다. 애널리스트가 리포트에 손으로 쓰는 「최근 매출액의 34배」가 바로
+ * 이 `ratio_pct`다.
+ */
+export interface BriefContract {
+  counterparty: string;
+  /** 계약상대방의 주요사업 — 밸류체인이 여기서 따라온다 */
+  business: string;
+  amount: number | null;
+  display_amount: string;
+  ratio_pct: number | null;
+  headline: string;
+  filed_at: string;
+  ends_at: string;
+  url: string;
+}
+
 export interface BriefLine {
   symbol: string;
   company: string;
@@ -1240,6 +1260,8 @@ export interface BriefLine {
   last_close: number | null;
   moves: Move[];
   filings: BriefFiling[];
+  /** 최근 수주. **미드스몰캡의 최대 사건이다** (D87) */
+  contracts: BriefContract[];
   articles: BriefArticle[];
   /** 구간별 시장 대비 초과(%p). **아침에 알고 싶은 것은 이쪽이다** */
   excess: Record<string, number>;
@@ -1337,7 +1359,7 @@ export interface Brief {
    * **LLM이 아니라 배열입니다.** 아래 숫자를 다시 읽어 문장 꼴로 세운 것이라
    * 새 사실이 생기지 않고, 값이 없으면 그 절이 통째로 빠집니다.
    */
-  heads: Partial<Record<"macro" | "sectors" | "stocks", string>>;
+  heads: Partial<Record<"macro" | "sectors" | "stocks" | "contracts", string>>;
 }
 
 /* 브리프의 세션 — 센티의 `SESSION_LABEL`(장전·장중·장후)과 **다른 축입니다.**
