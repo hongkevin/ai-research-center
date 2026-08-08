@@ -415,14 +415,23 @@ telegram_app = typer.Typer(help="텔레그램 — 로그인·채널 목록·수�
 app.add_typer(telegram_app, name="telegram")
 
 
-def _tg_store() -> Path:
-    """세션이 놓일 곳. **사용자 디렉터리 안이다** — 계정은 사람마다다."""
-    from arc.web.identity import user_dir
+def _store_root() -> Path:
+    return Path(os.environ.get("ARC_STORE_DIR") or REPO_ROOT / ".arc-store")
 
-    base = os.environ.get("ARC_STORE_DIR") or str(
-        Path(__file__).resolve().parents[2] / ".arc-store"
-    )
-    return user_dir(base)
+
+def _tg_store() -> Path:
+    """수집기가 쓰는 곳. **서비스 하나다** (D79).
+
+    전에는 사용자 디렉터리였는데, CLI에는 토큰이 없어 늘 `local`로 떨어졌다.
+    그래서 터미널에서 로그인·수집하면 `local`에 쌓이고 웹은 계정 디렉터리를
+    봐서 **텔레그램이 화면에서 영영 안 채워졌다.**
+
+    세션은 계정 하나, 메시지는 채널당 하나다 — 시세와 같은 성격이라 사람마다
+    복제할 이유가 없다.
+    """
+    from arc.ingest.telegram_collect import service_dir
+
+    return service_dir(_store_root())
 
 
 def _tg_client():
@@ -482,7 +491,7 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
 
     from arc.ingest.telegram_collect import fetch_dialogs
     from arc.ingest.telegram_parse import classify_channel
-    from arc.store.profile import ProfileStore, TgChannel, merge_channels
+    from arc.store.profile import TgChannel
 
     async def run() -> None:
         from telethon.tl.functions.channels import GetFullChannelRequest
@@ -510,13 +519,26 @@ def telegram_channels(limit: int = typer.Option(200, "--limit")) -> None:
             )
         await client.disconnect()
 
-        # **화면이 고르게 하려면 목록이 프로필에 있어야 한다.** 켜 둔 표시는
-        # 지키고 이름·구독자·분류만 갱신한다.
-        store = ProfileStore(_tg_store())
-        store.save(merge_channels(store.load(), found))
+        # **카탈로그에 쓴다, 프로필이 아니라** (D79). CLI에는 토큰이 없어
+        # 프로필에 쓰면 늘 `local`로 가고, 로그인한 계정 화면에는 안 나온다.
+        # 무엇을 볼지(켜고 끄기)는 사람마다라 프로필에 남는다.
+        from arc.ingest.telegram_collect import save_catalog
 
-        typer.echo(f"\n  채널 {len(found)}개 (프로필에 저장됨)\n")
-        on = {c.chat_id for c in store.load().channels if c.enabled}
+        save_catalog(
+            _tg_store(),
+            [
+                {
+                    "chat_id": c.chat_id,
+                    "name": c.name,
+                    "username": c.username,
+                    "kind": c.kind,
+                    "subscribers": c.subscribers,
+                }
+                for c in found
+            ],
+        )
+        typer.echo(f"\n  채널 {len(found)}개 (카탈로그에 저장됨)\n")
+        on: set[int] = set()
         for c in sorted(found, key=lambda x: (not x.trusted, -x.subscribers)):
             mark = "●" if c.chat_id in on else "○"
             typer.echo(f"  {mark} {c.kind:<9} {c.subscribers:>8,}  {c.name[:32]:34} {c.chat_id}")
@@ -612,7 +634,6 @@ def telegram_sync(
     import json
 
     from arc.ingest.telegram_collect import fetch_channel
-    from arc.store.profile import ProfileStore
 
     async def run() -> None:
         client = _tg_client()
@@ -621,7 +642,11 @@ def telegram_sync(
         if not targets:
             # **켜 둔 것만 긁는다.** 다 긁으면 하루 3,000건이 쏟아지고 그중
             # 대부분은 이미 DART·뉴스 API로 갖고 있다(D66).
-            targets = ProfileStore(_tg_store()).load().enabled_channels()
+            # CLI에는 사용자가 없다 — 카탈로그 전체를 긁는다. 사람별로 고른
+            # 것만 긁는 것은 화면(`/api/telegram/sync`)이 한다.
+            from arc.ingest.telegram_collect import load_catalog
+
+            targets = [int(c["chat_id"]) for c in load_catalog(_tg_store())]
         if not targets:
             typer.secho(
                 "\n  켜 둔 채널이 없습니다 — `arc telegram channels`로 목록을 받고\n"
@@ -633,8 +658,7 @@ def telegram_sync(
             return
         since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
 
-        out_dir = _tg_store() / "telegram"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = _tg_store()
         total = 0
         for chat_id in targets:
             try:
