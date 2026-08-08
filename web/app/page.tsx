@@ -26,6 +26,7 @@ import { UploadConfirm } from "@/components/workbench/upload-confirm";
 import { Discover } from "@/components/discover/discover";
 import { LensPanel } from "@/components/note/lens-panel";
 import { ReportHead } from "@/components/note/report-head";
+import { PriceStatusBar } from "@/components/workbench/price-status";
 import { NoteBody, type Heading } from "@/components/note/note-body";
 import { SectionEditor } from "@/components/note/section-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -584,6 +585,12 @@ export default function Workbench() {
         )}
       >
         <div className={cn("px-8 py-8", editing && "pb-[calc(50dvh+2rem)]")}>
+          {/* **원인이 한 군데라는 것을 말해 준다** (D87). 시세가 없으면 등락·
+              섹터 줄·피어 후보·발굴이 전부 비는데, 화면마다 따로 「없다」고만
+              하면 네 개의 다른 고장으로 읽힌다. 다 받았으면 안 그린다. */}
+          <div className="mb-5 empty:hidden">
+            <PriceStatusBar />
+          </div>
           {tab === "me" ? (
             <Coverage
               onOpenCard={(id) => {

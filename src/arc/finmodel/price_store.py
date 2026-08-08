@@ -46,6 +46,10 @@ _ROWS = 3000
 # (D69). 250콜 × 0.2초 = 50초 — 어차피 배치라 체감이 없다.
 _INTERVAL = 0.2
 
+# 몇 거래일마다 디스크에 쓸까. 20일이면 400일치가 20번 나뉘어 **최악의 손실이
+# 20거래일**이고, 쓰기는 종목당 파일 하나씩 2,987번이라 회당 1~2초다.
+_FLUSH_EVERY = 20
+
 # 지수는 종목이 아니다. 시장 요인 제거(`peer_suggest`)에 쓰려고 같은 자리에
 # 두지만, 후보 목록에는 나오면 안 된다 — `suggest()`가 `market`으로 뺀다.
 # 파일명이 6자리 숫자가 아니라 `is_common_share()`가 후보에서 자동으로 뺀다.
@@ -79,10 +83,21 @@ def backfill(
     today: dt.date | None = None,
     provider=None,
     interval: float = _INTERVAL,
+    flush_every: int = _FLUSH_EVERY,
+    on_progress=None,
 ) -> dict:
     """최근 `days`일치를 날짜축으로 받아 종목별 파일로 쌓는다.
 
     **이미 받은 날은 건너뛴다.** 매일 한 번 돌리면 하루치만 새로 받는다.
+
+    **중간에 쓴다** (D87). 처음에는 전부 메모리에 모았다가 끝에 한 번 썼는데,
+    400일치가 5분쯤 걸려서 두 가지가 났다:
+
+    * 화면이 5분 동안 「받는 중」만 띄우고 **아무 진척이 안 보였다**
+    * 그사이 컨테이너가 재시작하면 **받은 것이 통째로 사라진다**
+
+    `flush_every` 거래일마다 디스크에 합치므로 언제 죽어도 거기까지는 남고,
+    다음 실행이 이어받는다(`have`가 디스크를 보므로 자동이다).
 
     돌려주는 것은 요약 dict — 화면·CLI가 그대로 쓴다.
     """
@@ -104,6 +119,9 @@ def backfill(
     listing: dict[str, str] = {}
     fetched = 0
     empty = 0
+    # **더하면 안 된다.** 중간에 쓰기 시작한 뒤로 같은 종목이 여러 번 세어져
+    # 「종목 59,740개」 같은 수가 나온다 — 집합으로 센다
+    touched: set[str] = set()
     for day in _trading_days(start, end):
         stamp = day.strftime("%Y%m%d")
         if stamp in have:
@@ -115,6 +133,7 @@ def backfill(
             continue
         fetched += 1
         for symbol, row in rows:
+            touched.add(symbol)
             series.setdefault(symbol, {})[stamp] = row.close
             extra.setdefault(symbol, {})[stamp] = market_facts.Row(
                 high=row.high,
@@ -128,12 +147,20 @@ def backfill(
         if interval:
             time.sleep(interval)
 
-    written = _merge(out, series)
+        # **여기까지는 남는다.** 죽어도 다음 실행이 이어받는다
+        if flush_every and fetched % flush_every == 0:
+            _merge(out, series)
+            market_facts.merge(base, extra, listing)
+            series, extra, listing = {}, {}, {}
+            if on_progress is not None:
+                on_progress(fetched, empty)
+
+    _merge(out, series)
     market_facts.merge(base, extra, listing)
     return {
         "fetched_days": fetched,
         "empty_days": empty,
-        "symbols": written,
+        "symbols": len(touched),
         "total_symbols": available(base),
         "market_symbols": market_facts.available(base),
         "path": str(out),

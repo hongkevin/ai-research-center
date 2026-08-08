@@ -1259,6 +1259,44 @@ export async function discover(input: {
   return r.json();
 }
 
+/**
+ * 받아 둔 시세 상태 (D87).
+ *
+ * 시세가 없으면 브리프의 등락도, 섹터 줄도, 피어 후보도, 발굴도 전부 빕니다.
+ * 각 화면이 「없다」고만 말하면 **원인이 한 군데라는 것**을 알 수 없어서,
+ * 여기서 한 번에 보여주고 그 자리에서 받게 합니다.
+ */
+export interface PriceStatus {
+  running: boolean;
+  started_at: string;
+  finished_at: string;
+  ok: boolean;
+  error: string;
+  symbols: number;
+  market_symbols: number;
+  fetched_days: number;
+  reason: string;
+  history: string[];
+  symbols_on_disk: number;
+  market_on_disk: number;
+  loaded: number;
+  source: string;
+  latest_date: string;
+}
+
+export async function getPriceStatus(): Promise<PriceStatus> {
+  const r = await api(`/api/prices/status`);
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
+/** 지금 받는다. **던지고 상태로 따라갑니다** — 처음이면 몇 분 걸립니다 */
+export async function refreshPrices(): Promise<PriceStatus & { started: boolean }> {
+  const r = await api(`/api/prices/refresh`, { method: "POST" });
+  if (!r.ok) await fail(r);
+  return r.json();
+}
+
 export async function addStock(
   symbol: string,
   kind: CoverKind = "watch",
