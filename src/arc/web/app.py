@@ -2090,7 +2090,12 @@ def _sector_universe(profile) -> dict[str, list[str]]:
     카드가 곧 모수다. 같은 섹터에 그룹이 여럿이면 합집합을 쓴다 — 「조선
     대형」과 「조선 기자재」를 둘 다 만들어 뒀다면 그 사람에게 조선은 둘 다다.
     """
-    store = CardStore(_my_dir())
+    # **파일 저장소를 직접 부르고 있었다.** Postgres로 옮긴 뒤에도 여기만
+    # 남아서, 브리프의 섹터 모수가 **DB의 피어 그룹을 못 봤다** — 옮기기 전
+    # 파일에 남은 카드를 보고 있었다. 다른 곳은 다 `_open_cards()`를 쓴다.
+    store = _open_cards()
+    if store is None:
+        return {}
     # `_peer_sector`가 받는 것은 `{종목코드: 섹터}`다 — 프로필 자체가 아니다.
     # 피어 카드가 하나도 없을 때는 이 줄까지 안 와서 오래 안 드러났다.
     sector_of = {s.symbol: s.sector for s in profile.stocks if s.sector}
