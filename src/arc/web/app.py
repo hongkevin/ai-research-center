@@ -954,6 +954,25 @@ class _Background:
         return self._inner.read(**kwargs)
 
 
+def _standing_for(subject: str = ""):
+    """이 사람의 배경. **실패해도 답변을 막지 않는다** (D84).
+
+    배경은 답을 **더 잘 고르게** 하는 것이지 답의 전제가 아니다 — 프로필을
+    못 읽었다고 질문에 답을 못 하면 그건 잘못된 교환이다.
+    """
+    from arc.chat.standing import build_standing
+
+    try:
+        profile = open_profile(_my_dir(), current_user()).load(current_user())
+        # 사건은 반복 질문을 세는 데만 쓴다. 종목이 안 지목됐으면 읽지 않는다 —
+        # 왕복 하나를 아끼는 것이기도 하고, 잡음을 안 넣는 것이기도 하다.
+        rows = _events().read(limit=200) if subject else []
+        return build_standing(profile, rows, subject=subject)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("배경을 조립하지 못했습니다: %s", exc)
+        return None
+
+
 def _events() -> _Background:
     """이 사람의 사건 로그. **기록 실패가 본 일을 막지 않는다** (D77).
 
@@ -1695,12 +1714,21 @@ def api_ask(payload: dict):
         subject=(context.symbols[0] if context and context.symbols else ""),
     )
 
+    # **배경을 조립한다** (D84). 근거가 아니라 「우리 섹터」가 누구인지 알려
+    # 주는 것이고, 사실은 여전히 카드에서만 온다.
+    #
+    # 사건은 **지목된 종목에 대해서만** 읽는다 — 최근 것을 아무거나 끌어오면
+    # 지금 질문과 상관없는 잡음이 배경에 앉는다.
+    subject = context.symbols[0] if context and context.symbols else ""
+    standing = _standing_for(subject)
+
     news = _news_by_name if news_available() else None
     try:
         answer = answer_question(
             question,
             [c for c in cards.list() if c.kind == SINGLE],
             client=get_client(),
+            standing=standing,
             news=news,
             context=context,
         )
