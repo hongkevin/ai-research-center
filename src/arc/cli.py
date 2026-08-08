@@ -448,6 +448,76 @@ def db_init() -> None:
     typer.echo("")
 
 
+@db_app.command("check")
+def db_check() -> None:
+    """`DATABASE_URL`을 진단한다. **붙여 넣기 실수를 여기서 잡는다.**
+
+    실패 모양이 여럿인데 오류 메시지가 다 비슷해서, 무엇이 틀렸는지 알려면
+    한 번씩 다 겪어야 한다. 그럴 이유가 없다.
+    """
+    import socket
+    import urllib.parse
+
+    from arc.store import pg
+
+    raw = pg.database_url()
+    if not raw:
+        typer.secho("\n  DATABASE_URL이 비어 있습니다.\n", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    u = urllib.parse.urlparse(raw)
+    problems: list[str] = []
+    notes: list[str] = []
+
+    if u.scheme not in ("postgresql", "postgres"):
+        problems.append(f"주소가 postgresql:// 로 시작해야 합니다 (지금: {u.scheme}://)")
+    if not u.password:
+        problems.append("비밀번호가 없습니다 — [YOUR-PASSWORD] 자리를 채우셨습니까?")
+    elif "YOUR-PASSWORD" in raw or "[" in (u.password or ""):
+        problems.append("비밀번호 자리에 예시 문구가 그대로 있습니다")
+    if u.port == 6543:
+        problems.append(
+            "6543은 Transaction pooler입니다 — prepared statement를 안 받아 "
+            "psycopg 기본 설정과 안 맞습니다. Session pooler(5432)를 쓰십시오"
+        )
+
+    host = u.hostname or ""
+    if host.startswith("db.") and host.endswith(".supabase.co"):
+        # 직접 연결은 IPv6 전용이다(IPv4 애드온이 없으면). 국내 가정·사무실
+        # 회선은 대개 IPv4라 여기서 막힌다 — 주소가 조회조차 안 된다.
+        try:
+            socket.getaddrinfo(host, u.port or 5432)
+        except socket.gaierror:
+            problems.append(
+                f"{host} 를 못 찾습니다. 직접 연결은 IPv6 전용이라 이 회선에서는 "
+                "안 됩니다 — Connect 창에서 Session pooler를 고르십시오"
+            )
+    elif "pooler.supabase.com" in host:
+        notes.append("Session pooler를 쓰고 있습니다 (IPv4)")
+
+    for line in problems:
+        typer.secho(f"  ✗ {line}", fg=typer.colors.RED)
+    for line in notes:
+        typer.secho(f"  · {line}", fg=typer.colors.CYAN)
+    if problems:
+        typer.echo("")
+        raise typer.Exit(1)
+
+    try:
+        import psycopg
+
+        with psycopg.connect(raw, connect_timeout=15) as conn, conn.cursor() as cur:
+            cur.execute("select current_user, current_database(), version()")
+            user, db, version = cur.fetchone()
+        typer.secho(
+            f"\n  ✓ 붙었습니다 — {user}@{db}\n    {version.split(',')[0]}\n",
+            fg=typer.colors.GREEN,
+        )
+    except Exception as exc:
+        typer.secho(f"\n  ✗ 못 붙었습니다: {exc}\n", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+
+
 @db_app.command("migrate")
 def db_migrate(
     uid: str = typer.Option("local", "--uid", help="어느 사용자의 파일을 옮길 것인가"),
