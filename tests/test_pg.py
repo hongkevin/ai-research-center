@@ -339,3 +339,43 @@ class TestCardsAgainstRealDatabase:
         monkeypatch.setattr(pgmod, "connect", boom)
         with pytest.raises(RuntimeError):
             store.save(card)
+
+
+class TestTheDriverGuard:
+    """**드라이버가 반쯤 깔린 상태를 잡는다** (D87).
+
+    실제로 배포 이미지가 그랬다: `psycopg`는 있고 `psycopg_pool`은 없었다.
+    `available()`이 `psycopg`만 봤기 때문에 True를 냈고, 저장소는 Postgres를
+    고른 뒤 **첫 질의에서** `ModuleNotFoundError`로 터졌다. 개인 데이터가
+    전부 그 뒤에 있는데.
+
+    그 자리 주석이 *"조용히 파일로 떨어지면 「왜 DB에 안 쌓이지」를 한참 뒤에
+    안다"*고 적어 놨는데, **막으려던 그 실패에 한 겹이 비어 있었다.**
+    """
+
+    def test_the_pool_is_declared_as_a_dependency(self):
+        """`psycopg[binary]`는 풀을 안 끌어온다 — 별도 배포판이다.
+
+        로컬에 어쩌다 깔려 있으면 안 드러나므로 **선언을 본다.**
+        """
+        import tomllib
+        from pathlib import Path as _P
+
+        spec = tomllib.loads(_P("pyproject.toml").read_text(encoding="utf-8"))
+        db = spec["project"]["optional-dependencies"]["db"]
+        assert any("pool" in r for r in db), f"psycopg 풀이 선언에 없습니다: {db}"
+
+    def test_a_missing_pool_is_caught_at_the_guard(self, monkeypatch):
+        """**첫 질의가 아니라 문 앞에서 걸려야 한다.**"""
+        import builtins
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://x/y")
+        real = builtins.__import__
+
+        def no_pool(name, *args, **kwargs):
+            if name == "psycopg_pool":
+                raise ImportError("없음")
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", no_pool)
+        assert pg.available() is False, "풀이 없으면 파일로 떨어져야 한다"

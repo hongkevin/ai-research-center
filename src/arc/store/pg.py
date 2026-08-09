@@ -227,10 +227,21 @@ def available() -> bool:
         return False
     try:
         import psycopg  # noqa: F401
-    except ImportError:
+        import psycopg_pool  # noqa: F401
+    except ImportError as exc:
         # 키는 있는데 드라이버가 없는 것은 **설정 실수**다. 조용히 파일로
         # 떨어지면 「왜 DB에 안 쌓이지」를 한참 뒤에 안다.
-        log.warning("DATABASE_URL이 있는데 psycopg가 없습니다 — `pip install 'arc[db]'`")
+        #
+        # **`psycopg_pool`을 같이 본다.** 전에는 `psycopg`만 확인했는데,
+        # `_pool()`이 쓰는 것은 별도 배포판인 `psycopg_pool`이라 그것만 없는
+        # 상태가 이 문을 통과했다. 그러면 `available()`은 True를 내고 저장소는
+        # Postgres를 고른 뒤 **첫 질의에서** 터진다 — 정확히 이 주석이 막으려던
+        # 실패인데 한 겹이 비어 있었다. 배포 이미지에서 그렇게 났다 (D87).
+        log.warning(
+            "DATABASE_URL이 있는데 psycopg 드라이버가 갖춰지지 않았습니다 (%s) — "
+            "`pip install 'arc[db]'`",
+            exc,
+        )
         return False
     return True
 

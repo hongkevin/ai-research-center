@@ -47,7 +47,11 @@ db = [
     # 개인 데이터를 Postgres로 (D80). **없어도 돈다** — `DATABASE_URL`이
     # 비어 있으면 파일 저장소로 떨어진다. 테스트와 로컬 개발이 DB를 요구하면
     # 안 된다.
-    "psycopg[binary]",
+    # **`pool`이 빠져 있었다.** `pg._pool()`이 `psycopg_pool`을 import하는데
+    # `psycopg[binary]`는 그것을 안 끌어온다(별도 배포판이다). 로컬에는 어쩌다
+    # 깔려 있어서 안 드러났고, **배포 이미지에서만** `ModuleNotFoundError`가
+    # 났다 — 개인 데이터가 전부 그 뒤에 있는데. 실측으로 잡았다 (D87).
+    "psycopg[binary,pool]",
 ]
 telegram = [
     # 텔레그램 수집기 (D66). **선택 의존성이다** — 업로드 경로만 쓰면 필요 없고,
