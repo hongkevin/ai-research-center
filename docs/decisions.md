@@ -3442,6 +3442,54 @@ TCP 왕복만 132ms였다. **서울로 옮기니 11ms** — 12배다. Supabase�
 
 ---
 
+### D88 — 폰에서 개발하려면 `0.0.0.0`이 아니라 tailnet 주소다 {#d88}
+
+**2026-08-09.** 지하철에서 폰으로 작업하려고 Orca Mobile을 붙였는데 안 됐다.
+페어링은 8/1에 해 뒀고(`orca-devices.json`), 안 쓴 이유가 설정에 있었다:
+
+    mobilePairingConnectionMode: local-only
+    맥 주소:                     10.0.0.47     ← 집 공유기 안쪽
+
+`local-only`는 **같은 사설망 안에서만** 닿는다. 폰이 LTE로 나가는 순간 경로가
+없다. Orca 앱 바이너리에 모드는 `local-only`/`orca-relay` 둘뿐이고
+`mobilePairingConnectionMode: nextMode` 세터가 있어 **재페어링 없이 바꿀 수
+있다.** 공식 문서도 *"Address edits only change where this phone connects; they
+do not re-pair"*라고 못 박는다.
+
+Tailscale을 골랐다. Relay는 Orca 계정 로그인이 필요하고(지금 프로필은
+`local-default`) 앱 문자열에 *"About the Orca Relay beta"*가 있어 아직 베타다.
+무엇보다 터미널에 `.env`의 실 API 키와 `DATABASE_URL`이 그대로 보이는데,
+tailnet이면 그 트래픽이 제3자를 안 지난다.
+
+#### `0.0.0.0`을 쓰지 않는다
+
+개발 서버는 기본이 `127.0.0.1`이라 맥 자기 자신만 본다. 흔한 처방인
+`--host 0.0.0.0`은 **모든 인터페이스**를 여는 것이라, 카페 WiFi에서 그 망의
+아무나 DART·금융위·ECOS·LLM 키에 닿는다 — `web/auth.py`가 하는 경고 그대로다.
+
+**tailnet 주소 하나에만 바인딩한다** (`arc web --host tailnet`). `100.64.0.0/10`은
+공인 인터넷에 라우팅되지 않으므로, 같은 카페 WiFi에 있어도 애초에 도달 경로가
+없다. `0.0.0.0`과 결과가 전혀 다르다.
+
+**못 찾으면 멈춘다.** Tailscale이 꺼져 있을 때 `0.0.0.0`으로 떨어지면 지키려던
+성질이 그 순간 사라지고, 사람은 열린 줄 안다. 대역 판정도 좁게 잡았다 —
+`100.0.0.1`·`100.200.0.1`은 그 대역 밖이고 공인 IP일 수 있어서, 헐겁게 잡으면
+「tailnet에만 열었다」가 거짓이 된다.
+
+#### 음성은 로컬이다
+
+경고하려다 실측으로 접었다. Orca가 온디바이스 음성 모델 868MB를 들고 있고
+(`parakeet-tdt-0.6b-v3-int8` · `sense-voice-zh-en-ja-ko-yue`) **한국어를
+지원한다.** 발화가 밖으로 안 나가므로 클라우드 STT 주의는 이 환경에 해당하지 않는다.
+
+#### 맥은 깨어 있어야 한다
+
+Orca Mobile은 설계상 **리모컨**이다 — 에이전트 상태·터미널 스크롤백·파일 탐색·
+짧은 회신. 실행은 맥에서 돈다. `pytest` 1,329건도 `arc prices backfill` 260콜도
+거기서 도니, 절전 방지(Amphetamine 등)는 편의가 아니라 부품이다.
+
+---
+
 ## 열린 질문
 
 | # | 질문 | 해소 시점 |

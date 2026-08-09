@@ -396,19 +396,59 @@ def backtest(
 
 @app.command()
 def web(
-    host: str = typer.Option("127.0.0.1", "--host"),
+    host: str = typer.Option(
+        "127.0.0.1", "--host", help="`tailnet`이면 Tailscale 주소에만 엽니다 (D88)"
+    ),
     port: int = typer.Option(8000, "--port", "-p"),
     reload: bool = typer.Option(False, "--reload", help="개발 중 자동 재시작"),
 ) -> None:
-    """웹 작업대를 띄운다 (실적 리뷰 노트 검토 화면)."""
+    """웹 작업대를 띄운다 (실적 리뷰 노트 검토 화면).
+
+    **`--host tailnet`이 폰에서 보는 방법이다** (D88). `0.0.0.0`은 모든
+    인터페이스를 여는 것이라 카페 WiFi에서 그 망의 아무나 닿는다 — 이 서버는
+    DART·금융위·ECOS·LLM 키를 들고 있다.
+    """
     try:
         import uvicorn
     except ImportError:  # pragma: no cover
         typer.secho('웹 의존성이 없습니다: uv pip install -e ".[web]"', fg=typer.colors.RED)
         raise typer.Exit(1) from None
 
+    from arc.net import resolve_host
+
+    host, note = resolve_host(host)
+    if not host:
+        typer.secho(note, fg=typer.colors.RED)
+        raise typer.Exit(1)
+    if note:
+        typer.secho(f"  {note}", fg=typer.colors.GREEN)
+
+    # **루프백 밖으로 나가는데 인증이 없으면 말한다.** `auth.py`가 미들웨어를
+    # 만들 때도 경고하지만 그건 로그라 스크롤에 묻힌다 — 여는 순간 보여야 한다.
+    if host not in ("127.0.0.1", "localhost") and not _auth_configured():
+        typer.secho(
+            "  ⚠ 인증이 꺼져 있는데 루프백 밖으로 엽니다 — 이 주소에 닿는 누구나"
+            " 서버의 API 키를 씁니다.\n"
+            "    `.env`에 NEXT_PUBLIC_SUPABASE_URL 또는 ARC_PASSWORD를 넣으십시오.",
+            fg=typer.colors.RED,
+        )
+
     typer.secho(f"\n  http://{host}:{port}  — Ctrl+C로 종료\n", fg=typer.colors.CYAN)
     uvicorn.run("arc.web.app:app", host=host, port=port, reload=reload)
+
+
+def _auth_configured() -> bool:
+    """로그인을 요구하는가. `auth.BasicAuthMiddleware`와 **같은 조건**이다 —
+    따로 판단하면 둘이 다른 말을 하게 된다."""
+    return any(
+        os.environ.get(k, "").strip()
+        for k in (
+            "SUPABASE_URL",
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "SUPABASE_JWT_SECRET",
+            "ARC_PASSWORD",
+        )
+    )
 
 
 db_app = typer.Typer(help="Postgres — 스키마 만들기·파일에서 옮기기")
