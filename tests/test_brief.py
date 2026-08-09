@@ -13,8 +13,11 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pytest
+
 from arc.brief import (
     BRIEF_KEYS,
+    MORNING,
     NOTABLE,
     build_brief,
     index_line,
@@ -23,6 +26,23 @@ from arc.brief import (
 )
 from arc.finmodel.moves import Move, Moves
 from arc.store.profile import COVER, WATCH, Covered, Profile, add_stock
+
+
+@pytest.fixture(autouse=True)
+def _morning(monkeypatch):
+    """**이 파일은 모닝 브리프를 시험한다.** 그 사실을 시각에서 떼어 낸다.
+
+    `build_brief`는 `session`을 안 주면 `current_session()`으로 지금이 아침인지
+    장중인지 정한다. 그래서 이 파일이 **한국 시각 09:00~15:59에는 통째로
+    깨졌다** — 장중에는 주가를 아예 빼는 것이 옳은 동작이고(D74), 아침 화면을
+    가정한 단언들이 거기서 무너진다.
+
+    하루 7시간 깨지는 시험은 **CI에서 산발적으로만 재현되는** 종류라 제일 나쁘다.
+    `.env` 때문에 33건이 죽었던 것과 같은 계열이다(`conftest.py` 참조).
+
+    장중·마감 동작은 `test_brief_sessions.py`가 `session=`을 명시해 따로 본다.
+    """
+    monkeypatch.setattr("arc.brief.current_session", lambda *a, **k: MORNING)
 
 
 def _moves(symbol: str, day: float | None, **rest: float) -> Moves:

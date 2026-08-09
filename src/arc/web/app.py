@@ -1709,8 +1709,18 @@ async def api_fill_model(card_id: str, request: Request):
 
 
 @app.get("/api/health")
-def api_health():
-    """플랫폼 헬스체크용. **인증 없이 열려 있다** (auth.PUBLIC_PATHS)."""
+def api_health(db: bool = False):
+    """플랫폼 헬스체크용. **인증 없이 열려 있다** (auth.PUBLIC_PATHS).
+
+    `?db=1`이면 DB 왕복을 한 번 재서 같이 낸다. **기본으로는 안 잰다** —
+    플랫폼이 이 주소를 자주 두드리는데 거기에 DB 왕복을 얹으면 헬스체크가
+    DB 장애에 묶인다.
+
+    왜 재는가: [D81](../../docs/decisions.md#d81)에서 DB를 서울로 옮겨
+    132ms → 11ms를 얻었는데 **그건 개발 기기에서 잰 값이다.** 배포된 앱은
+    싱가포르에 있고(Railway는 아시아에 싱가포르뿐이라 옮길 데가 없다),
+    그 구간은 아무도 안 쟀다. 짐작하지 말고 잰다.
+    """
     return {
         "status": "ok",
         # **배포된 것이 최신인지 알 방법이 있어야 한다.** 실서버에서 어떤
@@ -1734,7 +1744,35 @@ def api_health():
         # 개인 데이터가 아니라 **시장 데이터의 적재 상태**다 — `dart_key: true`와
         # 같은 종류라 인증 없이 열어 둔다.
         "prices": _price_health(),
+        **({"db": _db_latency()} if db else {}),
     }
+
+
+def _db_latency() -> dict:
+    """DB 왕복 한 번. **열린 연결에서 잰다** — 새로 여는 비용(TLS+인증)은
+    풀이 이미 흡수하고 있어서 같이 재면 실제보다 나쁘게 나온다."""
+    import time as _t
+
+    from arc.store import pg
+
+    if not pg.available():
+        return {"enabled": False}
+    try:
+        with pg.connect("health-probe") as conn:
+            t0 = _t.perf_counter()
+            conn.execute("select 1")
+            first = (_t.perf_counter() - t0) * 1000
+            t1 = _t.perf_counter()
+            for _ in range(5):
+                conn.execute("select 1")
+            each = (_t.perf_counter() - t1) * 1000 / 5
+        return {
+            "enabled": True,
+            "first_ms": round(first, 1),
+            "roundtrip_ms": round(each, 1),
+        }
+    except Exception as exc:  # noqa: BLE001 — 헬스체크가 DB 때문에 죽지 않는다
+        return {"enabled": True, "error": f"{type(exc).__name__}: {exc}"}
 
 
 def _price_health() -> dict:
