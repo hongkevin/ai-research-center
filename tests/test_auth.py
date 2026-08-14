@@ -195,3 +195,46 @@ class TestSupabaseTokens:
             c.get("/api/cards", headers={"Authorization": f"Bearer {self._token()}"}).status_code
             == 200
         )
+
+
+class TestHealthTellsTheTruthAboutAuth:
+    """헬스체크의 `auth`가 **실제 상태와 같아야 한다** (D88).
+
+    이 필드의 용도는 「이 배포가 무방비인가」다. 전에는 `ARC_PASSWORD`만 봐서,
+    Supabase(JWKS)로 인증을 켜 놓은 배포가 `auth: false`로 나왔다 — 401이
+    멀쩡히 나가는데도. 있는 자물쇠를 없다고 말하는 셈이라, 보고 나서 없는
+    문제를 찾아 헤매게 된다.
+    """
+
+    def _mode(self, monkeypatch, **env):
+        from arc.web import app as web
+
+        for k in (
+            "SUPABASE_URL",
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "SUPABASE_JWT_SECRET",
+            "ARC_PASSWORD",
+        ):
+            monkeypatch.setenv(k, env.get(k, ""))
+        return web._auth_mode()
+
+    def test_supabase_url_alone_counts_as_auth(self, monkeypatch):
+        """**실제로 밟은 자리다.** 로컬이 이 상태였고 `auth: false`로 나왔다."""
+        assert (
+            self._mode(monkeypatch, NEXT_PUBLIC_SUPABASE_URL="https://x.supabase.co") == "supabase"
+        )
+
+    def test_the_project_url_also_counts(self, monkeypatch):
+        assert self._mode(monkeypatch, SUPABASE_URL="https://x.supabase.co") == "supabase"
+
+    def test_the_legacy_shared_secret_is_named_as_legacy(self, monkeypatch):
+        """공유 시크릿은 2026년 말 폐기다 — 「켜져 있다」로 뭉뚱그리지 않는다."""
+        assert self._mode(monkeypatch, SUPABASE_JWT_SECRET="s") == "supabase-legacy"
+
+    def test_a_password_counts(self, monkeypatch):
+        assert self._mode(monkeypatch, ARC_PASSWORD="pw") == "password"
+
+    def test_nothing_set_is_wide_open(self, monkeypatch):
+        """**빈 문자열이 「설정 안 함」이다** — `ARC_USERNAME=`으로 이미 밟았다."""
+        assert self._mode(monkeypatch) == ""
+        assert self._mode(monkeypatch, ARC_PASSWORD="   ") == ""

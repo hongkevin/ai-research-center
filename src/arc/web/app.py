@@ -1732,7 +1732,12 @@ def api_health(db: bool = False):
         "llm_key": bool(os.environ.get("OPENAI_API_KEY")),
         # 기사 검색 체크박스를 켤 수 있는가. 없으면 화면이 이유를 적는다.
         "news_key": news_available(),
-        "auth": bool(os.environ.get("ARC_PASSWORD")),
+        # **`ARC_PASSWORD`만 보고 있었다.** Supabase(JWKS)로 인증을 켜 놓은
+        # 배포에서 이 값이 `false`로 나온다 — 401이 멀쩡히 나가는데도.
+        # 이 필드의 용도가 「이 배포가 무방비인가」라서, 틀리면 있는 자물쇠를
+        # 없다고 말하거나 없는 자물쇠를 찾아 헤매게 된다.
+        "auth": bool(_auth_mode()),
+        "auth_mode": _auth_mode(),
         "llm_used": LLM_BUDGET.used,
         "llm_limit": LLM_BUDGET.limit,
         # 볼륨이 붙었는지. false면 생성은 되지만 revision 추적이 죽는다.
@@ -1773,6 +1778,25 @@ def _db_latency() -> dict:
         }
     except Exception as exc:  # noqa: BLE001 — 헬스체크가 DB 때문에 죽지 않는다
         return {"enabled": True, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _auth_mode() -> str:
+    """무엇으로 로그인을 요구하는가. 빈 문자열이면 **무방비다.**
+
+    `auth.BasicAuthMiddleware`가 미들웨어를 만들 때 보는 것과 **같은 순서**로
+    본다 — 따로 판단하면 둘이 다른 말을 하게 되고, 그건 헬스체크가 거짓말을
+    한다는 뜻이다.
+    """
+    if (
+        os.environ.get("SUPABASE_URL", "").strip()
+        or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "").strip()
+    ):
+        return "supabase"  # 비대칭 서명키 검증 (JWKS)
+    if os.environ.get("SUPABASE_JWT_SECRET", "").strip():
+        return "supabase-legacy"  # 공유 시크릿 (HS256) — 2026년 말 폐기
+    if os.environ.get("ARC_PASSWORD", "").strip():
+        return "password"
+    return ""
 
 
 def _price_health() -> dict:
