@@ -187,7 +187,14 @@ class TestBoundaries:
         r = client.post("/api/ask", json={"question": "현대로템 영업이익률"})
         assert r.status_code == 429
 
-    def test_a_crash_does_not_take_the_screen_down(self, client, monkeypatch):
+    def test_a_crash_does_not_take_the_screen_down(self, client, fake, monkeypatch):
+        """**넣은 예외가 그대로 올라오는지**를 본다.
+
+        `fake`가 필요한 이유: `api_ask`는 `answer_question` **앞에서**
+        `get_client()`를 부르고, LLM 키가 없는 기계에서는 거기서 `ValueError`가
+        난다. 그러면 이 시험은 「크래시 처리」가 아니라 「이 기계에 키가 있나」를
+        재게 된다 — 실제로 키 없는 새 클론에서만 깨졌다.
+        """
         _seed(client)
 
         def boom(*a, **k):

@@ -1,70 +1,157 @@
-# AI Research Center
+# ARC — AI Research Center
 
-코스닥 미커버 종목의 **실적 리뷰 노트를 자동 생성**하는 시스템. AI가 초안을 만들고 사람이 검토한 뒤 발간하는 세미오토 구조로, 모든 수치는 결정적 코드가 계산하고 산식·출처를 전면 공개하는 것을 원칙으로 한다.
+**A semi-automated equity research system for Korean sell-side analysts. Every
+number in the report is computed by deterministic code; the language model is
+never allowed to write one.**
 
-## 설계 문서
+ARC reads a company's regulatory filings, computes the metrics itself, and asks a
+model to write prose that can only reference those numbers through placeholders.
+A publish gate rejects the draft if a single figure in the body is not traceable
+to a registered value. It drafts; a human confirms before anything is published.
 
-**[docs/README.md](docs/README.md) — 문서 지도부터 보십시오.**
+---
 
-- [docs/decisions.md](docs/decisions.md) — **현재 유효한 결정의 단일 원천** (D1~D13)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — 시스템 설계: 공통 엔진 + 표면 2개, S1~S6 파이프라인, Number Registry, G0 게이트
-- [docs/design-brief-v1.md](docs/design-brief-v1.md) — 6개 영역 리서치 종합 브리프 (근거·출처)
-- [docs/research/](docs/research/) — 벤치마크 15건 역설계, 채점 루브릭 분석, 밸류에이션 경계, 인터뷰 설계
+## Problem
 
-## 셋업
+Korean brokerages cover the large caps well and the KOSDAQ small/mid caps barely
+at all — there are more listed companies than analysts to follow them. The
+obvious fix is to let a language model draft the notes.
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate   # 또는: uv venv
-pip install -e ".[dev]"                              # 또는: uv pip install -e ".[dev]"
-pytest
+That fails for a reason specific to this document type. A research note is a
+**numerical** document, and one wrong figure does not degrade it — it voids it.
+An analyst who finds a fabricated revenue number stops trusting every other
+number on the page, including the correct ones. Fluency is not the bottleneck;
+**arithmetic provenance** is.
+
+So ARC does not ask a model to be careful with numbers. It removes the model's
+ability to emit them.
+
+## How it works
+
+```mermaid
+flowchart LR
+    F[Regulatory filings<br/>OpenDART] --> M[Deterministic metrics<br/>Python, no model]
+    P[EOD prices<br/>public market API] --> M
+    M --> R[(Number Registry<br/>value · unit · provenance)]
+    R -->|keys and labels only,<br/>never values| L[Language model<br/>writes prose]
+    L -->|text with<br/>placeholders| G{G0 publish gate}
+    R --> G
+    G -->|any unregistered<br/>number| X[Blocked]
+    G -->|clean| S[Substitute values<br/>attach sources] --> H[Human review<br/>confirm to publish]
 ```
 
-## API 키
+The model receives a **catalogue** — key, label, unit, direction — and never the
+magnitudes. It writes `{{num:revenue_2025a}}`, not `45.4 billion won`. Since it
+cannot see a value, it cannot copy one, and it cannot invent one that happens to
+look plausible. Substitution happens after the gate, at the boundary.
 
-`.env.example`을 `.env`로 복사하고 키를 채운다:
+Everything a number touches carries its origin: source, retrieval time, and the
+filing URL a reviewer can open.
 
-| 키 | 발급처 | 용도 |
-|---|---|---|
-| `DART_API_KEY` | [OpenDART](https://opendart.fss.or.kr) | 재무제표·공시 (핵심 기둥) |
-| `KRX_API_KEY` | [공공데이터포털](https://www.data.go.kr) — 금융위 주식시세정보 | EOD 시세 |
-| `NAVER_CLIENT_ID/SECRET` | [네이버 개발자센터](https://developers.naver.com) | 뉴스 스니펫 |
-| `OPENAI_API_KEY` | [OpenAI Platform](https://platform.openai.com) | 서술 생성. 없으면 결정론 문장으로만 생성된다 |
+## Quickstart
 
-서술 provider는 `llm/client.py`의 `PROVIDERS`에서 **키가 있는 것 중 첫 번째**를
-씁니다. 지금 등록된 것은 `openai` · `deepseek` · `moonshot` · `zhipu`이고, 넷 다
-OpenAI 호환 `/chat/completions`라 base_url과 모델명만 다릅니다.
-`.env.example`의 `ANTHROPIC_API_KEY`는 **아직 배선되지 않았습니다** — Claude는
-Messages API라 어댑터가 따로 필요합니다.
+**Requires Python 3.12+.** macOS ships 3.9, which will fail at install with
+`Package 'arc' requires a different Python`. Use `uv`, `pyenv`, or a `python3.12`
+binary.
 
-## 구조
+```bash
+git clone https://github.com/hongkevin/ai-research-center.git
+cd ai-research-center
+uv venv && uv pip install -e ".[dev,web]"
+uv run pytest -q
+```
+
+**A fresh clone runs the full suite with no API keys, no accounts, and no
+network access.** Verified by running it with the HTTP proxy pointed at a dead
+port: 1,334 passed, 5 seconds. Nothing is stubbed out to make that true — tests
+that need market data carry committed fixtures, and tests that need a model use
+a fake client.
+
+21 tests skip. All of them are Postgres integration tests that opt in through
+`ARC_TEST_DATABASE_URL`; they are skipped rather than silently passing, and the
+skip reason names the missing variable.
+
+To generate an actual report you need an [OpenDART](https://opendart.fss.or.kr)
+key (filings) and a [data.go.kr](https://www.data.go.kr) key (prices); a model
+key is optional and its absence downgrades prose to deterministic sentences
+rather than failing. Copy `.env.example` to `.env`. See
+[docs/DEPLOY.md](docs/DEPLOY.md) for running the web workbench.
+
+## What this does not do
+
+- **No price targets, no investment opinions, no buy/sell language.** This is a
+  product boundary, not a missing feature — the publish gate blocks the words. A
+  note that says "the multiple re-rated" is in scope; one that says "we see 30%
+  upside" is refused.
+- **No consensus estimates and no peer-average multiples from data vendors.**
+  Those are licensed products. Where a number would need one, the screen says so
+  instead of substituting something weaker.
+- **It is not autonomous.** Nothing publishes without a human confirming. The
+  gate decides what *may* be published, never what *is*.
+- **Korean market only.** KOSPI and KOSDAQ, via OpenDART and the Financial
+  Services Commission price API. The US data adapter is an interface stub.
+- **It is not a production system** and not investment advice.
+
+## Evidence
+
+Every claim below has a command next to it. Run them.
+
+| Claim | Verify |
+| --- | --- |
+| The whole suite passes with no keys or network | `uv run pytest -q` → 1,334 passed, 21 skipped (Postgres, opt-in) |
+| Unregistered numbers are blocked from publishing | `uv run pytest tests/test_g0.py -q` → 23 passed, incl. `test_unregistered_literal_blocks` |
+| Price-target and opinion language is blocked | same file, `TestComplianceD4::test_opinion_blocked` |
+| Segment revenue reconciles to the income statement | `uv run pytest tests/test_segments.py tests/test_segment_profit.py -q` → 62 passed |
+| The naive projection baseline was measured, not assumed | `uv run pytest tests/test_backtest.py -q`; result in [decisions.md D34](docs/decisions.md) — 100 KOSDAQ names × 4 years, **median revenue error 18.5%**, operating income within **4.7pp** of revenue error, direction correct **81%** |
+| Peer groups beat a random basket | [`src/arc/data/sectors.py`](src/arc/data/sectors.py) header — market-beta-removed intra-group correlation **0.31–0.47** against a measured random-basket baseline of **0.102** |
+| Cost per report is real, not projected | [decisions.md D14](docs/decisions.md) — **$0.0019** measured, against a design-doc estimate of $0.5–0.9 |
+
+Two of those numbers exist because the measurement contradicted the plan. The
+throughput hypothesis behind the original design was **rejected** by an analyst
+interview and is struck through in the open-questions table; the projection
+baseline turned out good enough that the model was scoped down around it.
+
+## Design record
+
+[`docs/decisions.md`](docs/decisions.md) is the single source of truth for why
+this system is shaped the way it is — **85 numbered decisions**, each with what
+was measured, what was rejected, and what would reverse it. It records failures
+in the same place as successes: a gate that was enabled but not enforced, a
+region migration whose benefit was measured on the wrong machine, a test suite
+that passed only between 4pm and 9am.
+
+**It is written in Korean.** The domain is Korean disclosure regulation and the
+reasoning is more precise in the language the source documents use. This README,
+the code identifiers, and the module docstrings' structure are English; the
+decision log is not, and translating it would cost fidelity for an audience that
+mostly wants the summary above.
+
+Other maps: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (pipeline, gates, data
+layer) · [docs/HANDOFF.md](docs/HANDOFF.md) (current state) ·
+[web/README.md](web/README.md) (the screen).
+
+## Layout
 
 ```
 src/arc/
-├── data/       # DataProvider 인터페이스 + KR(dart, krx_price, naver_news) / US(edgar, v2) 어댑터
-├── store/      # DuckDB+Parquet point-in-time 저장소
-├── finmodel/   # 결정적 계산: 지표·부문·추정·밸류에이션·백테스트·렌즈
-├── pipeline/   # S1~S6 오케스트레이션
-├── llm/        # LLM 클라이언트(provider 추상화), Number Registry, 조사 교정
-├── verify/     # 발간 게이트 G0
-├── render/     # 수치에 출처를 달아 HTML로 · 차트
-└── web/        # API · 인증 · 작업 큐(SSE) · 정적 파일 서빙
+├── data/       providers — OpenDART filings, FSC prices, ECOS macro, news
+├── finmodel/   deterministic computation — metrics, segments, estimates,
+│               valuation, peer correlation, backtest
+├── llm/        model client, Number Registry, Korean particle correction
+├── verify/     G0 publish gate
+├── pipeline/   S1–S6 orchestration
+├── render/     HTML with per-number provenance, charts, DOCX/XLSX
+└── web/        API, auth, job queue (SSE), static serving
 
-templates/      # 리포트 템플릿 (wheel 밖 — ARC_TEMPLATE_DIR로 지정)
-web/            # 화면: Next.js + Tailwind + shadcn/ui (정적 익스포트)
+templates/      report templates (outside the wheel; ARC_TEMPLATE_DIR)
+web/            Next.js + Tailwind + shadcn/ui, static export
+corpus/         committed research inputs — award tables, report metadata
+docs/           decisions, architecture, research notes
 ```
 
-## 이어서 작업하려면
+## License
 
-[docs/HANDOFF.md](docs/HANDOFF.md) — 현재 상태·불변식·남은 과제.
-결정의 이유는 [docs/decisions.md](docs/decisions.md)(D1~D37)에 있습니다.
-화면을 만질 거라면 [web/README.md](web/README.md)를 먼저 보십시오.
+MIT — see [LICENSE](LICENSE).
 
-## 배포
-
-동료가 브라우저로 접속해 테스트하는 절차는 [docs/DEPLOY.md](docs/DEPLOY.md)를 보십시오.
-
-요약: **Railway**(영속 볼륨 필요) · GitHub `main` 푸시 → 자동 배포 ·
-접근 제어는 공유 비밀번호(`ARC_PASSWORD`).
-
-Vercel은 이 앱에 맞지 않습니다 — 서버리스라 추정 이력(`.arc-store`)이
-재시작마다 사라져 revision 추적이 죽습니다.
+This is an independent portfolio project. It is not affiliated with, endorsed
+by, or built for any brokerage, and it contains no client or employer material.
