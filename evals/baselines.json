@@ -1,0 +1,23 @@
+{
+  "_": "Committed floors the eval gate compares against. Every asymmetric bound carries a reason — see `why`. Changing a number here is a decision, not a fix: move it only when the measurement that justified it has been redone.",
+  "metrics": {
+    "mentions.recall": {
+      "min": 0.995,
+      "gated": true,
+      "measured": 0.99802,
+      "why": "14 of 7,077 labeled titles are missed, and all 14 are reports about the common-word companies themselves (대상, E1). That is the price of the common-word list and it is known. The floor sits below the measurement so honest corpus growth does not break the gate, but a loosened defense does."
+    },
+    "mentions.extras_per_title": {
+      "max": 0.01,
+      "gated": true,
+      "measured": 0.00664,
+      "why": "Extras are companies matched beyond the labeled one. This is NOT precision — a title naming two companies is correct, not wrong. It is a trend tripwire: if the boundary or longest-match rules are weakened, this climbs first."
+    },
+    "mentions.prose_false_positives": {
+      "max": 0.0,
+      "gated": true,
+      "measured": 0.0,
+      "why": "ASYMMETRIC ON PURPOSE. This counts common-word company names matched inside ordinary prose that is not about companies. Without the common-word list the same corpus yields 54. One false positive here puts a stock on the sentiment screen that nobody actually mentioned — the analyst acts on a signal that does not exist. The tolerance is not 'small', it is zero."
+    }
+  }
+}

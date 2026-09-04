@@ -27,6 +27,8 @@ dependencies = [
 
 [project.scripts]
 arc = "arc.cli:app"
+# eval 게이트 (D89). CI가 푸시마다 부른다 — API 키가 필요 없다
+arc-evals = "arc.evals.run:main"
 
 [project.optional-dependencies]
 web = [

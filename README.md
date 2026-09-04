@@ -105,16 +105,36 @@ Every claim below has a command next to it. Run them.
 | The naive projection baseline was measured, not assumed | `uv run pytest tests/test_backtest.py -q`; result in [decisions.md D34](docs/decisions.md) — 100 KOSDAQ names × 4 years, **median revenue error 18.5%**, operating income within **4.7pp** of revenue error, direction correct **81%** |
 | Peer groups beat a random basket | [`src/arc/data/sectors.py`](src/arc/data/sectors.py) header — market-beta-removed intra-group correlation **0.31–0.47** against a measured random-basket baseline of **0.102** |
 | Cost per report is real, not projected | [decisions.md D14](docs/decisions.md) — **$0.0019** measured, against a design-doc estimate of $0.5–0.9 |
+| A failing eval blocks the build | `uv run arc-evals` → exit 0; raise a floor in [`evals/baselines.json`](evals/baselines.json) and it exits 1 |
 
 Two of those numbers exist because the measurement contradicted the plan. The
 throughput hypothesis behind the original design was **rejected** by an analyst
 interview and is struck through in the open-questions table; the projection
 baseline turned out good enough that the model was scoped down around it.
 
+## Evals
+
+[`evals/`](evals/) holds the gate that decides whether a change may ship. It runs
+on every push, needs no key, and can fail:
+
+```bash
+uv run arc-evals     # exit 1 if a committed floor is breached
+```
+
+The first suite covers the stock-name classifier, which is the kind of failure
+G0 structurally cannot see — loosen the boundary rules and the text stays
+well-formed, no numbers appear, the publish gate is satisfied, and a stock
+nobody mentioned shows up on the sentiment screen. One of its three bounds is
+**zero**, with the reason committed next to it.
+
+[`evals/README.md`](evals/README.md) states what the gate does **not** cover,
+starting with the largest hole: nothing here measures whether the chat retrieved
+the right report card to answer from.
+
 ## Design record
 
 [`docs/decisions.md`](docs/decisions.md) is the single source of truth for why
-this system is shaped the way it is — **85 numbered decisions**, each with what
+this system is shaped the way it is — **86 numbered decisions**, each with what
 was measured, what was rejected, and what would reverse it. It records failures
 in the same place as successes: a gate that was enabled but not enforced, a
 region migration whose benefit was measured on the wrong machine, a test suite
