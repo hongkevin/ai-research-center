@@ -96,6 +96,10 @@ def generate(
     separate: bool = typer.Option(False, "--separate", help="별도재무제표 사용"),
     out: Path | None = typer.Option(None, "--out", "-o", help="출력 경로"),
     llm: bool = typer.Option(False, "--llm", help="S4 서술을 LLM으로 생성"),
+    provider: str = typer.Option(
+        "", "--provider", help="서술 provider (비우면 키가 있는 첫 번째). 예: anthropic"
+    ),
+    model: str = typer.Option("", "--model", help="모델명을 직접 지정"),
     assume: list[str] = typer.Option(
         None, "--assume", "-a", help="추정 가정 덮어쓰기 (예: -a revenue_growth=12.5)"
     ),
@@ -123,7 +127,9 @@ def generate(
     if llm:
         from arc.llm.client import get_client
 
-        client = get_client()
+        # **provider를 고를 수 있어야 비교가 된다** (D91). 없으면 키가 있는
+        # 첫 번째로 고정돼서, 같은 리포트를 두 모델로 뽑아 나란히 놓지 못한다.
+        client = get_client(provider or None, model=model or None)
 
     r = build_report(
         symbol,

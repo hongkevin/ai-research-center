@@ -75,6 +75,30 @@ PROVIDERS: dict[str, ProviderSpec] = {
         },
         token_param="max_completion_tokens",
     ),
+    "anthropic": ProviderSpec(
+        name="anthropic",
+        # **OpenAI 호환 계층이다** (D91). Anthropic이 `/v1/chat/completions`를
+        # 받아 주므로 어댑터가 필요 없다. 우리가 보내는 것은 `model`·`messages`·
+        # 토큰 상한 셋뿐이고, 그 계층이 무시하는 필드(`response_format`·`seed`·
+        # `logprobs`)를 **하나도 안 쓴다** — 그래서 provider 한 줄로 붙는다.
+        #
+        # 문서가 이 계층을 「모델 비교용이지 장기 해법은 아니다」라고 적어 뒀다.
+        # 여기 쓰임이 정확히 그 비교라 맞고, 상시로 쓰기로 정하면 네이티브
+        # Messages API 어댑터로 옮기는 것이 맞다.
+        base_url="https://api.anthropic.com/v1",
+        env_key="ANTHROPIC_API_KEY",
+        models={
+            Tier.LIGHT: "claude-haiku-4-5-20251001",
+            Tier.WRITE: "claude-opus-5",
+            Tier.VERIFY: "claude-opus-5",
+        },
+        pricing={
+            Tier.LIGHT: Pricing(1.00, 5.00),  # Haiku 4.5
+            Tier.WRITE: Pricing(5.00, 25.00),  # Opus 5
+            Tier.VERIFY: Pricing(5.00, 25.00),
+        },
+        note="OpenAI 호환 계층. 프롬프트 캐싱·Structured Outputs는 여기서 안 된다.",
+    ),
     "deepseek": ProviderSpec(
         name="deepseek",
         base_url="https://api.deepseek.com/v1",
