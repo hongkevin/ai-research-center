@@ -80,6 +80,29 @@ def substitute_with_spans(text: str, registry: NumberRegistry) -> str:
     return "".join(out)
 
 
+def _wrap_tables(md: MarkdownIt) -> None:
+    """표를 가로 스크롤 상자에 넣는다 (D90).
+
+    재무 표는 **항목명 + 5개년 = 6열**이다. 390px 폰에서 열면 글자가 뭉개지거나
+    **페이지 전체가 옆으로 밀린다** — 본문을 읽으려고 좌우로 흔들게 된다.
+
+    `overflow-x`는 감쌀 요소가 있어야 걸리는데 마크다운은 표만 낸다. 그래서
+    렌더러 규칙에서 상자를 씌운다. **정규식으로 HTML을 긁지 않는다** — 본문에
+    `<table>`이라는 글자가 나오면 그때 깨진다.
+    """
+
+    def table_open(tokens, idx, options, env):
+        # `renderToken`을 부르지 않고 직접 낸다 — 기본 규칙이 등록돼 있지 않아
+        # (fallback 경로다) 감싸려면 여기서 여는 태그까지 써야 한다.
+        return '<div class="table-scroll"><table>'
+
+    def table_close(tokens, idx, options, env):
+        return "</table></div>"
+
+    md.renderer.rules["table_open"] = table_open
+    md.renderer.rules["table_close"] = table_close
+
+
 def render_html(assembled: str, registry: NumberRegistry) -> str:
     """조립본 → 본문 HTML.
 
@@ -87,6 +110,7 @@ def render_html(assembled: str, registry: NumberRegistry) -> str:
     출처가 화면에 문자열로 튀어나온다.
     """
     md = MarkdownIt("commonmark", {"html": True, "linkify": False}).enable("table")
+    _wrap_tables(md)
     return md.render(substitute_with_spans(assembled, registry))
 
 

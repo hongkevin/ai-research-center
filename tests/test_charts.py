@@ -59,3 +59,41 @@ class TestMarginLine:
         from arc.render.charts import margin_line
 
         assert "<path" in margin_line(["1Q", "2Q"], [8.0, 8.0])
+
+
+class TestTablesScrollInsteadOfPushingThePage:
+    """재무 표는 **항목명 + 5개년 = 6열**이다 (D90).
+
+    390px 폰에서 감싸개가 없으면 글자가 뭉개지거나 페이지 전체가 옆으로
+    밀린다 — 본문을 읽으려고 좌우로 흔들게 된다.
+    """
+
+    def _html(self, md: str) -> str:
+        from arc.llm.number_registry import NumberRegistry
+        from arc.render.html import render_html
+
+        return render_html(md, NumberRegistry())
+
+    def test_a_table_is_wrapped_in_a_scroll_box(self):
+        out = self._html("| a | b |\n|---|---|\n| 1 | 2 |\n")
+        assert '<div class="table-scroll"><table>' in out
+        assert out.count("</table></div>") == 1
+
+    def test_the_wrapper_closes_exactly_once_per_table(self):
+        """두 표가 나오면 상자도 둘이어야 한다 — 하나가 안 닫히면 뒤 문단이
+        전부 그 상자 안으로 들어간다."""
+        md = "| a |\n|---|\n| 1 |\n\n문단\n\n| b |\n|---|\n| 2 |\n"
+        out = self._html(md)
+        assert out.count('<div class="table-scroll">') == 2
+        assert out.count("</table></div>") == 2
+
+    def test_prose_is_untouched(self):
+        """**표가 아닌 것은 안 감싼다.** 문단까지 스크롤 상자에 들어가면
+        본문 폭이 화면을 넘긴다."""
+        out = self._html("그냥 문단이다.\n")
+        assert "table-scroll" not in out
+
+    def test_a_literal_table_word_in_prose_does_not_break_it(self):
+        """정규식으로 HTML을 긁었으면 여기서 깨진다."""
+        out = self._html("본문에 `<table>` 이라는 글자가 나온다.\n")
+        assert "table-scroll" not in out
